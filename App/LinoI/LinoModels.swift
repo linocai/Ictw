@@ -109,6 +109,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
     var source: String
     var updatedAt: String
     var characterLinks: [ChapterLink]
+    var exemptedCharacterNames: [String]
 
     enum CodingKeys: String, CodingKey {
         case id, index, title, summary, status, source, headline
@@ -120,6 +121,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         case draftText = "draft_text"
         case updatedAt = "updated_at"
         case characterLinks = "character_links"
+        case exemptedCharacterNames = "exempted_character_names"
     }
 
     init(from decoder: Decoder) throws {
@@ -140,6 +142,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         source = try container.decode(String.self, forKey: .source)
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
         characterLinks = try container.decodeIfPresent([ChapterLink].self, forKey: .characterLinks) ?? []
+        exemptedCharacterNames = try container.decodeIfPresent([String].self, forKey: .exemptedCharacterNames) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -158,6 +161,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         try container.encode(source, forKey: .source)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encode(characterLinks, forKey: .characterLinks)
+        try container.encode(exemptedCharacterNames, forKey: .exemptedCharacterNames)
     }
 }
 
@@ -316,26 +320,43 @@ struct ModelCapabilities: Codable, Hashable, Sendable {
     }
 }
 
-struct AcceptResult: Codable, Sendable {
-    let chapter: Chapter
-    let updatedCharacterIds: [String]
-    let addedEventIds: [String]
+struct Violation: Codable, Hashable, Sendable {
+    var code: String
+    var message: String
+    var names: [String]?
+    var currentChars: Int?
 
     enum CodingKeys: String, CodingKey {
-        case chapter
-        case updatedCharacterIds = "updated_character_ids"
-        case addedEventIds = "added_event_ids"
+        case code, message, names
+        case currentChars = "current_chars"
     }
 }
 
-struct StreamPayload: Sendable {
-    var text: String?
-    var message: String?
-    var code: String?
+/// Snapshot of a background write/extract job, returned by `POST /write`,
+/// `POST /accept` and polled via `GET /chapters/{id}/job`. There is no more
+/// SSE token stream — the client polls this endpoint until `phase` reaches a
+/// terminal value (`done` / `failed` / `cancelled`).
+struct WriteJobStatus: Codable, Sendable {
+    var chapterId: String
+    var kind: String
+    var phase: String
     var attempt: Int?
-    var currentChars: Int?
-    var violations: [String]?
+    var errorCode: String?
+    var errorMessage: String?
+    var violations: [Violation]?
     var chapter: Chapter?
+    var updatedCharacterIds: [String]?
+    var addedEventIds: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case chapterId = "chapter_id"
+        case kind, phase, attempt
+        case errorCode = "error_code"
+        case errorMessage = "error_message"
+        case violations, chapter
+        case updatedCharacterIds = "updated_character_ids"
+        case addedEventIds = "added_event_ids"
+    }
 }
 
 enum WorkspaceTab: String, CaseIterable, Identifiable {

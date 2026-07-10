@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -16,15 +15,15 @@ from app.llm.factory import (
     get_reviser_client,
     get_writer_client,
 )
-from app.llm.base import LLMError
-from app.models import Book, Chapter, ChapterCharacter, Character
+from app.models import Book, Chapter, ChapterCharacter, Character, JobRun
+from app.models.entities import uuid_str
 from app.schemas.chapter import (
-    AcceptResult,
     ChapterCreate,
     ChapterImportRequest,
     ChapterPatch,
     ChapterRead,
     ChapterSummary,
+    WriteJobStatus,
     WriteRequest,
 )
 from app.services.context import (
@@ -37,9 +36,8 @@ from app.services.context import (
     prefilter_memory_candidates,
     validate_character_preflight,
 )
-from app.services.extraction import apply_extractor_output
 from app.services.personas import get_persona
-from app.services.write_jobs import WriteJob, WriteJobConflict, sse_event, stream_job, write_registry
+from app.services.write_jobs import WriteJob, WriteJobConflict, record_job_phase, write_registry
 
 router = APIRouter(tags=["chapters"])
 
@@ -58,12 +56,30 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
         draft_text=chapter.draft_text,
         summary=chapter.summary,
         headline=chapter.headline,
+        exempted_character_names=list(chapter.exempted_character_names or []),
         status=chapter.status,
         source=chapter.source,
         created_at=chapter.created_at,
         updated_at=chapter.updated_at,
         character_links=[{"character_id": link.character_id, "chapter_note": ""} for link in chapter.character_links],
     )
+
+
+def _job_status_from_run(chapter: Chapter, run: JobRun) -> WriteJobStatus:
+    status_out = WriteJobStatus(
+        chapter_id=chapter.id,
+        kind=run.kind,
+        phase=run.phase,
+        attempt=run.attempt,
+        error_code=run.error_code,
+        error_message=run.error_message,
+        violations=run.violations,
+    )
+    if run.phase == "done":
+        status_out.chapter = _chapter_read(chapter)
+        status_out.updated_character_ids = run.updated_character_ids
+        status_out.added_event_ids = run.added_event_ids
+    return status_out
 
 
 def _replace_links(db: Session, chapter: Chapter, links: list) -> None:
@@ -183,7 +199,7 @@ def import_chapter(chapter_id: str, payload: ChapterImportRequest, db: Session =
     return _chapter_read(chapter)
 
 
-@router.post("/chapters/{chapter_id}/write")
+@router.post("/chapters/{chapter_id}/write", response_model=WriteJobStatus)
 def write_chapter(
     chapter_id: str,
     payload: WriteRequest = WriteRequest(),
@@ -191,7 +207,7 @@ def write_chapter(
     memory_selector_client=Depends(get_memory_selector_client),
     writer_client=Depends(get_writer_client),
     reviser_client=Depends(get_reviser_client),
-) -> StreamingResponse:
+) -> WriteJobStatus:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
@@ -212,15 +228,21 @@ def write_chapter(
         write_registry.cancel(live_job, discard=True)
         if live_job.thread is not None:
             live_job.thread.join(timeout=8)
+        record_job_phase(SessionLocal, live_job.job_id, "cancelled")
     candidates = memory_candidates(db, chapter)
     selected_ids = {link.character_id for link in chapter.character_links}
     candidates = prefilter_memory_candidates(candidates, chapter=chapter, selected_character_ids=selected_ids)
-    budget = memory_budget(chapter.user_prompt)
+    budget = memory_budget()
     selector_message = memory_selector_user_message(chapter, candidates, budget)
     baseline_text = chapter.draft_text
     baseline_status = "draft_ready" if baseline_text.strip() else "draft"
+    job_id = uuid_str()
+    run = JobRun(id=job_id, chapter_id=chapter.id, kind="write", phase="selecting_memory")
+    db.add(run)
     job = WriteJob(
         chapter_id=chapter.id,
+        job_id=job_id,
+        kind="write",
         memory_selector=MemorySelectorAgent(memory_selector_client, get_persona(db, "memory_selector")),
         writer=WriterAgent(writer_client, get_persona(db, "writer")),
         reviser=ReviserAgent(reviser_client, get_persona(db, "reviser")),
@@ -233,40 +255,31 @@ def write_chapter(
     try:
         write_registry.reserve(job)
     except WriteJobConflict:
+        db.rollback()
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行"})
     chapter.status = "writing"
     db.commit()
     write_registry.launch(job, SessionLocal)
-    return StreamingResponse(stream_job(job, snapshot=False), media_type="text/event-stream")
+    return WriteJobStatus(chapter_id=chapter.id, kind="write", phase="selecting_memory")
 
 
-@router.get("/chapters/{chapter_id}/write/stream")
-def reattach_write(chapter_id: str, db: Session = Depends(get_db)) -> StreamingResponse:
-    job = write_registry.get(chapter_id)
-    if job is not None:
-        return StreamingResponse(stream_job(job, snapshot=True), media_type="text/event-stream")
+@router.get("/chapters/{chapter_id}/job", response_model=WriteJobStatus)
+def chapter_job(chapter_id: str, db: Session = Depends(get_db)) -> WriteJobStatus:
+    # Read the run BEFORE the chapter. pysqlite does not hold a snapshot across
+    # SELECTs, and the worker commits the finalized/draft_ready chapter before it
+    # commits the terminal job phase. Observing a terminal run therefore
+    # guarantees the subsequent chapter read sees the already-committed result.
+    run = db.scalars(
+        select(JobRun)
+        .where(JobRun.chapter_id == chapter_id)
+        .order_by(JobRun.created_at.desc(), JobRun.id.desc())
+    ).first()
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
-    if chapter.status == "draft_ready":
-        return StreamingResponse(
-            iter(
-                [
-                    sse_event("started", {"chapter_id": chapter_id}),
-                    sse_event("done", {"chapter": _chapter_read(chapter).model_dump(mode="json")}),
-                ]
-            ),
-            media_type="text/event-stream",
-        )
-    return StreamingResponse(
-        iter(
-            [
-                sse_event("started", {"chapter_id": chapter_id}),
-                sse_event("error", {"code": "no_active_write", "message": "没有进行中的写作", "details": {}}),
-            ]
-        ),
-        media_type="text/event-stream",
-    )
+    if run is None:
+        return WriteJobStatus(chapter_id=chapter_id, kind="write", phase="idle")
+    return _job_status_from_run(chapter, run)
 
 
 @router.post("/chapters/{chapter_id}/write/cancel", response_model=ChapterRead)
@@ -276,19 +289,22 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
         write_registry.cancel(job, discard=True)
         if job.thread is not None:
             job.thread.join(timeout=8)
+        record_job_phase(SessionLocal, job.job_id, "cancelled")
     db.expire_all()
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
-    if chapter.status == "writing":
+    if chapter.status in ("writing", "extracting"):
         chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
         db.commit()
         db.refresh(chapter)
     return _chapter_read(chapter)
 
 
-@router.post("/chapters/{chapter_id}/accept", response_model=AcceptResult)
-def accept_chapter(chapter_id: str, db: Session = Depends(get_db), extractor_client=Depends(get_extractor_client)) -> AcceptResult:
+@router.post("/chapters/{chapter_id}/accept", response_model=WriteJobStatus)
+def accept_chapter(
+    chapter_id: str, db: Session = Depends(get_db), extractor_client=Depends(get_extractor_client)
+) -> WriteJobStatus:
     if write_registry.get_live(chapter_id) is not None:
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行，不能接受旧草稿"})
     chapter = db.get(Chapter, chapter_id)
@@ -299,41 +315,29 @@ def accept_chapter(chapter_id: str, db: Session = Depends(get_db), extractor_cli
     book = db.get(Book, chapter.book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="book not found")
+    extractor = ExtractorAgent(extractor_client, get_persona(db, "extractor"))
+    selected_ids = [link.character_id for link in chapter.character_links]
+    message = extractor_user_message(db, book, chapter)
+    job_id = uuid_str()
+    run = JobRun(id=job_id, chapter_id=chapter.id, kind="extract", phase="extracting")
+    db.add(run)
+    job = WriteJob(
+        chapter_id=chapter.id,
+        job_id=job_id,
+        kind="extract",
+        extractor=extractor,
+        extractor_user_message=message,
+        selected_character_ids=selected_ids,
+    )
+    try:
+        write_registry.reserve(job)
+    except WriteJobConflict:
+        db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行，不能接受旧草稿"})
     chapter.status = "extracting"
     db.commit()
-    db.refresh(chapter)
-    extractor = ExtractorAgent(extractor_client, get_persona(db, "extractor"))
-    try:
-        selected_ids = [link.character_id for link in chapter.character_links]
-        output = extractor.extract(extractor_user_message(db, book, chapter), selected_ids)
-        updated_ids, event_ids = apply_extractor_output(db, chapter, output)
-        db.commit()
-        db.refresh(chapter)
-    except LLMError as exc:
-        db.rollback()
-        chapter = db.get(Chapter, chapter_id)
-        if chapter is not None:
-            chapter.status = "draft_ready"
-            db.commit()
-            db.refresh(chapter)
-        headers = {"Retry-After": exc.retry_after} if exc.retry_after else None
-        raise HTTPException(
-            status_code=exc.status_code if exc.status_code is not None else 502,
-            detail={"code": exc.code, "message": str(exc), "details": exc.safe_details()},
-            headers=headers,
-        ) from exc
-    except Exception as exc:  # noqa: BLE001 - keep chapter editable
-        db.rollback()
-        chapter = db.get(Chapter, chapter_id)
-        if chapter is not None:
-            chapter.status = "draft_ready"
-            db.commit()
-            db.refresh(chapter)
-        raise HTTPException(
-            status_code=502,
-            detail={"code": "extract_failed", "message": f"提取失败：{exc}"},
-        ) from exc
-    return AcceptResult(chapter=_chapter_read(chapter), updated_character_ids=updated_ids, added_event_ids=event_ids)
+    write_registry.launch(job, SessionLocal)
+    return WriteJobStatus(chapter_id=chapter.id, kind="extract", phase="extracting")
 
 
 @router.post("/chapters/{chapter_id}/reopen", response_model=ChapterRead)

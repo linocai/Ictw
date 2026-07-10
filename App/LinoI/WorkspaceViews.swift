@@ -172,21 +172,12 @@ private struct LinoIChapterRow: View {
             .frame(width: 42, height: 50)
             .background(LinoTheme.coverGradient(chapter.id), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(chapter.title.isEmpty ? "第 \(chapter.index) 章" : chapter.title)
-                        .font(.headline)
-                        .foregroundStyle(LinoTheme.ink)
-                        .lineLimit(1)
-                    LinoIStatusPill(text: chapter.status.linoStatusLabel, status: chapter.status)
-                }
-                HStack(spacing: 8) {
-                    Text(chapter.source == "imported" ? "导入正文" : "生成正文")
-                    Text("·")
-                    Text(chapter.updatedAt.linoShortDate)
-                }
-                .font(.caption)
-                .foregroundStyle(LinoTheme.muted)
+            HStack(spacing: 8) {
+                Text(chapter.title.isEmpty ? "第 \(chapter.index) 章" : chapter.title)
+                    .font(.headline)
+                    .foregroundStyle(LinoTheme.ink)
+                    .lineLimit(1)
+                LinoIStatusPill(text: chapter.status.linoStatusLabel, status: chapter.status)
             }
             Spacer()
             Image(systemName: "chevron.right")
@@ -205,6 +196,9 @@ struct LinoIBookSettingsPane: View {
     @State private var title = ""
     @State private var world = ""
     @State private var loadedBookId: String?
+    @State private var isExporting = false
+    @State private var exportURL: URL?
+    @State private var showingShare = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -242,10 +236,31 @@ struct LinoIBookSettingsPane: View {
             }
             .padding(14)
             .linoGlass(cornerRadius: 20)
+
+            VStack(alignment: .leading, spacing: 10) {
+                LinoISectionLabel("导出")
+                Text("把全书已完成章节导出为纯文本，方便备份或投稿。")
+                    .font(.footnote)
+                    .foregroundStyle(LinoTheme.muted)
+                Button {
+                    Task { await exportBook() }
+                } label: {
+                    Text(isExporting ? "正在导出" : "导出全书")
+                }
+                .buttonStyle(LinoITintButtonStyle())
+                .disabled(isExporting || session.currentBook == nil)
+            }
+            .padding(14)
+            .linoGlass(cornerRadius: 20)
         }
         .padding(.top, 8)
         .onAppear(perform: sync)
         .onChange(of: session.currentBook?.id) { _, _ in sync() }
+        .sheet(isPresented: $showingShare) {
+            if let exportURL {
+                ActivityView(items: [exportURL])
+            }
+        }
     }
 
     private func sync() {
@@ -253,5 +268,21 @@ struct LinoIBookSettingsPane: View {
         loadedBookId = book.id
         title = book.title
         world = book.worldSetting
+    }
+
+    private func exportBook() async {
+        guard let book = session.currentBook else { return }
+        isExporting = true
+        defer { isExporting = false }
+        do {
+            let data = try await session.api.rawRequest("/books/\(book.id)/export.txt")
+            let filename = "\(book.title.isEmpty ? "LinoI书稿" : book.title).txt"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+            try data.write(to: url, options: [.atomic])
+            exportURL = url
+            showingShare = true
+        } catch {
+            session.notices.publish(error)
+        }
     }
 }

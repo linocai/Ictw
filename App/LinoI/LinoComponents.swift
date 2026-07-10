@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct LinoISectionLabel: View {
     let text: String
@@ -163,11 +164,10 @@ struct LinoIEditor: View {
 
 struct LinoIDraftPreview: View {
     let text: String
-    let isStreaming: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming {
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("还没有正文。完成本章输入后点「生成」。")
                     .font(.custom("Songti SC", size: 15))
                     .foregroundStyle(LinoTheme.faint)
@@ -182,9 +182,6 @@ struct LinoIDraftPreview: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.bottom, 16)
                 }
-                if isStreaming {
-                    LinoIBlinkingCaret()
-                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -197,21 +194,16 @@ struct LinoIDraftPreview: View {
     }
 }
 
-struct LinoIBlinkingCaret: View {
-    @State private var visible = true
+/// Wraps `UIActivityViewController` so book export can hand a file straight
+/// to the system share sheet.
+struct ActivityView: UIViewControllerRepresentable {
+    let items: [Any]
 
-    var body: some View {
-        Rectangle()
-            .fill(LinoTheme.accent)
-            .frame(width: 2, height: 20)
-            .opacity(visible ? 1 : 0)
-            .task {
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 530_000_000)
-                    visible.toggle()
-                }
-            }
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 struct LinoIEmptyCard: View {

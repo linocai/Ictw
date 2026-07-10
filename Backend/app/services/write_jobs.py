@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import threading
 import time
-from collections.abc import Iterator
 from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -12,15 +10,21 @@ from app.agents.memory_selector import MemorySelectorAgent
 from app.agents.reviser import ReviserAgent
 from app.agents.writer import WriterAgent
 from app.llm.base import LLMError
-from app.models import Chapter
-from app.schemas.chapter import ChapterRead
+from app.models import Chapter, JobRun
+from app.models.entities import utc_now
+from app.services.audit import record_llm_call
 from app.services.context import (
+    MEMORY_BUDGET_CHARS,
     MemoryBlock,
     draft_violations,
     pack_selected_memories,
     reviser_user_message,
     writer_user_message,
 )
+from app.services.extraction import apply_extractor_output
+
+
+TERMINAL_PHASES = {"done", "failed", "cancelled"}
 
 
 class WriteJobConflict(Exception):
@@ -28,22 +32,35 @@ class WriteJobConflict(Exception):
 
 
 class WriteJob:
+    """In-memory handle for a running write/extract task.
+
+    It only carries what the registry needs for concurrency control and
+    cancellation. The authoritative, pollable status lives in `job_runs`.
+    """
+
     def __init__(
         self,
         chapter_id: str,
-        writer: WriterAgent,
+        writer: WriterAgent | None = None,
         reviser: ReviserAgent | None = None,
         memory_selector: MemorySelectorAgent | None = None,
         selector_user_message: str = "",
         memory_candidates: list[MemoryBlock] | None = None,
-        memory_budget: int = 600,
+        memory_budget: int = MEMORY_BUDGET_CHARS,
         baseline_text: str = "",
         baseline_status: str = "draft",
+        job_id: str = "",
+        kind: str = "write",
+        extractor: Any | None = None,
+        extractor_user_message: str = "",
+        selected_character_ids: list[str] | None = None,
         # Compatibility for the old direct unit-test constructor.
         writer_user_message: str | None = None,
         compressor: Any | None = None,
     ) -> None:
         self.chapter_id = chapter_id
+        self.job_id = job_id
+        self.kind = kind
         self.writer = writer
         self.reviser = reviser or compressor
         self.memory_selector = memory_selector
@@ -53,22 +70,34 @@ class WriteJob:
         self.baseline_text = baseline_text
         self.baseline_status = baseline_status
         self.legacy_writer_user_message = writer_user_message
-        self.condition = threading.Condition()
+        self.extractor = extractor
+        self.extractor_user_message = extractor_user_message
+        self.selected_character_ids = selected_character_ids or []
         self.cancel_event = threading.Event()
-        self.phase = "selecting_memory" if memory_selector is not None else "writing"
-        self.phase_details: dict[str, Any] = {}
-        self.buffer: list[str] = []
-        self.error_code: str | None = None
-        self.error: str | None = None
-        self.error_details: dict[str, Any] = {}
-        self.done_chapter: dict[str, Any] | None = None
         self.thread: threading.Thread | None = None
-        self.terminal_at: float | None = None
         self.discard_on_cancel = False
+        self._lock = threading.Lock()
+        self._terminal = False
+        self.phase = "extracting" if kind == "extract" else (
+            "selecting_memory" if memory_selector is not None else "writing"
+        )
 
     @property
     def is_terminal(self) -> bool:
-        return self.phase in {"done", "failed", "cancelled"}
+        with self._lock:
+            return self._terminal or self.phase in TERMINAL_PHASES
+
+    def mark_terminal(self, phase: str | None = None) -> None:
+        with self._lock:
+            if phase is not None and self.phase not in TERMINAL_PHASES:
+                self.phase = phase
+            self._terminal = True
+
+    def mark_cancelled(self) -> None:
+        with self._lock:
+            if self.phase not in TERMINAL_PHASES:
+                self.phase = "cancelled"
+            self._terminal = True
 
 
 class WriteJobRegistry:
@@ -100,18 +129,13 @@ class WriteJobRegistry:
             return self._jobs.get(job.chapter_id) is job
 
     def cancel(self, job: WriteJob, *, discard: bool = False) -> None:
+        job.discard_on_cancel = discard
         job.cancel_event.set()
-        with job.condition:
-            job.discard_on_cancel = discard
-            if not job.is_terminal:
-                job.phase = "cancelled"
-                job.error_code = "write_cancelled"
-                job.error = "写作已取消"
-                job.terminal_at = time.monotonic()
-                job.condition.notify_all()
+        job.mark_cancelled()
 
     def launch(self, job: WriteJob, session_factory: sessionmaker[Session]) -> None:
-        thread = threading.Thread(target=_run_job, args=(job, session_factory), daemon=True)
+        target = _run_extract_job if job.kind == "extract" else _run_job
+        thread = threading.Thread(target=target, args=(job, session_factory), daemon=True)
         job.thread = thread
         thread.start()
 
@@ -119,34 +143,131 @@ class WriteJobRegistry:
 write_registry = WriteJobRegistry()
 
 
+# --- Persisted job_runs helpers ------------------------------------------------
+
+
+def record_job_phase(
+    session_factory: sessionmaker[Session],
+    job_id: str,
+    phase: str,
+    **fields: Any,
+) -> None:
+    """Update the persisted job_runs row. Never overwrites a terminal row.
+
+    Runs in its own short session, independent of the worker's chapter
+    transaction, so the polling endpoint reads committed intermediate phases.
+    """
+    if not job_id:
+        return
+    db = session_factory()
+    try:
+        run = db.get(JobRun, job_id)
+        if run is None or run.phase in TERMINAL_PHASES:
+            return
+        run.phase = phase
+        run.attempt = fields.get("attempt")
+        run.violations = fields.get("violations")
+        run.error_code = fields.get("error_code")
+        run.error_message = fields.get("error_message")
+        run.updated_character_ids = fields.get("updated_character_ids")
+        run.added_event_ids = fields.get("added_event_ids")
+        if phase in TERMINAL_PHASES:
+            run.finished_at = utc_now()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _record_llm(
+    session_factory: sessionmaker[Session],
+    agent_role: str,
+    client: Any,
+    start: float,
+    error_code: str | None,
+    job: WriteJob,
+) -> None:
+    duration_ms = int((time.monotonic() - start) * 1000)
+    record_llm_call(
+        session_factory,
+        agent_role=agent_role,
+        client=client,
+        duration_ms=duration_ms,
+        error_code=error_code,
+        chapter_id=job.chapter_id,
+        job_id=job.job_id,
+    )
+
+
+# --- Timed, audited agent calls ------------------------------------------------
+
+
+def _run_memory_selector(job: WriteJob, session_factory: sessionmaker[Session]) -> list[str]:
+    start = time.monotonic()
+    client = getattr(job.memory_selector, "llm", None)
+    try:
+        result = job.memory_selector.select(job.selector_user_message)
+    except LLMError as exc:
+        _record_llm(session_factory, "memory_selector", client, start, exc.code, job)
+        raise
+    _record_llm(session_factory, "memory_selector", client, start, None, job)
+    return result
+
+
+def _run_writer(job: WriteJob, session_factory: sessionmaker[Session], message: str) -> str:
+    start = time.monotonic()
+    client = getattr(job.writer, "llm", None)
+    chunks: list[str] = []
+    try:
+        for token in job.writer.stream(message, cancel_event=job.cancel_event):
+            chunks.append(token)
+            if _should_stop(job):
+                break
+    except LLMError as exc:
+        _record_llm(session_factory, "writer", client, start, exc.code, job)
+        raise
+    _record_llm(session_factory, "writer", client, start, None, job)
+    return "".join(chunks)
+
+
+def _run_reviser(job: WriteJob, session_factory: sessionmaker[Session], message: str) -> str:
+    start = time.monotonic()
+    client = getattr(job.reviser, "llm", None)
+    try:
+        result = job.reviser.revise(message)
+    except LLMError as exc:
+        _record_llm(session_factory, "reviser", client, start, exc.code, job)
+        raise
+    _record_llm(session_factory, "reviser", client, start, None, job)
+    return result
+
+
+# --- Workers -------------------------------------------------------------------
+
+
 def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
     db = session_factory()
     try:
         chapter = db.get(Chapter, job.chapter_id)
         if chapter is None:
-            _mark_failed(job, "chapter_missing", "章节不存在")
+            record_job_phase(session_factory, job.job_id, "failed", error_code="chapter_missing", error_message="章节不存在")
+            job.mark_terminal("failed")
             return
         memories: list[MemoryBlock] = []
         if job.memory_selector is not None:
-            _set_phase(job, "selecting_memory")
-            selected_ids = job.memory_selector.select(job.selector_user_message)
+            record_job_phase(session_factory, job.job_id, "selecting_memory")
+            selected_ids = _run_memory_selector(job, session_factory)
             memories = pack_selected_memories(job.memory_candidates, selected_ids, job.memory_budget)
         if _should_stop(job):
             _restore_baseline(db, job)
+            job.mark_terminal()
             return
 
-        _set_phase(job, "writing")
+        record_job_phase(session_factory, job.job_id, "writing")
         message = job.legacy_writer_user_message or writer_user_message(chapter.book, chapter, memories)
-        for token in job.writer.stream(message, cancel_event=job.cancel_event):
-            if _should_stop(job):
-                _restore_baseline(db, job)
-                return
-            with job.condition:
-                job.buffer.append(token)
-                job.condition.notify_all()
-        current_text = "".join(job.buffer)
+        current_text = _run_writer(job, session_factory, message)
         if _should_stop(job):
             _restore_baseline(db, job)
+            job.mark_terminal()
             return
 
         violations = draft_violations(db, chapter, current_text, job.writer.finish_reason)
@@ -155,30 +276,29 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
                 break
             if job.reviser is None:
                 break
-            _set_phase(
-                job,
-                "revising",
-                attempt=attempt,
-                current_chars=sum(1 for ch in current_text if not ch.isspace()),
-                violations=violations,
-            )
-            current_text = job.reviser.revise(reviser_user_message(chapter, current_text, violations))
+            record_job_phase(session_factory, job.job_id, "revising", attempt=attempt, violations=violations)
+            current_text = _run_reviser(job, session_factory, reviser_user_message(chapter, current_text, violations))
             if _should_stop(job):
                 _restore_baseline(db, job)
+                job.mark_terminal()
                 return
             finish_reason = getattr(getattr(job.reviser, "llm", None), "last_finish_reason", None)
             violations = draft_violations(db, chapter, current_text, finish_reason)
         if violations:
             _restore_baseline(db, job)
-            _mark_failed(
-                job,
-                "revision_failed",
-                "修订两次后仍未通过程序校验，请调整本章剧情后重新生成",
-                {"violations": violations},
+            record_job_phase(
+                session_factory,
+                job.job_id,
+                "failed",
+                error_code="revision_failed",
+                error_message="修订两次后仍未通过程序校验，请调整本章剧情后重新生成",
+                violations=violations,
             )
+            job.mark_terminal("failed")
             return
         if not write_registry.is_current(job):
             _restore_baseline(db, job)
+            job.mark_terminal()
             return
 
         # The old draft remains in storage during generation. Only a fully
@@ -186,16 +306,62 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
         chapter.draft_text = current_text
         chapter.status = "draft_ready"
         db.commit()
-        db.refresh(chapter)
-        _mark_done(job, _chapter_payload(chapter))
+        record_job_phase(session_factory, job.job_id, "done")
+        job.mark_terminal("done")
     except LLMError as exc:
         db.rollback()
         _restore_baseline(db, job)
-        _mark_failed(job, exc.code, str(exc), exc.safe_details())
-    except Exception as exc:  # noqa: BLE001 - converted to stable SSE envelope
+        record_job_phase(session_factory, job.job_id, "failed", error_code=exc.code, error_message=str(exc))
+        job.mark_terminal("failed")
+    except Exception as exc:  # noqa: BLE001 - converted to a stable failed job_run
         db.rollback()
         _restore_baseline(db, job)
-        _mark_failed(job, "write_failed", str(exc))
+        record_job_phase(session_factory, job.job_id, "failed", error_code="write_failed", error_message=str(exc))
+        job.mark_terminal("failed")
+    finally:
+        db.close()
+
+
+def _run_extract_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
+    db = session_factory()
+    try:
+        chapter = db.get(Chapter, job.chapter_id)
+        if chapter is None:
+            record_job_phase(session_factory, job.job_id, "failed", error_code="chapter_missing", error_message="章节不存在")
+            job.mark_terminal("failed")
+            return
+        start = time.monotonic()
+        client = getattr(job.extractor, "llm", None)
+        try:
+            output = job.extractor.extract(job.extractor_user_message, job.selected_character_ids)
+        except LLMError as exc:
+            _record_llm(session_factory, "extractor", client, start, exc.code, job)
+            raise
+        _record_llm(session_factory, "extractor", client, start, None, job)
+        if job.cancel_event.is_set() or not write_registry.is_current(job):
+            db.rollback()
+            job.mark_terminal()
+            return
+        updated_ids, event_ids = apply_extractor_output(db, chapter, output)
+        db.commit()
+        record_job_phase(
+            session_factory,
+            job.job_id,
+            "done",
+            updated_character_ids=updated_ids,
+            added_event_ids=event_ids,
+        )
+        job.mark_terminal("done")
+    except LLMError as exc:
+        db.rollback()
+        _restore_draft_ready(db, job)
+        record_job_phase(session_factory, job.job_id, "failed", error_code=exc.code, error_message=str(exc))
+        job.mark_terminal("failed")
+    except Exception as exc:  # noqa: BLE001 - keep the chapter editable on failure
+        db.rollback()
+        _restore_draft_ready(db, job)
+        record_job_phase(session_factory, job.job_id, "failed", error_code="extract_failed", error_message=f"提取失败：{exc}")
+        job.mark_terminal("failed")
     finally:
         db.close()
 
@@ -218,118 +384,11 @@ def _restore_baseline(db: Session, job: WriteJob) -> None:
     db.commit()
 
 
-def _set_phase(job: WriteJob, phase: str, **details: Any) -> None:
-    with job.condition:
-        if job.is_terminal:
-            return
-        job.phase = phase
-        job.phase_details = details
-        job.condition.notify_all()
-
-
-def _mark_done(job: WriteJob, chapter_payload: dict[str, Any]) -> None:
-    with job.condition:
-        job.phase = "done"
-        job.done_chapter = chapter_payload
-        job.terminal_at = time.monotonic()
-        job.condition.notify_all()
-
-
-def _mark_failed(job: WriteJob, code: str, error: str, details: dict[str, Any] | None = None) -> None:
-    with job.condition:
-        if job.phase == "cancelled":
-            return
-        job.phase = "failed"
-        job.error_code = code
-        job.error = error
-        job.error_details = details or {}
-        job.terminal_at = time.monotonic()
-        job.condition.notify_all()
-
-
-def _chapter_payload(chapter: Chapter) -> dict[str, Any]:
-    note = str(getattr(chapter, "author_note", getattr(chapter, "chapter_style", "")) or "")
-    return ChapterRead(
-        id=chapter.id,
-        book_id=chapter.book_id,
-        index=chapter.index,
-        title=chapter.title,
-        user_prompt=chapter.user_prompt,
-        target_word_count=chapter.target_word_count,
-        author_note=note,
-        chapter_style=note,
-        draft_text=chapter.draft_text,
-        summary=chapter.summary,
-        headline=chapter.headline,
-        status=chapter.status,
-        source=chapter.source,
-        created_at=chapter.created_at,
-        updated_at=chapter.updated_at,
-        character_links=[{"character_id": link.character_id, "chapter_note": ""} for link in chapter.character_links],
-    ).model_dump(mode="json")
-
-
-def sse_event(event: str, data: dict[str, Any]) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-def _phase_event(job: WriteJob) -> str | None:
-    if job.phase not in {"selecting_memory", "writing", "revising"}:
-        return None
-    return sse_event(job.phase, {"chapter_id": job.chapter_id, **job.phase_details})
-
-
-def stream_job(job: WriteJob, *, snapshot: bool) -> Iterator[str]:
-    yield sse_event("started", {"chapter_id": job.chapter_id})
-    sent = 0
-    with job.condition:
-        phase = _phase_event(job)
-        last_phase = job.phase
-        last_details = dict(job.phase_details)
-        snapshot_text = "".join(job.buffer) if snapshot and job.buffer else None
-        if snapshot_text is not None:
-            sent = len(job.buffer)
-    if phase is not None:
-        yield phase
-    if snapshot_text is not None:
-        yield sse_event("snapshot", {"text": snapshot_text, "chars": len(snapshot_text)})
-
-    while True:
-        events: list[str] = []
-        terminal = False
-        with job.condition:
-            while (
-                not job.is_terminal
-                and sent == len(job.buffer)
-                and last_phase == job.phase
-                and last_details == job.phase_details
-            ):
-                job.condition.wait(timeout=1.0)
-            if job.phase != last_phase or job.phase_details != last_details:
-                last_phase = job.phase
-                last_details = dict(job.phase_details)
-                event = _phase_event(job)
-                if event is not None:
-                    events.append(event)
-            while sent < len(job.buffer):
-                token = job.buffer[sent]
-                sent += 1
-                events.append(sse_event("token", {"text": token}))
-            if job.is_terminal:
-                if job.phase == "done" and job.done_chapter is not None:
-                    events.append(sse_event("done", {"chapter": job.done_chapter}))
-                else:
-                    events.append(
-                        sse_event(
-                            "error",
-                            {
-                                "code": job.error_code or "write_failed",
-                                "message": job.error or "write failed",
-                                "details": job.error_details,
-                            },
-                        )
-                    )
-                terminal = True
-        yield from events
-        if terminal:
-            return
+def _restore_draft_ready(db: Session, job: WriteJob) -> None:
+    if not write_registry.is_current(job):
+        return
+    chapter = db.get(Chapter, job.chapter_id)
+    if chapter is None:
+        return
+    chapter.status = "draft_ready"
+    db.commit()

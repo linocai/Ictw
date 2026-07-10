@@ -5,6 +5,7 @@ enum APIError: LocalizedError, Equatable {
     case notConfigured
     case badURL
     case http(Int, String)
+    case validation(code: String, message: String, names: [String])
     case transport(String)
 
     var errorDescription: String? {
@@ -12,6 +13,8 @@ enum APIError: LocalizedError, Equatable {
         case .notConfigured: "请先配置后端地址和 Bearer Token"
         case .badURL: "后端地址无效"
         case .http(let code, let body): body.isEmpty ? "HTTP \(code)" : body
+        case .validation(_, let message, let names):
+            names.isEmpty ? message : "\(message)：\(names.joined(separator: "、"))"
         case .transport(let message): message
         }
     }
@@ -45,6 +48,9 @@ struct APIClient {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { return data }
             if !(200..<300).contains(http.statusCode) {
+                if let structured = Self.structuredError(from: data) {
+                    throw APIError.validation(code: structured.code, message: structured.message, names: structured.names)
+                }
                 throw APIError.http(http.statusCode, Self.errorMessage(from: data))
             }
             return data
@@ -55,72 +61,38 @@ struct APIClient {
         }
     }
 
-    func streamWrite(chapterId: String, replaceDraft: Bool, onEvent: @escaping @MainActor (String, StreamPayload) -> Void) async throws {
-        try await stream(path: "/chapters/\(chapterId)/write", method: "POST", body: ["replace_draft": replaceDraft], onEvent: onEvent)
+    /// Starts (or restarts) the background write job for a chapter. The server
+    /// answers immediately with the freshly created job's status; progress is
+    /// observed by polling `jobStatus(chapterId:)`.
+    func startWrite(chapterId: String, replaceDraft: Bool) async throws -> WriteJobStatus {
+        try await request("/chapters/\(chapterId)/write", method: "POST", body: ["replace_draft": replaceDraft])
     }
 
-    func reattachWrite(chapterId: String, onEvent: @escaping @MainActor (String, StreamPayload) -> Void) async throws {
-        try await stream(path: "/chapters/\(chapterId)/write/stream", method: "GET", body: nil, onEvent: onEvent)
+    /// Polls the latest job snapshot (write or extract) for a chapter.
+    func jobStatus(chapterId: String) async throws -> WriteJobStatus {
+        try await request("/chapters/\(chapterId)/job")
+    }
+
+    /// Starts the background Extractor job for a chapter's draft.
+    func accept(chapterId: String) async throws -> WriteJobStatus {
+        try await request("/chapters/\(chapterId)/accept", method: "POST")
     }
 
     func cancelWrite(chapterId: String) async throws -> Chapter {
         try await request("/chapters/\(chapterId)/write/cancel", method: "POST")
     }
 
-    private func stream(
-        path: String,
-        method: String,
-        body: (any Encodable & Sendable)?,
-        onEvent: @escaping @MainActor (String, StreamPayload) -> Void
-    ) async throws {
-        guard !baseURL.isEmpty, !token.isEmpty else { throw APIError.notConfigured }
-        guard let url = URL(string: apiRoot + path) else { throw APIError.badURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if let body {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder.lino.encode(AnyEncodable(body))
-        }
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            var bodyData = Data()
-            for try await byte in bytes {
-                bodyData.append(byte)
-            }
-            throw APIError.http(http.statusCode, Self.errorMessage(from: bodyData))
-        }
-        var currentEvent = "message"
-        for try await line in bytes.lines {
-            if line.hasPrefix("event:") {
-                currentEvent = line.replacingOccurrences(of: "event:", with: "").trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("data:") {
-                let raw = line.replacingOccurrences(of: "data:", with: "").trimmingCharacters(in: .whitespaces)
-                if let payload = Self.decodeStreamPayload(raw) {
-                    await onEvent(currentEvent, payload)
-                }
-            }
-        }
-    }
-
-    private static func decodeStreamPayload(_ raw: String) -> StreamPayload? {
-        guard let data = raw.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        var chapter: Chapter?
-        if let chapterObject = object["chapter"] as? [String: Any],
-           let chapterData = try? JSONSerialization.data(withJSONObject: chapterObject),
-           let decoded = try? JSONDecoder.lino.decode(Chapter.self, from: chapterData) {
-            chapter = decoded
-        }
-        return StreamPayload(
-            text: object["text"] as? String,
-            message: object["message"] as? String,
-            code: object["code"] as? String,
-            attempt: object["attempt"] as? Int,
-            currentChars: object["current_chars"] as? Int,
-            violations: object["violations"] as? [String],
-            chapter: chapter
-        )
+    /// Extracts a `{code, message, details.names}` structured error payload
+    /// (the shape used by preflight/job failures) when present.
+    private static func structuredError(from data: Data) -> (code: String, message: String, names: [String])? {
+        guard !data.isEmpty,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = object["detail"] as? [String: Any],
+              let code = detail["code"] as? String,
+              let message = detail["message"] as? String else { return nil }
+        let details = detail["details"] as? [String: Any]
+        let names = details?["names"] as? [String] ?? []
+        return (code, message, names)
     }
 
     private static func errorMessage(from data: Data) -> String {

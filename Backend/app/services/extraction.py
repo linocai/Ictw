@@ -6,6 +6,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.models import Chapter, Character, CharacterEvent
+from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
 
 
 class ExtractorValidationError(ValueError):
@@ -74,7 +75,7 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
             chapter_id=chapter.id,
             character_id=character_id,
             event_type=event_type,
-            event_text=event_text,
+            event_text=truncate_to_nonspace(event_text, CHARACTER_EVENT_MAX_CHARS),
         )
         db.add(event)
         db.flush()

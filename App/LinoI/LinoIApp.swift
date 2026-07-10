@@ -45,10 +45,11 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var notices: NoticeBus
+    @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var chapterEditorStore: ChapterEditorStore
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $workspace.chapterPath) {
             ZStack {
                 LinoTheme.background.ignoresSafeArea()
                 if session.currentBook == nil {

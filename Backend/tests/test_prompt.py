@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.models import Book, Chapter, ChapterCharacter, Character, CharacterEvent
 from app.services.context import (
+    MEMORY_BUDGET_CHARS,
     MemoryBlock,
     memory_budget,
     memory_candidates,
@@ -102,7 +103,7 @@ def test_memory_candidates_scope_and_budget_packing(client, auth_headers):
         db.close()
     assert len(candidates) == 2
     assert all("可用" in block.text for block in candidates)
-    assert memory_budget("短") == 600
+    assert memory_budget("短") == MEMORY_BUDGET_CHARS
     blocks = [MemoryBlock("too-big", "甲" * 700, 1), MemoryBlock("fits", "乙" * 500, 1)]
     packed = pack_selected_memories(blocks, ["too-big", "fits"], 600)
     assert [item.id for item in packed] == ["fits"]

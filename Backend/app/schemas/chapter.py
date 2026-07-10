@@ -37,6 +37,9 @@ class ChapterPatch(_AuthorNoteCompat):
     user_prompt: str | None = None
     target_word_count: int | None = Field(default=None, gt=0)
     draft_text: str | None = None
+    summary: str | None = None
+    headline: str | None = None
+    exempted_character_names: list[str] | None = None
     character_links: list[ChapterCharacterLink] | None = None
 
 
@@ -71,6 +74,7 @@ class ChapterRead(ORMModel):
     draft_text: str
     summary: str
     headline: str
+    exempted_character_names: list[str] = Field(default_factory=list)
     status: str
     source: str
     created_at: datetime
@@ -82,7 +86,14 @@ class WriteRequest(BaseModel):
     replace_draft: bool = False
 
 
-class AcceptResult(BaseModel):
-    chapter: ChapterRead
-    updated_character_ids: list[str]
-    added_event_ids: list[str]
+class WriteJobStatus(BaseModel):
+    chapter_id: str
+    kind: str
+    phase: str
+    attempt: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    violations: list[dict] | None = None
+    chapter: ChapterRead | None = None
+    updated_character_ids: list[str] | None = None
+    added_event_ids: list[str] | None = None

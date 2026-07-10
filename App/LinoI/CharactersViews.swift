@@ -210,26 +210,7 @@ private struct LinoICharacterCard: View {
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(character.events) { event in
-                        HStack(alignment: .top, spacing: 10) {
-                            Text(event.chapterIndex.map { "第 \($0) 章" } ?? "章节")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(LinoTheme.accent, in: Capsule())
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(event.eventType.isEmpty ? "故事线" : event.eventType)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(LinoTheme.muted)
-                                Text(event.eventText)
-                                    .font(.footnote)
-                                    .foregroundStyle(LinoTheme.body)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(11)
-                        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        LinoICharacterEventRow(event: event)
                     }
                 }
             }
@@ -250,6 +231,90 @@ private struct LinoICharacterCard: View {
         updated.role = role
         updated.fixedProfile = fixedProfile
         await characters.update(updated)
+    }
+}
+
+private struct LinoICharacterEventRow: View {
+    @EnvironmentObject private var characters: CharactersStore
+    @State private var isEditing = false
+    @State private var draftText = ""
+    @State private var confirmingDelete = false
+
+    let event: CharacterEvent
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(event.chapterIndex.map { "第 \($0) 章" } ?? "章节")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(LinoTheme.accent, in: Capsule())
+
+            if isEditing {
+                VStack(alignment: .leading, spacing: 8) {
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $draftText)
+                            .frame(minHeight: 70)
+                            .scrollContentBackground(.hidden)
+                            .font(.footnote)
+                            .foregroundStyle(LinoTheme.body)
+                            .padding(6)
+                    }
+                    .background(Color.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(LinoTheme.hairline, lineWidth: 0.5))
+                    HStack(spacing: 8) {
+                        Button("取消") {
+                            draftText = event.eventText
+                            isEditing = false
+                        }
+                        .buttonStyle(LinoITintButtonStyle(compact: true))
+                        Button("保存") {
+                            Task {
+                                await characters.updateEvent(event, text: draftText)
+                                isEditing = false
+                            }
+                        }
+                        .buttonStyle(LinoIPrimaryButtonStyle(compact: true))
+                    }
+                }
+            } else {
+                Text(event.eventText)
+                    .font(.footnote)
+                    .foregroundStyle(LinoTheme.body)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+
+            if !isEditing {
+                Menu {
+                    Button("编辑", systemImage: "pencil") {
+                        draftText = event.eventText
+                        isEditing = true
+                    }
+                    Button("删除", systemImage: "trash", role: .destructive) {
+                        confirmingDelete = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LinoTheme.muted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onAppear { draftText = event.eventText }
+        .confirmationDialog("删除这条故事线？", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                Task { await characters.deleteEvent(event) }
+            }
+            Button("取消", role: .cancel) {}
+        }
     }
 }
 

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -65,6 +65,9 @@ class Chapter(Base):
     draft_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     headline: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    exempted_character_names: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
+    )
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
     source: Mapped[str] = mapped_column(String(32), default="agent", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -131,3 +134,41 @@ class AgentModelBinding(Base):
     thinking_enabled: Mapped[bool | None] = mapped_column(nullable=True)
     reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class JobRun(Base):
+    __tablename__ = "job_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    chapter_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chapters.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    violations: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    updated_character_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    added_event_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LLMCallAudit(Base):
+    __tablename__ = "llm_call_audits"
+
+    # No prompt / body / api_key columns are defined here on purpose.
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    agent_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_name: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    finish_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    chapter_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

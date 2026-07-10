@@ -28,14 +28,18 @@ class OpenAICompatibleClient:
         self.reasoning_effort = reasoning_effort
         self.capability_family = capability_family
         self.last_finish_reason: str | None = None
+        self.last_usage: dict[str, Any] | None = None
 
     def complete(self, *, system: str, user: str, **kwargs: Any) -> str:
+        self.last_usage = None
         payload = self._payload(system=system, user=user, stream=False, **kwargs)
         data = self._post(payload, timeout=kwargs.get("timeout", 300))
         self.last_finish_reason = _extract_finish_reason(data)
+        self.last_usage = _extract_usage(data)
         return _extract_content(data)
 
     def complete_json(self, *, system: str, user: str, schema: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        self.last_usage = None
         schema_text = json.dumps(schema, ensure_ascii=False)
         system = f"{system}\n\n只返回合法 JSON object。JSON schema: {schema_text}"
         payload = self._payload(
@@ -46,6 +50,7 @@ class OpenAICompatibleClient:
             **kwargs,
         )
         data = self._post(payload, timeout=kwargs.get("timeout", 300))
+        self.last_usage = _extract_usage(data)
         try:
             self.last_finish_reason = _extract_finish_reason(data)
             parsed = json.loads(_extract_content(data))
@@ -64,7 +69,9 @@ class OpenAICompatibleClient:
         **kwargs: Any,
     ) -> Iterator[str]:
         payload = self._payload(system=system, user=user, stream=True, **kwargs)
+        payload["stream_options"] = {"include_usage": True}
         self.last_finish_reason = None
+        self.last_usage = None
         timeout = httpx.Timeout(connect=15, read=kwargs.get("timeout", 180), write=30, pool=15)
         url = f"{self.base_url}/chat/completions"
         try:
@@ -95,6 +102,9 @@ class OpenAICompatibleClient:
                                 code="llm_content_blocked",
                                 block_reason=str(block_reason),
                             )
+                    usage = _extract_usage(chunk)
+                    if usage is not None:
+                        self.last_usage = usage
                     choices = chunk.get("choices")
                     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
                         continue
@@ -185,6 +195,17 @@ def _extract_content(data: dict[str, Any]) -> str:
             retryable=False,
             finish_reason=_extract_finish_reason(data),
         ) from exc
+
+
+def _extract_usage(data: dict[str, Any]) -> dict[str, Any] | None:
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return {
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "completion_tokens": usage.get("completion_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+    }
 
 
 def _extract_finish_reason(data: dict[str, Any]) -> str | None:

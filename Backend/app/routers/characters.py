@@ -6,9 +6,31 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Book, Character, CharacterEvent, Chapter
-from app.schemas.character import CharacterCreate, CharacterEventRead, CharacterImportRequest, CharacterRead, CharacterPatch
+from app.schemas.character import (
+    CharacterCreate,
+    CharacterEventPatch,
+    CharacterEventRead,
+    CharacterImportRequest,
+    CharacterPatch,
+    CharacterRead,
+)
+from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
 
 router = APIRouter(tags=["characters"])
+
+
+def _character_event_read(event: CharacterEvent) -> CharacterEventRead:
+    return CharacterEventRead(
+        id=event.id,
+        book_id=event.book_id,
+        character_id=event.character_id,
+        chapter_id=event.chapter_id,
+        event_type=event.event_type,
+        event_text=event.event_text,
+        created_at=event.created_at,
+        updated_at=event.updated_at,
+        chapter_index=event.chapter.index if event.chapter is not None else None,
+    )
 
 
 def _character_read(db: Session, character: Character) -> CharacterRead:
@@ -94,5 +116,27 @@ def delete_character(character_id: str, db: Session = Depends(get_db)) -> Respon
     character = db.get(Character, character_id)
     if character is not None:
         db.delete(character)
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/character-events/{event_id}", response_model=CharacterEventRead)
+def patch_character_event(
+    event_id: str, payload: CharacterEventPatch, db: Session = Depends(get_db)
+) -> CharacterEventRead:
+    event = db.get(CharacterEvent, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="character event not found")
+    event.event_text = truncate_to_nonspace(payload.event_text, CHARACTER_EVENT_MAX_CHARS)
+    db.commit()
+    db.refresh(event)
+    return _character_event_read(event)
+
+
+@router.delete("/character-events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_character_event(event_id: str, db: Session = Depends(get_db)) -> Response:
+    event = db.get(CharacterEvent, event_id)
+    if event is not None:
+        db.delete(event)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

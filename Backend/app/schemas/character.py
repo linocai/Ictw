@@ -22,6 +22,10 @@ class CharacterPatch(BaseModel):
     dynamic_fields: dict[str, Any] | None = None
 
 
+class CharacterEventPatch(BaseModel):
+    event_text: str
+
+
 class CharacterImportItem(BaseModel):
     name: str
     role: str = ""

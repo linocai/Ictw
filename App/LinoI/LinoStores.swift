@@ -89,12 +89,27 @@ final class BookshelfStore: ObservableObject {
             books.insert(book, at: 0)
         }
     }
+
+    func delete(_ book: Book) async {
+        do {
+            try await session.api.rawRequest("/books/\(book.id)", method: "DELETE")
+            books.removeAll { $0.id == book.id }
+            if session.currentBook?.id == book.id {
+                session.closeBook()
+            }
+        } catch {
+            session.notices.publish(error)
+        }
+    }
 }
 
 @MainActor
 final class WorkspaceStore: ObservableObject {
     @Published private(set) var chapters: [ChapterSummary] = []
     @Published private(set) var isLoading = false
+    /// Bound to `RootView`'s `NavigationStack(path:)` so a freshly created
+    /// chapter can be pushed onto the stack programmatically.
+    @Published var chapterPath: [ChapterSummary] = []
 
     private let session: AppSession
 
@@ -103,6 +118,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func load(bookId: String) async {
+        chapterPath = []
         isLoading = true
         defer { isLoading = false }
         do {
@@ -119,6 +135,9 @@ final class WorkspaceStore: ObservableObject {
             let chapter: Chapter = try await session.api.request("/books/\(book.id)/chapters", method: "POST", body: payload)
             upsert(chapter)
             chapters = try await session.api.request("/books/\(book.id)/chapters")
+            if let created = chapters.first(where: { $0.id == chapter.id }) {
+                chapterPath.append(created)
+            }
         } catch {
             session.notices.publish(error)
         }
@@ -246,6 +265,36 @@ final class CharactersStore: ObservableObject {
         }
     }
 
+    func updateEvent(_ event: CharacterEvent, text: String) async {
+        do {
+            let payload = CharacterEventPatchPayload(event_text: text)
+            let updated: CharacterEvent = try await session.api.request("/character-events/\(event.id)", method: "PATCH", body: payload)
+            applyEventUpdate(updated)
+        } catch {
+            session.notices.publish(error)
+        }
+    }
+
+    func deleteEvent(_ event: CharacterEvent) async {
+        do {
+            try await session.api.rawRequest("/character-events/\(event.id)", method: "DELETE")
+            removeEvent(event)
+        } catch {
+            session.notices.publish(error)
+        }
+    }
+
+    private func applyEventUpdate(_ event: CharacterEvent) {
+        guard let charIdx = characters.firstIndex(where: { $0.id == event.characterId }) else { return }
+        guard let eventIdx = characters[charIdx].events.firstIndex(where: { $0.id == event.id }) else { return }
+        characters[charIdx].events[eventIdx] = event
+    }
+
+    private func removeEvent(_ event: CharacterEvent) {
+        guard let charIdx = characters.firstIndex(where: { $0.id == event.characterId }) else { return }
+        characters[charIdx].events.removeAll { $0.id == event.id }
+    }
+
     func ensureSelection() {
         if selectedCharacterId == nil || !characters.contains(where: { $0.id == selectedCharacterId }) {
             selectedCharacterId = characters.first?.id
@@ -258,14 +307,25 @@ final class ChapterEditorStore: ObservableObject {
     enum WritingPhase: Equatable {
         case idle
         case selectingMemory
-        case writing(chars: Int)
-        case revising(attempt: Int, chars: Int)
+        case writing
+        case revising(attempt: Int)
+        case extracting
         case failed(code: String?, message: String)
 
         var isActive: Bool {
             switch self {
-            case .selectingMemory, .writing, .revising: return true
+            case .selectingMemory, .writing, .revising, .extracting: return true
             case .idle, .failed: return false
+            }
+        }
+
+        /// True only for the write-side sub-phases (selecting memory / writing /
+        /// revising) — used to decide whether the "停止" (cancel write) control
+        /// should be offered, since there is no cancel endpoint for extraction.
+        var isGenerating: Bool {
+            switch self {
+            case .selectingMemory, .writing, .revising: return true
+            default: return false
             }
         }
 
@@ -273,9 +333,19 @@ final class ChapterEditorStore: ObservableObject {
             switch self {
             case .selectingMemory: return "正在选择相关记忆"
             case .writing: return "正在生成正文"
-            case .revising(let attempt, _): return "Reviser 第 \(attempt)/2 次修订"
+            case .revising(let attempt): return "Reviser 第 \(attempt)/2 次修订"
+            case .extracting: return "Extractor 正在整理本章记忆"
             case .failed(_, let message): return message
             case .idle: return nil
+            }
+        }
+
+        var pillStatus: String {
+            switch self {
+            case .extracting: return "extracting"
+            case .selectingMemory, .writing, .revising: return "writing"
+            case .failed: return "failed"
+            case .idle: return "idle"
             }
         }
 
@@ -288,18 +358,18 @@ final class ChapterEditorStore: ObservableObject {
     @Published var currentChapter: Chapter?
     @Published private(set) var isLoading = false
     @Published private(set) var isSaving = false
-    @Published private(set) var isAccepting = false
     @Published private(set) var writingPhase: WritingPhase = .idle
     @Published private(set) var restoredLocalDraft = false
+    /// Names the last preflight/job failure reported as unauthorized-but-present.
+    /// Non-empty exactly when the editor should offer "本章豁免并重试".
+    @Published private(set) var pendingExemptionNames: [String] = []
 
     private let session: AppSession
     private let cache = ChapterDraftCache()
     private var cacheTask: Task<Void, Never>?
-    private var streamTask: Task<Void, Never>?
-    private var activeStreamId: UUID?
-    private var activeStreamChapterId: String?
-    private var generationBaseline: Chapter?
-    private var streamedDraft = ""
+    private var pollingTask: Task<Void, Never>?
+    private var pollingChapterId: String?
+    private var pollingErrorNotified = false
 
     init(session: AppSession) {
         self.session = session
@@ -324,11 +394,8 @@ final class ChapterEditorStore: ObservableObject {
                 currentChapter = remote
                 cache.saveClean(remote)
             }
-            if currentChapter?.status == "writing" {
-                reattachWriting()
-            } else if activeStreamChapterId != currentChapter?.id {
-                writingPhase = .idle
-            }
+            pendingExemptionNames = []
+            resumePollingIfNeeded()
         } catch {
             session.notices.publish(error)
         }
@@ -385,6 +452,10 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
+    /// Saves current edits, then starts (or restarts) the background write
+    /// job and returns immediately once it has been accepted by the server.
+    /// Progress is observed via `writingPhase`/`currentChapter`, updated by
+    /// the polling task started here.
     func generate() async -> Chapter? {
         guard let chapter = currentChapter, !writingPhase.isActive else { return nil }
         guard chapter.status != "finalized" else {
@@ -392,24 +463,42 @@ final class ChapterEditorStore: ObservableObject {
             return nil
         }
         let replace = !chapter.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || chapter.status == "writing"
+        pendingExemptionNames = []
         guard await save() != nil else { return nil }
         return await startWrite(replaceDraft: replace)
     }
 
-    func accept() async -> AcceptResult? {
+    /// Saves current edits, then starts the background Extractor job and
+    /// returns immediately. Completion (chapter becomes `finalized`) is
+    /// observed reactively via `currentChapter`.
+    func accept() async -> Chapter? {
         guard !writingPhase.isActive, !writingPhase.isFailed else { return nil }
         guard let saved = await save() else { return nil }
-        isAccepting = true
-        defer { isAccepting = false }
+        pendingExemptionNames = []
+        writingPhase = .extracting
         do {
-            let result: AcceptResult = try await session.api.request("/chapters/\(saved.id)/accept", method: "POST")
-            currentChapter = result.chapter
-            cache.saveClean(result.chapter)
-            return result
+            let status = try await session.api.accept(chapterId: saved.id)
+            applyJobStatus(status, chapterId: saved.id)
+            if !Self.isTerminalPhase(status.phase) {
+                pollJob(chapterId: saved.id)
+            }
+            return currentChapter
         } catch {
-            session.notices.publish(error)
+            applyStartFailure(error, chapterId: saved.id)
             return nil
         }
+    }
+
+    /// Adds the names from the last unauthorized-character failure to this
+    /// chapter's exemption list, persists it, then retries generation.
+    func exemptAndRetry() async -> Chapter? {
+        guard !pendingExemptionNames.isEmpty, var chapter = currentChapter else { return nil }
+        let merged = Array(Set(chapter.exemptedCharacterNames).union(pendingExemptionNames)).sorted()
+        chapter.exemptedCharacterNames = merged
+        currentChapter = chapter
+        pendingExemptionNames = []
+        guard await save() != nil else { return nil }
+        return await generate()
     }
 
     func reopen() async -> Chapter? {
@@ -427,18 +516,13 @@ final class ChapterEditorStore: ObservableObject {
 
     func cancelWriting() async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
-        if activeStreamChapterId == chapter.id {
-            activeStreamId = nil
-            activeStreamChapterId = nil
-            streamTask?.cancel()
-        }
+        stopPolling(for: chapter.id)
         writingPhase = .idle
         do {
             let cancelled = try await session.api.cancelWrite(chapterId: chapter.id)
-            generationBaseline = nil
-            streamedDraft = ""
             currentChapter = cancelled
             cache.saveClean(cancelled)
+            pendingExemptionNames = []
             return cancelled
         } catch {
             session.notices.publish(error)
@@ -449,18 +533,13 @@ final class ChapterEditorStore: ObservableObject {
     func deleteCurrentChapter() async -> Bool {
         guard let chapter = currentChapter else { return false }
         let deletingId = chapter.id
-        if activeStreamChapterId == deletingId {
-            activeStreamId = nil
-            activeStreamChapterId = nil
-            streamTask?.cancel()
-        }
+        stopPolling(for: deletingId)
         cacheTask?.cancel()
         do {
             try await session.api.rawRequest("/chapters/\(deletingId)", method: "DELETE")
             cache.remove(chapterId: deletingId)
-            generationBaseline = nil
-            streamedDraft = ""
             writingPhase = .idle
+            pendingExemptionNames = []
             if currentChapter?.id == deletingId {
                 currentChapter = nil
             }
@@ -471,160 +550,169 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
+    /// Called when the app returns to the foreground. Resumes polling if the
+    /// current chapter's server-side status still shows a job in flight.
     func handleScenePhaseActive() {
-        guard currentChapter?.status == "writing", !writingPhase.isActive else { return }
-        reattachWriting()
+        guard let chapter = currentChapter else { return }
+        guard chapter.status == "writing" || chapter.status == "extracting" else { return }
+        guard !writingPhase.isActive else { return }
+        resumePollingIfNeeded()
     }
 
     private func startWrite(replaceDraft: Bool) async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
-        let streamId = UUID()
-        activeStreamId = streamId
-        activeStreamChapterId = chapter.id
-        generationBaseline = chapter
-        streamedDraft = ""
         writingPhase = .selectingMemory
         do {
-            try await session.api.streamWrite(chapterId: chapter.id, replaceDraft: replaceDraft) { [weak self] event, payload in
-                self?.applyStreamEvent(event, payload: payload, streamId: streamId, chapterId: chapter.id)
+            let status = try await session.api.startWrite(chapterId: chapter.id, replaceDraft: replaceDraft)
+            applyJobStatus(status, chapterId: chapter.id)
+            if !Self.isTerminalPhase(status.phase) {
+                pollJob(chapterId: chapter.id)
             }
-            guard activeStreamId == streamId else { return nil }
-            let refreshed: Chapter = try await session.api.request("/chapters/\(chapter.id)")
-            cache.saveClean(refreshed)
-            if currentChapter?.id == chapter.id {
-                currentChapter = refreshed
-                writingPhase = .idle
-            }
-            activeStreamId = nil
-            activeStreamChapterId = nil
-            generationBaseline = nil
-            streamedDraft = ""
-            return refreshed
+            return currentChapter
         } catch {
-            guard activeStreamId == streamId else { return nil }
-            if currentChapter?.id == chapter.id {
-                restoreGenerationBaseline()
-                writingPhase = .failed(code: nil, message: error.localizedDescription)
-            }
-            session.notices.publish(error)
-            activeStreamId = nil
-            activeStreamChapterId = nil
+            applyStartFailure(error, chapterId: chapter.id)
             return nil
         }
     }
 
-    private func reattachWriting() {
+    /// Resumes polling for `currentChapter` if its server status indicates an
+    /// in-flight job (used on chapter load, cold start resume, and scene
+    /// activation). Cancels any stale poll for a different chapter first.
+    private func resumePollingIfNeeded() {
         guard let chapter = currentChapter else { return }
-        let streamId = UUID()
-        activeStreamId = streamId
-        activeStreamChapterId = chapter.id
-        generationBaseline = chapter
-        streamedDraft = ""
-        writingPhase = .selectingMemory
-        streamTask?.cancel()
-        streamTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.session.api.reattachWrite(chapterId: chapter.id) { [weak self] event, payload in
-                    self?.applyStreamEvent(event, payload: payload, streamId: streamId, chapterId: chapter.id)
-                }
-                guard self.activeStreamId == streamId else { return }
-                let refreshed: Chapter = try await self.session.api.request("/chapters/\(chapter.id)")
-                self.cache.saveClean(refreshed)
-                if self.currentChapter?.id == chapter.id {
-                    self.currentChapter = refreshed
-                    self.writingPhase = .idle
-                }
-                self.activeStreamId = nil
-                self.activeStreamChapterId = nil
-                self.generationBaseline = nil
-                self.streamedDraft = ""
-            } catch {
-                guard self.activeStreamId == streamId else { return }
-                if self.currentChapter?.id == chapter.id {
-                    self.restoreGenerationBaseline()
-                    self.writingPhase = .failed(code: nil, message: error.localizedDescription)
-                }
-                self.session.notices.publish(error)
-                self.activeStreamId = nil
-                self.activeStreamChapterId = nil
+        if let pollingChapterId, pollingChapterId != chapter.id {
+            stopPolling(for: pollingChapterId)
+        }
+        switch chapter.status {
+        case "writing":
+            if pollingChapterId != chapter.id {
+                writingPhase = .writing
+                pollJob(chapterId: chapter.id)
+            }
+        case "extracting":
+            if pollingChapterId != chapter.id {
+                writingPhase = .extracting
+                pollJob(chapterId: chapter.id)
+            }
+        default:
+            if pollingChapterId != chapter.id {
+                writingPhase = .idle
             }
         }
     }
 
-    private func applyStreamEvent(_ event: String, payload: StreamPayload, streamId: UUID, chapterId: String) {
-        guard activeStreamId == streamId else { return }
-        let isVisibleChapter = currentChapter?.id == chapterId
-        switch event {
-        case "started", "selecting_memory":
-            if isVisibleChapter {
-                writingPhase = .selectingMemory
-            }
-        case "writing":
-            if isVisibleChapter {
-                writingPhase = .writing(chars: draftCharCount)
-            }
-        case "token":
-            if isVisibleChapter, let text = payload.text {
-                streamedDraft += text
-                currentChapter?.draftText = streamedDraft
-                updateActivePhaseCharCount()
-            }
-        case "snapshot":
-            if isVisibleChapter, let text = payload.text {
-                streamedDraft = text
-                currentChapter?.draftText = text
-                updateActivePhaseCharCount()
-            }
-        case "revising":
-            if isVisibleChapter {
-                writingPhase = .revising(
-                    attempt: min(max(payload.attempt ?? 1, 1), 2),
-                    chars: payload.currentChars ?? draftCharCount
-                )
-            }
-        case "done":
-            if let chapter = payload.chapter {
-                cache.saveClean(chapter)
-                if currentChapter?.id == chapter.id {
-                    currentChapter = chapter
-                    writingPhase = .idle
+    private func pollJob(chapterId: String) {
+        pollingTask?.cancel()
+        pollingChapterId = chapterId
+        pollingErrorNotified = false
+        pollingTask = Task { [weak self] in
+            await self?.runPolling(chapterId: chapterId)
+        }
+    }
+
+    private func stopPolling(for chapterId: String) {
+        guard pollingChapterId == chapterId else { return }
+        pollingTask?.cancel()
+        pollingTask = nil
+        pollingChapterId = nil
+    }
+
+    private func runPolling(chapterId: String) async {
+        while !Task.isCancelled {
+            do {
+                let status = try await session.api.jobStatus(chapterId: chapterId)
+                guard !Task.isCancelled, pollingChapterId == chapterId else { return }
+                pollingErrorNotified = false
+                applyJobStatus(status, chapterId: chapterId)
+                if Self.isTerminalPhase(status.phase) {
+                    pollingChapterId = nil
+                    return
                 }
-                generationBaseline = nil
-                streamedDraft = ""
+            } catch {
+                guard !Task.isCancelled, pollingChapterId == chapterId else { return }
+                if !pollingErrorNotified {
+                    pollingErrorNotified = true
+                    session.notices.publish("与服务器的连接暂时中断，正在自动重试。")
+                }
             }
-        case "error":
-            let message = payload.message ?? "写作失败"
-            let code = payload.code
-            if code == "no_active_write" || message == "no active write" {
-                if isVisibleChapter {
-                    writingPhase = .idle
-                }
-                activeStreamId = nil
-                activeStreamChapterId = nil
-                Task { [weak self] in
-                    guard let self else { return }
-                    if let refreshed = try? await self.session.api.cancelWrite(chapterId: chapterId) {
-                        self.cache.saveClean(refreshed)
-                        if self.currentChapter?.id == chapterId {
-                            self.currentChapter = refreshed
-                        }
-                    }
-                }
+            do {
+                try await Task.sleep(nanoseconds: 2_500_000_000)
+            } catch {
                 return
             }
-            if isVisibleChapter {
-                restoreGenerationBaseline()
-                writingPhase = .failed(code: code, message: message)
+        }
+    }
+
+    private static func isTerminalPhase(_ phase: String) -> Bool {
+        switch phase {
+        case "done", "failed", "cancelled": return true
+        default: return false
+        }
+    }
+
+    private func applyJobStatus(_ status: WriteJobStatus, chapterId: String) {
+        guard currentChapter?.id == chapterId else { return }
+        switch status.phase {
+        case "selecting_memory":
+            writingPhase = .selectingMemory
+        case "writing":
+            writingPhase = .writing
+        case "revising":
+            writingPhase = .revising(attempt: min(max(status.attempt ?? 1, 1), 2))
+        case "extracting":
+            writingPhase = .extracting
+        case "done":
+            if let chapter = status.chapter {
+                currentChapter = chapter
+                cache.saveClean(chapter)
             }
-            session.notices.publish(message, critical: code == "revision_failed")
-            activeStreamId = nil
-            activeStreamChapterId = nil
-            Task { [weak self] in
-                await self?.refreshChapterAfterWriteFailure(chapterId)
-            }
+            writingPhase = .idle
+            pendingExemptionNames = []
+        case "failed":
+            applyJobFailure(status, chapterId: chapterId)
+        case "cancelled":
+            writingPhase = .idle
         default:
             break
+        }
+    }
+
+    private func applyJobFailure(_ status: WriteJobStatus, chapterId: String) {
+        let message = status.errorMessage ?? "任务失败"
+        writingPhase = .failed(code: status.errorCode, message: message)
+        pendingExemptionNames = []
+        if let violation = status.violations?.first(where: { $0.code == "unselected_character" }),
+           let names = violation.names, !names.isEmpty {
+            pendingExemptionNames = names
+        }
+        session.notices.publish(message, critical: status.errorCode == "revision_failed")
+        Task { [weak self] in
+            await self?.refreshChapterAfterFailure(chapterId)
+        }
+    }
+
+    private func applyStartFailure(_ error: Error, chapterId: String) {
+        guard currentChapter?.id == chapterId else {
+            session.notices.publish(error)
+            return
+        }
+        pendingExemptionNames = []
+        if let apiError = error as? APIError,
+           case let .validation(code, message, names) = apiError,
+           code == "unselected_characters_in_bible" {
+            pendingExemptionNames = names
+            writingPhase = .failed(code: code, message: message)
+        } else {
+            writingPhase = .failed(code: nil, message: error.localizedDescription)
+        }
+        session.notices.publish(error)
+    }
+
+    private func refreshChapterAfterFailure(_ chapterId: String) async {
+        guard let refreshed: Chapter = try? await session.api.request("/chapters/\(chapterId)") else { return }
+        cache.saveClean(refreshed)
+        if currentChapter?.id == chapterId {
+            currentChapter = refreshed
         }
     }
 
@@ -641,31 +729,6 @@ final class ChapterEditorStore: ObservableObject {
             await MainActor.run {
                 self?.cache.saveDirty(chapter)
             }
-        }
-    }
-
-    private func updateActivePhaseCharCount() {
-        switch writingPhase {
-        case .revising(let attempt, _):
-            writingPhase = .revising(attempt: attempt, chars: draftCharCount)
-        default:
-            writingPhase = .writing(chars: draftCharCount)
-        }
-    }
-
-    private func restoreGenerationBaseline() {
-        guard let baseline = generationBaseline else { return }
-        currentChapter = baseline
-        cache.saveClean(baseline)
-        generationBaseline = nil
-        streamedDraft = ""
-    }
-
-    private func refreshChapterAfterWriteFailure(_ chapterId: String) async {
-        guard let refreshed: Chapter = try? await session.api.request("/chapters/\(chapterId)") else { return }
-        cache.saveClean(refreshed)
-        if currentChapter?.id == chapterId {
-            currentChapter = refreshed
         }
     }
 }
@@ -814,7 +877,10 @@ struct ChapterPatchPayload: Encodable, Sendable {
     var target_word_count: Int
     var author_note: String
     var draft_text: String
+    var summary: String
+    var headline: String
     var character_links: [ChapterLink]
+    var exempted_character_names: [String]
 
     init(_ chapter: Chapter) {
         title = chapter.title
@@ -822,7 +888,10 @@ struct ChapterPatchPayload: Encodable, Sendable {
         target_word_count = chapter.targetWordCount
         author_note = chapter.authorNote
         draft_text = chapter.draftText
+        summary = chapter.summary
+        headline = chapter.headline
         character_links = chapter.characterLinks
+        exempted_character_names = chapter.exemptedCharacterNames
     }
 }
 
@@ -838,6 +907,10 @@ private struct CharacterImportItem: Encodable, Sendable {
 
 private struct CharacterImportPayload: Encodable, Sendable {
     let items: [CharacterImportItem]
+}
+
+private struct CharacterEventPatchPayload: Encodable, Sendable {
+    let event_text: String
 }
 
 private struct CharacterPatchPayload: Encodable, Sendable {

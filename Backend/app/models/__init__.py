@@ -6,6 +6,8 @@ from app.models.entities import (
     ChapterCharacter,
     Character,
     CharacterEvent,
+    JobRun,
+    LLMCallAudit,
     LLMProfile,
 )
 
@@ -17,5 +19,7 @@ __all__ = [
     "ChapterCharacter",
     "Character",
     "CharacterEvent",
+    "JobRun",
+    "LLMCallAudit",
     "LLMProfile",
 ]

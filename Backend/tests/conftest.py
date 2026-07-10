@@ -129,3 +129,20 @@ def client() -> Iterator[TestClient]:
 @pytest.fixture()
 def auth_headers() -> dict[str, str]:
     return {"Authorization": "Bearer test-token-123456"}
+
+
+@pytest.fixture()
+def wait_for_terminal():
+    import time
+
+    def _wait(client: TestClient, chapter_id: str, headers: dict[str, str], timeout: float = 15.0) -> dict:
+        deadline = time.time() + timeout
+        last: dict = {}
+        while time.time() < deadline:
+            last = client.get(f"/api/v1/chapters/{chapter_id}/job", headers=headers).json()
+            if last.get("phase") in ("done", "failed", "cancelled"):
+                return last
+            time.sleep(0.05)
+        raise AssertionError(f"job never reached a terminal phase: {last}")
+
+    return _wait

@@ -11,8 +11,37 @@ from sqlalchemy.orm import Session
 from app.models import Book, Chapter, Character, CharacterEvent
 
 
+# --- Centralized tunable constants (see PROJECT_PLAN v1.1.0) ---
+WORD_COUNT_MIN_RATIO = 0.80
+WORD_COUNT_MAX_RATIO = 1.20
+MEMORY_BUDGET_CHARS = 1800
+MEMORY_SUMMARY_MAX_ITEMS = 2
+CHARACTER_EVENT_MAX_CHARS = 60
+
+
+def word_count_bounds(target: int) -> tuple[int, int]:
+    return int(target * WORD_COUNT_MIN_RATIO), int(target * WORD_COUNT_MAX_RATIO)
+
+
 def nonspace_len(text: str) -> int:
     return sum(1 for ch in text if not ch.isspace())
+
+
+def truncate_to_nonspace(text: str, n: int) -> str:
+    """Hard-truncate so the result contains at most ``n`` non-space characters."""
+    if n <= 0:
+        return ""
+    count = 0
+    end = 0
+    for index, ch in enumerate(text):
+        if not ch.isspace():
+            count += 1
+            if count > n:
+                break
+            end = index + 1
+    else:
+        return text
+    return text[:end]
 
 
 def chapter_author_note(chapter: Chapter) -> str:
@@ -25,10 +54,13 @@ class MemoryBlock:
     text: str
     chapter_index: int
     character_id: str | None = None
+    memory_type: str = ""
 
 
-def memory_budget(bible: str) -> int:
-    return min(1800, max(600, int(nonspace_len(bible) * 1.5)))
+def memory_budget(bible: str = "") -> int:
+    # Fixed budget, decoupled from Bible length. Argument is ignored but the
+    # signature is kept for callers that still pass a Bible string.
+    return MEMORY_BUDGET_CHARS
 
 
 def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
@@ -51,6 +83,7 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     id=f"chapter:{item.id}:headline",
                     text=f"第 {item.index} 章大事记：{item.headline.strip()}",
                     chapter_index=item.index,
+                    memory_type="headline",
                 )
             )
         if item.summary.strip():
@@ -59,6 +92,7 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     id=f"chapter:{item.id}:summary",
                     text=f"第 {item.index} 章梗概：{item.summary.strip()}",
                     chapter_index=item.index,
+                    memory_type="summary",
                 )
             )
     if prior:
@@ -83,6 +117,7 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     ),
                     chapter_index=index_by_id[event.chapter_id],
                     character_id=event.character_id,
+                    memory_type="character_event",
                 )
             )
     return blocks
@@ -128,7 +163,8 @@ def memory_selector_user_message(chapter: Chapter, blocks: list[MemoryBlock], bu
             "# 本章剧情 Bible\n" + chapter.user_prompt.strip(),
             "# 作者对本章的备注\n" + (chapter_author_note(chapter).strip() or "（无）"),
             "# 本章允许人物及当前状态\n" + (cards or "（无已选人物）"),
-            f"# 记忆预算\n最多 {budget} 个中文去空白字符。你只负责选择，不得改写历史。",
+            f"# 记忆预算\n最多 {budget} 个中文去空白字符。章节梗概最多选 {MEMORY_SUMMARY_MAX_ITEMS} 条。"
+            "你只负责选择，不得改写历史。",
             "# 候选记忆块\n" + candidates,
             '# 输出\n只返回 JSON object：{"memory_ids":["按重要性排序的候选ID"]}。允许空数组。',
         ]
@@ -139,6 +175,7 @@ def pack_selected_memories(blocks: list[MemoryBlock], selected_ids: Iterable[str
     by_id = {block.id: block for block in blocks}
     result: list[MemoryBlock] = []
     used = 0
+    summary_count = 0
     seen: set[str] = set()
     for memory_id in selected_ids:
         if not isinstance(memory_id, str) or memory_id not in by_id:
@@ -149,11 +186,16 @@ def pack_selected_memories(blocks: list[MemoryBlock], selected_ids: Iterable[str
         block = by_id[memory_id]
         if not block.text.strip():
             raise ValueError(f"memory selector selected an empty block: {memory_id}")
+        # Hard cap on chapter-summary blocks; headline/character_event unbounded.
+        if block.memory_type == "summary" and summary_count >= MEMORY_SUMMARY_MAX_ITEMS:
+            continue
         size = nonspace_len(block.text)
         if used + size > budget:
             continue
         result.append(block)
         used += size
+        if block.memory_type == "summary":
+            summary_count += 1
     return result
 
 
@@ -161,6 +203,7 @@ def writer_user_message(book: Book, chapter: Chapter, memories: list[MemoryBlock
     characters = _selected_characters(chapter)
     allow = "、".join(character.name for character in characters) or "（没有已知人物卡；Bible 明写的临时角色仍可出现）"
     memory_text = "\n\n".join(block.text for block in (memories or [])) or "（本章不需要历史记忆）"
+    low_bound, high_bound = word_count_bounds(chapter.target_word_count)
     return "\n\n".join(
         [
             "# 世界观（硬约束）\n" + (book.world_setting.strip() or "（无）"),
@@ -176,7 +219,7 @@ def writer_user_message(book: Book, chapter: Chapter, memories: list[MemoryBlock
             (
                 "# 字数和交稿契约\n"
                 f"目标 {chapter.target_word_count} 字，最终正文必须在 "
-                f"{int(chapter.target_word_count * 0.95)}～{int(chapter.target_word_count * 1.05)} 个去空白字符内。"
+                f"{low_bound}～{high_bound} 个去空白字符内。"
                 "只输出正文，不得解释、列提纲或擅自增加剧情、人物。"
             ),
         ]
@@ -189,6 +232,7 @@ def reviser_user_message(
     violations: list[dict[str, Any]],
 ) -> str:
     characters = _selected_characters(chapter)
+    low_bound, high_bound = word_count_bounds(chapter.target_word_count)
     return "\n\n".join(
         [
             "# 本章剧情 Bible\n" + chapter.user_prompt.strip(),
@@ -196,7 +240,7 @@ def reviser_user_message(
             "# 允许人物\n" + ("、".join(c.name for c in characters) or "（无已知人物）"),
             (
                 "# 目标区间\n"
-                f"{int(chapter.target_word_count * 0.95)}～{int(chapter.target_word_count * 1.05)} 个去空白字符"
+                f"{low_bound}～{high_bound} 个去空白字符"
             ),
             "# 程序校验违规报告\n" + "\n".join(f"- {item['message']}" for item in violations),
             "# 当前正文\n" + current_text,
@@ -215,6 +259,7 @@ def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
             (
                 "# 提取输出约束\nsummary/headline 必填。人物更新只能使用上面列出的角色ID；"
                 "未选择人物时两个人物更新数组必须为空。"
+                f"每条 event_text 不超过 {CHARACTER_EVENT_MAX_CHARS} 个去空白字符。"
             ),
             f"# 最终正文\n{chapter.draft_text}",
         ]
@@ -246,6 +291,15 @@ def scan_known_character_names(
             pos += 1
             continue
         longest = candidates[0]
+        # Single-character names use a left-boundary heuristic: they only count
+        # when the preceding character starts the string or is not a CJK
+        # ideograph (whitespace/punctuation/latin/quotes). This stops "森林"
+        # matching "林". Names of length >= 2 keep substring matching.
+        if len(longest) == 1:
+            prev = normalized[pos - 1] if pos > 0 else ""
+            if prev and ("一" <= prev <= "鿿"):
+                pos += 1
+                continue
         owners = by_name[longest]
         if len(owners) > 1:
             if longest not in ambiguous:
@@ -270,7 +324,8 @@ def validate_character_preflight(db: Session, chapter: Chapter) -> None:
             {"names": ambiguous},
         )
     selected = {link.character_id for link in chapter.character_links}
-    unselected = sorted({item.name for item in matched if item.id not in selected})
+    exempted = set(chapter.exempted_character_names or [])
+    unselected = sorted({item.name for item in matched if item.id not in selected} - exempted)
     if unselected:
         raise CharacterPreflightError(
             "unselected_characters_in_bible",
@@ -290,8 +345,7 @@ class CharacterPreflightError(ValueError):
 def draft_violations(db: Session, chapter: Chapter, text: str, finish_reason: str | None) -> list[dict[str, Any]]:
     violations: list[dict[str, Any]] = []
     chars = nonspace_len(text)
-    low = int(chapter.target_word_count * 0.95)
-    high = int(chapter.target_word_count * 1.05)
+    low, high = word_count_bounds(chapter.target_word_count)
     if not text.strip():
         violations.append({"code": "empty_body", "message": "正文为空"})
     if finish_reason in {"length", "max_tokens", "MAX_TOKENS"}:
@@ -303,7 +357,8 @@ def draft_violations(db: Session, chapter: Chapter, text: str, finish_reason: st
     known = list(db.scalars(select(Character).where(Character.book_id == chapter.book_id).order_by(Character.id)).all())
     matched, ambiguous = scan_known_character_names(text, known)
     selected = {link.character_id for link in chapter.character_links}
-    unselected = sorted({item.name for item in matched if item.id not in selected})
+    exempted = set(chapter.exempted_character_names or [])
+    unselected = sorted({item.name for item in matched if item.id not in selected} - exempted)
     if ambiguous:
         violations.append({"code": "ambiguous_character", "message": f"正文含重名人物：{'、'.join(ambiguous)}"})
     if unselected:

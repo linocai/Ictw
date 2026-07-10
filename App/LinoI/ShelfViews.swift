@@ -113,6 +113,9 @@ struct LinoIShelfView: View {
 }
 
 private struct LinoIBookCard: View {
+    @EnvironmentObject private var bookshelf: BookshelfStore
+    @State private var confirmingDelete = false
+
     let book: Book
     let open: () -> Void
 
@@ -151,6 +154,23 @@ private struct LinoIBookCard: View {
             .linoCard(cornerRadius: 18)
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("删除这本书", systemImage: "trash", role: .destructive) {
+                confirmingDelete = true
+            }
+        }
+        .confirmationDialog(
+            "删除《\(book.title.isEmpty ? "未命名书籍" : book.title)》？",
+            isPresented: $confirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("永久删除", role: .destructive) {
+                Task { await bookshelf.delete(book) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("此操作不可撤销，书籍下所有章节、人物与记忆都会被删除。")
+        }
     }
 }
 
