@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linoi-backend"
+version = "0.1.0"
+description = "LinoI personal cloud writing backend"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.13",
+  "cryptography>=42",
+  "fastapi>=0.115",
+  "httpx>=0.27",
+  "pydantic-settings>=2.4",
+  "SQLAlchemy>=2.0",
+  "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

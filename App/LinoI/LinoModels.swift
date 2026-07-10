@@ -1,0 +1,382 @@
+import Foundation
+
+enum JSONValue: Codable, Hashable, Sendable, CustomStringConvertible {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else {
+            self = .null
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .number(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .string(let value):
+            return value
+        case .number(let value):
+            if value.rounded() == value {
+                return String(Int(value))
+            }
+            return String(value)
+        case .bool(let value):
+            return value ? "true" : "false"
+        case .object(let value):
+            return value
+                .sorted { $0.key < $1.key }
+                .map { "\($0.key)：\($0.value.description)" }
+                .joined(separator: "\n")
+        case .array(let value):
+            return value.map(\.description).joined(separator: "、")
+        case .null:
+            return ""
+        }
+    }
+}
+
+struct Book: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    var title: String
+    var worldSetting: String
+    var chapterCount: Int
+    var characterCount: Int
+    var updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, title
+        case worldSetting = "world_setting"
+        case chapterCount = "chapter_count"
+        case characterCount = "character_count"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct ChapterLink: Codable, Hashable, Sendable {
+    var characterId: String
+
+    enum CodingKeys: String, CodingKey {
+        case characterId = "character_id"
+    }
+}
+
+struct Chapter: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let bookId: String
+    let index: Int
+    var title: String
+    var userPrompt: String
+    var targetWordCount: Int
+    var authorNote: String
+    var draftText: String
+    var summary: String
+    var headline: String
+    var status: String
+    var source: String
+    var updatedAt: String
+    var characterLinks: [ChapterLink]
+
+    enum CodingKeys: String, CodingKey {
+        case id, index, title, summary, status, source, headline
+        case bookId = "book_id"
+        case userPrompt = "user_prompt"
+        case targetWordCount = "target_word_count"
+        case authorNote = "author_note"
+        case legacyChapterStyle = "chapter_style"
+        case draftText = "draft_text"
+        case updatedAt = "updated_at"
+        case characterLinks = "character_links"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        bookId = try container.decode(String.self, forKey: .bookId)
+        index = try container.decode(Int.self, forKey: .index)
+        title = try container.decode(String.self, forKey: .title)
+        userPrompt = try container.decode(String.self, forKey: .userPrompt)
+        targetWordCount = try container.decode(Int.self, forKey: .targetWordCount)
+        authorNote = try container.decodeIfPresent(String.self, forKey: .authorNote)
+            ?? container.decodeIfPresent(String.self, forKey: .legacyChapterStyle)
+            ?? ""
+        draftText = try container.decode(String.self, forKey: .draftText)
+        summary = try container.decode(String.self, forKey: .summary)
+        headline = try container.decodeIfPresent(String.self, forKey: .headline) ?? ""
+        status = try container.decode(String.self, forKey: .status)
+        source = try container.decode(String.self, forKey: .source)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        characterLinks = try container.decodeIfPresent([ChapterLink].self, forKey: .characterLinks) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(bookId, forKey: .bookId)
+        try container.encode(index, forKey: .index)
+        try container.encode(title, forKey: .title)
+        try container.encode(userPrompt, forKey: .userPrompt)
+        try container.encode(targetWordCount, forKey: .targetWordCount)
+        try container.encode(authorNote, forKey: .authorNote)
+        try container.encode(draftText, forKey: .draftText)
+        try container.encode(summary, forKey: .summary)
+        try container.encode(headline, forKey: .headline)
+        try container.encode(status, forKey: .status)
+        try container.encode(source, forKey: .source)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encode(characterLinks, forKey: .characterLinks)
+    }
+}
+
+struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let bookId: String
+    let index: Int
+    var title: String
+    var status: String
+    var source: String
+    var updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, index, title, status, source
+        case bookId = "book_id"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct CharacterEvent: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let characterId: String
+    let chapterId: String
+    var eventType: String
+    var eventText: String
+    var chapterIndex: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case characterId = "character_id"
+        case chapterId = "chapter_id"
+        case eventType = "event_type"
+        case eventText = "event_text"
+        case chapterIndex = "chapter_index"
+    }
+}
+
+struct Character: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let bookId: String
+    var name: String
+    var role: String
+    var fixedProfile: String
+    var dynamicFields: [String: JSONValue]
+    var events: [CharacterEvent]
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, role, events
+        case bookId = "book_id"
+        case fixedProfile = "fixed_profile"
+        case dynamicFields = "dynamic_fields"
+    }
+}
+
+struct LLMProfile: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    var name: String
+    var provider: String
+    var baseURL: String
+    var modelName: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, provider
+        case baseURL = "base_url"
+        case modelName = "model_name"
+    }
+}
+
+struct AgentPersona: Codable, Identifiable, Hashable, Sendable {
+    var id: String { agentRole }
+    var agentRole: String
+    var systemPrompt: String
+
+    enum CodingKeys: String, CodingKey {
+        case agentRole = "agent_role"
+        case systemPrompt = "system_prompt"
+    }
+}
+
+struct AgentBinding: Codable, Identifiable, Hashable, Sendable {
+    var id: String { agentRole }
+    var agentRole: String
+    var llmProfileId: String?
+    var thinkingEnabled: Bool?
+    var reasoningEffort: String?
+    var effectiveThinkingEnabled: Bool?
+    var effectiveReasoningEffort: String?
+    var capabilities: ModelCapabilities
+
+    enum CodingKeys: String, CodingKey {
+        case agentRole = "agent_role"
+        case llmProfileId = "llm_profile_id"
+        case thinkingEnabled = "thinking_enabled"
+        case reasoningEffort = "reasoning_effort"
+        case effectiveThinkingEnabled = "effective_thinking_enabled"
+        case effectiveReasoningEffort = "effective_reasoning_effort"
+        case capabilities
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agentRole = try container.decode(String.self, forKey: .agentRole)
+        llmProfileId = try container.decodeIfPresent(String.self, forKey: .llmProfileId)
+        thinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled)
+        reasoningEffort = try container.decodeIfPresent(String.self, forKey: .reasoningEffort)
+        effectiveThinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .effectiveThinkingEnabled)
+        effectiveReasoningEffort = try container.decodeIfPresent(String.self, forKey: .effectiveReasoningEffort)
+        capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities) ?? .unsupported
+    }
+}
+
+struct ModelCapabilities: Codable, Hashable, Sendable {
+    var thinkingToggleSupported: Bool
+    var thinkingCanDisable: Bool
+    var thinkingRequired: Bool
+    var reasoningEffortLevels: [String]
+    var temperatureEffectiveWhenThinking: Bool
+
+    static let unsupported = ModelCapabilities(
+        thinkingToggleSupported: false,
+        thinkingCanDisable: false,
+        thinkingRequired: false,
+        reasoningEffortLevels: [],
+        temperatureEffectiveWhenThinking: true
+    )
+
+    enum CodingKeys: String, CodingKey {
+        case thinkingToggleSupported = "thinking_toggle_supported"
+        case thinkingCanDisable = "thinking_can_disable"
+        case thinkingRequired = "thinking_required"
+        case reasoningEffortLevels = "reasoning_effort_levels"
+        case temperatureEffectiveWhenThinking = "temperature_effective_when_thinking"
+    }
+
+    init(
+        thinkingToggleSupported: Bool,
+        thinkingCanDisable: Bool,
+        thinkingRequired: Bool,
+        reasoningEffortLevels: [String],
+        temperatureEffectiveWhenThinking: Bool
+    ) {
+        self.thinkingToggleSupported = thinkingToggleSupported
+        self.thinkingCanDisable = thinkingCanDisable
+        self.thinkingRequired = thinkingRequired
+        self.reasoningEffortLevels = reasoningEffortLevels
+        self.temperatureEffectiveWhenThinking = temperatureEffectiveWhenThinking
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        thinkingToggleSupported = try container.decodeIfPresent(Bool.self, forKey: .thinkingToggleSupported) ?? false
+        thinkingCanDisable = try container.decodeIfPresent(Bool.self, forKey: .thinkingCanDisable) ?? false
+        thinkingRequired = try container.decodeIfPresent(Bool.self, forKey: .thinkingRequired) ?? false
+        reasoningEffortLevels = try container.decodeIfPresent([String].self, forKey: .reasoningEffortLevels) ?? []
+        temperatureEffectiveWhenThinking = try container.decodeIfPresent(Bool.self, forKey: .temperatureEffectiveWhenThinking) ?? true
+    }
+}
+
+struct AcceptResult: Codable, Sendable {
+    let chapter: Chapter
+    let updatedCharacterIds: [String]
+    let addedEventIds: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case chapter
+        case updatedCharacterIds = "updated_character_ids"
+        case addedEventIds = "added_event_ids"
+    }
+}
+
+struct StreamPayload: Sendable {
+    var text: String?
+    var message: String?
+    var code: String?
+    var attempt: Int?
+    var currentChars: Int?
+    var violations: [String]?
+    var chapter: Chapter?
+}
+
+enum WorkspaceTab: String, CaseIterable, Identifiable {
+    case chapters = "章节"
+    case characters = "人物"
+    case settings = "设定"
+    case agents = "Agent"
+    var id: String { rawValue }
+}
+
+extension String {
+    var linoStatusLabel: String {
+        switch self {
+        case "draft": return "草稿"
+        case "writing": return "写作中"
+        case "draft_ready": return "待接受"
+        case "finalized": return "已完成"
+        case "failed": return "失败"
+        case "extracting": return "提取中"
+        default: return self
+        }
+    }
+
+    var linoAgentName: String {
+        switch self {
+        case "memory_selector": return "Memory Selector"
+        case "writer": return "Writer"
+        case "reviser": return "Reviser"
+        case "extractor": return "Extractor"
+        default: return capitalized
+        }
+    }
+
+    var linoShortDate: String {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = fractional.date(from: self) ?? ISO8601DateFormatter().date(from: self)
+        guard let date else { return "最近更新" }
+        let rel = RelativeDateTimeFormatter()
+        rel.locale = Locale(identifier: "zh_CN")
+        rel.unitsStyle = .short
+        return rel.localizedString(for: date, relativeTo: Date())
+    }
+}

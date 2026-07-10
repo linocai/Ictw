@@ -1,0 +1,28 @@
+.DS_Store
+
+# Secrets and deployment credentials
+.deploy/
+Backend/.env
+*.pem
+*.key
+
+# Local databases and backups
+Backend/*.db
+Backend/*.db-*
+Backend/backups/
+
+# Python
+Backend/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Xcode / Swift
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Local tooling
+.swiftpm/
+*.log
