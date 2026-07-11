@@ -559,6 +559,32 @@ final class ChapterEditorStore: ObservableObject {
         resumePollingIfNeeded()
     }
 
+    /// macOS-only foreground recovery. Deliberately **omits** the
+    /// `status == writing/extracting` guard that `handleScenePhaseActive()`
+    /// carries: a job started in *this same session* never flips the local
+    /// `currentChapter.status` to `writing`/`extracting`, so that guard makes
+    /// iOS miss it (Backlog P2#3). Here, whenever there is a `currentChapter`
+    /// and no poll is running, we unconditionally fetch one `jobStatus`,
+    /// apply it, and resume polling if the phase is still non-terminal. A
+    /// missing/never-started job just returns an error we swallow silently so
+    /// window activations don't spam Toasts. Only called from macOS
+    /// (`NSApplication.didBecomeActiveNotification`); iOS never invokes it, so
+    /// iOS behaviour is unchanged.
+    func refreshActiveJobIfNeeded() async {
+        guard let chapter = currentChapter else { return }
+        guard !writingPhase.isActive else { return }
+        do {
+            let status = try await session.api.jobStatus(chapterId: chapter.id)
+            guard currentChapter?.id == chapter.id else { return }
+            applyJobStatus(status, chapterId: chapter.id)
+            if !Self.isTerminalPhase(status.phase) {
+                pollJob(chapterId: chapter.id)
+            }
+        } catch {
+            // No active job or a transient error — stay quiet.
+        }
+    }
+
     private func startWrite(replaceDraft: Bool) async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
         writingPhase = .selectingMemory
