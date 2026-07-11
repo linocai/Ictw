@@ -13,13 +13,25 @@ from app.services.context import MemoryBlock, pack_selected_memories, prefilter_
 from app.services.write_jobs import WriteJob, _restore_baseline, write_registry
 
 
-def test_memory_selection_rejects_unknown_id_and_accepts_empty():
+def test_memory_selection_skips_unknown_id_and_accepts_empty():
     blocks = [MemoryBlock("known", "记忆", 1)]
     assert pack_selected_memories(blocks, [], 600) == []
-    with pytest.raises(ValueError, match="invalid id"):
-        pack_selected_memories(blocks, ["future-or-other-book"], 600)
-    with pytest.raises(ValueError, match="empty block"):
-        pack_selected_memories([MemoryBlock("empty", "  \n", 1)], ["empty"], 600)
+    # Unknown / empty-text selections degrade to "fewer memories", never a failure.
+    assert pack_selected_memories(blocks, ["future-or-other-book", "known"], 600) == blocks
+    assert pack_selected_memories([MemoryBlock("empty", "  \n", 1)], ["empty"], 600) == []
+
+
+def test_memory_selection_salvages_unambiguous_truncated_chapter_id():
+    summary_only = MemoryBlock("chapter:abc:summary", "第 3 章梗概：内容", 3, memory_type="summary")
+    both_a = MemoryBlock("chapter:xyz:summary", "第 5 章梗概：内容", 5, memory_type="summary")
+    both_b = MemoryBlock("chapter:xyz:headline", "第 5 章大事记：内容", 5, memory_type="headline")
+    blocks = [summary_only, both_a, both_b]
+    # Unique prefix match is recovered; whitespace is tolerated.
+    assert pack_selected_memories(blocks, [" chapter:abc "], 600) == [summary_only]
+    # Ambiguous prefix (both summary and headline exist) is dropped, not guessed.
+    assert pack_selected_memories(blocks, ["chapter:xyz"], 600) == []
+    # A salvaged id must not double-pack with its explicit form.
+    assert pack_selected_memories(blocks, ["chapter:abc", "chapter:abc:summary"], 600) == [summary_only]
 
 
 def test_extractor_schema_for_no_characters_forces_empty_arrays():

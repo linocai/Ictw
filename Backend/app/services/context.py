@@ -166,9 +166,28 @@ def memory_selector_user_message(chapter: Chapter, blocks: list[MemoryBlock], bu
             f"# 记忆预算\n最多 {budget} 个中文去空白字符。章节梗概最多选 {MEMORY_SUMMARY_MAX_ITEMS} 条。"
             "你只负责选择，不得改写历史。",
             "# 候选记忆块\n" + candidates,
-            '# 输出\n只返回 JSON object：{"memory_ids":["按重要性排序的候选ID"]}。允许空数组。',
+            (
+                '# 输出\n只返回 JSON object：{"memory_ids":["按重要性排序的候选ID"]}。允许空数组。'
+                "ID 必须从候选块的方括号中原样完整复制（chapter 类 ID 含 :headline 或 :summary 后缀），不得截断、改写或自造。"
+            ),
         ]
     )
+
+
+def _resolve_selected_block(by_id: dict[str, MemoryBlock], memory_id: str) -> MemoryBlock | None:
+    """Resolve a selector-returned id, salvaging suffix-truncated near-misses.
+
+    Models occasionally return `chapter:{uuid}` without the `:headline`/`:summary`
+    suffix. A truncated id is recovered only when exactly one candidate matches the
+    prefix; an ambiguous or unknown id is dropped rather than guessed.
+    """
+    block = by_id.get(memory_id)
+    if block is not None:
+        return block
+    prefix_matches = [item for key, item in by_id.items() if key.startswith(f"{memory_id}:")]
+    if len(prefix_matches) == 1:
+        return prefix_matches[0]
+    return None
 
 
 def pack_selected_memories(blocks: list[MemoryBlock], selected_ids: Iterable[str], budget: int) -> list[MemoryBlock]:
@@ -178,14 +197,16 @@ def pack_selected_memories(blocks: list[MemoryBlock], selected_ids: Iterable[str
     summary_count = 0
     seen: set[str] = set()
     for memory_id in selected_ids:
-        if not isinstance(memory_id, str) or memory_id not in by_id:
-            raise ValueError(f"memory selector returned invalid id: {memory_id}")
-        if memory_id in seen:
+        if not isinstance(memory_id, str):
             continue
-        seen.add(memory_id)
-        block = by_id[memory_id]
-        if not block.text.strip():
-            raise ValueError(f"memory selector selected an empty block: {memory_id}")
+        block = _resolve_selected_block(by_id, memory_id.strip())
+        # Invalid, ambiguous, or empty selections are skipped, not fatal: fewer
+        # memories is a legal outcome, while failing here kills the whole write.
+        if block is None or not block.text.strip():
+            continue
+        if block.id in seen:
+            continue
+        seen.add(block.id)
         # Hard cap on chapter-summary blocks; headline/character_event unbounded.
         if block.memory_type == "summary" and summary_count >= MEMORY_SUMMARY_MAX_ITEMS:
             continue
