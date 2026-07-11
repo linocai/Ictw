@@ -19,97 +19,11 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 - v1.2.1（后端裸时间串解析统一收口 `String.linoBackendDate`）、v1.2.2（Mac 端每次激活重复弹旧失败 Toast）两个快修已单独发版并各有变更日志记录；当前双 target 版本 `1.2.2(7)`。
 - `chapter_style` 兼容窗口仍开着（本轮不收口）。
 - v1.2.3 立项（2026-07-11）：全链路报错「一眼定位」——环节 + 模型 + 上游具体原因 + 建议动作，全中文呈现，iOS/macOS 同步发版。详见「当前 Plan」。
-- v1.2.3 进度：块 A（后端 additive，commit `96d84dd`）、块 B（客户端共享呈现器，commit `e8e8129`）已完成；块 C 本地验证（四类错误中文呈现）已通过，macOS 本机已 Release 重装至 `1.2.3(8)`。**生产部署尚未执行**——后端仍在 `20260711_0005`、生产双端仍是 `1.2.2(7)`，备份→`alembic upgrade head`→重启需用户在场授权后另行进行。
+- v1.2.3 已发版（2026-07-11）：后端迁移至 `20260711_0006`、健康检查版本 `1.2.3`、62 测试全绿；macOS ICTW `1.2.3(8)` 已装；iOS 真机安装待用户。
 
 ## 当前 Plan
 
-### v1.2.3 — 报错「一眼定位」（iOS + macOS 同步发版）
-
-**目标**：所有报错让用户一眼定位——`{环节}`（哪个 Agent，还是 App↔后端本身）+ `{模型}` + `{上游具体原因}` + `{建议动作}`，全中文呈现。不改写作链语义，纯做错误的采集 → 透传 → 呈现增强。两端同抬 `1.2.3(8)`。
-
-**硬约束（照铁律，逐条对齐）**
-- 不落正文、不落 API Key：上游错误只按白名单摘 `error.message`/`error.code`/`error.type`，截断 ≤200 字符，绝不保留整个 body。
-- 分类不得伪装：`llm_content_blocked`（内容过滤）保持独立 code + 独立文案，不混进普通失败；`blockReason`/`finishReason` 分类保留。
-- 后端自身 4xx 的 `detail`（`code`/`message`/`details`）**wire 兼容**，既有 code 枚举一个不改，只做 additive（新增字段老客户端忽略、新客户端才读）。
-- 生产表结构只走 `alembic upgrade head`；发版前先备份云端 `linoi.db`（hk_info.md §13）。
-
----
-
-#### 块 A — 后端：错误上下文采集与透传（additive，小改）
-
-**改 `Backend/app/llm/base.py`**
-- `LLMError` 增三个可选字段：`agent_role: str | None`、`model_name: str | None`、`upstream_reason: str | None`（`status_code` 即 http_status 已有；`finish_reason`/`block_reason` 已有）。`safe_details()` 追加这三项（非 None 才带）。
-
-**改 `Backend/app/llm/openai_compatible.py`**
-- 扩 `_safe_provider_reasons(body)`：在现有 `finish_reason`/`block_reason` 之外，从 body 顶层 `error` 对象**只**取 `message`/`code`/`type` 三键，拼成一行 `upstream_reason`，`strip` 后**截断 ≤200 字符**；`error` 非 dict / 缺失 → None。**白名单外一律不取**（尤其防 `error.metadata`/`error.param` 及任何回显的 prompt/messages）。返回值扩为 `(finish_reason, block_reason, upstream_reason)`。
-- `_http_error(...)`：把 `upstream_reason` 塞进返回的 `LLMError`。
-- Gemini 形状说明：本项目 LLM 统一走 OpenAI-compatible 网关，错误体即 `{"error":{...}}`，白名单直接命中；Gemini 原生 `promptFeedback.blockReason` 已由现有 `_extract_content` / 流式路径单独走 `llm_content_blocked`，**不重复摘、不改**。
-
-**改 `Backend/app/services/write_jobs.py`**
-- 四个 agent 调用点（`_run_memory_selector`/`_run_writer`/`_run_reviser` 及 `_run_extract_job` 的 extractor 调用）在各自 `except LLMError as exc:` 里、audit 之后 re-raise 之前，盖章 `exc.agent_role = "<role>"`（memory_selector/writer/reviser/extractor）、`exc.model_name = getattr(client, "model_name", None)`。
-- `record_job_phase(...)` 增可选 `error_context` 参数，写入 `run.error_context`。
-- `_run_job` / `_run_extract_job` 顶层 `except LLMError as exc:`：构造 `error_context = {agent_role, model_name, http_status(=exc.status_code), upstream_reason, finish_reason, block_reason}`（去 None），随 `record_job_phase(..., "failed", error_code=exc.code, error_message=str(exc), error_context=...)` 落库。非 LLMError 兜底（`write_failed`/`extract_failed`）`error_context` 可为空。
-- `_record_llm(...)` 错误路径把 `exc.upstream_reason` 传给审计（见下）。
-
-**改 `Backend/app/services/audit.py`**：`record_llm_call` 增可选 `upstream_reason` 参数并写入。
-
-**改 `Backend/app/models/entities.py`**：`JobRun` 增 `error_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)`；`LLMCallAudit` 增 `upstream_reason: Mapped[str | None] = mapped_column(Text, nullable=True)`（审计仅离线排查用）。
-
-**改 `Backend/app/schemas/chapter.py` + `Backend/app/routers/chapters.py`**：`WriteJobStatus` 增可选 `error_context: dict | None = None`；`_job_status_from_run` 把 `run.error_context` 带进响应（failed 时必带）。这是 additive——老 iOS 客户端忽略未知键、走既有 `error_message`；新客户端读 `error_context`。
-
-**新迁移 `Backend/alembic/versions/20260711_0006_error_context.py`**（`down_revision="20260711_0005"`，命名规范照旧）：`job_runs.error_context`(JSON, nullable) + `llm_call_audits.upstream_reason`(Text, nullable)，两列均 nullable/additive。
-
-**可选小增益（同一白名单复用，低风险、建议做）**：`Backend/app/routers/settings.py` 的 `test_profile` 把 `client.test_connection()` 包 `try/except LLMError` → `HTTPException(status_code=502, detail={"code": exc.code, "message": str(exc), "details": exc.safe_details()})`，否则「测」按钮的上游失败当前是裸 500，呈现器兜底但信息弱。时间紧可移 Backlog。
-
-**测试（`Backend/tests/`，铁律=能程序校验的必须写测试）**
-- 白名单：构造 400 body 含 `error.message`+`error.code`+`error.type` **以及**额外 `error.metadata.prompt` / 顶层 `messages` 回显，断言 `LLMError.upstream_reason` 只含前三者、长度 ≤200、绝不含任何回显子串。
-- 失败 job 落库：mock 上游 400 跑 `_run_job`，断言 `job_runs.error_context` 含 agent_role/model_name/http_status/upstream_reason，且 `GET /chapters/{id}/job` 带出 `error_context`；`error_code` 分类正确（`llm_upstream_rejected`）；内容过滤场景 `llm_content_blocked` 不被伪装。
-- 审计列：断言失败调用 `llm_call_audits.upstream_reason` 落值，正文/key 不落。
-
-**验收**：`cd Backend && .venv/bin/python -m pytest -q` 全绿（现 55 + 新增）。
-
----
-
-#### 块 B — 客户端共享呈现器（一处改双端生效）
-
-**新文件 `App/LinoI/LinoErrorPresenter.swift`（挂 iOS + macOS 双 target）**：纯函数 + 映射表，输出 `(message: String, critical: Bool)`。
-
-**共享模型（改 `App/LinoI/LinoModels.swift`，双端）**：`WriteJobStatus` 增可选 `errorContext: JobErrorContext?`（CodingKey `error_context`）；新增 `struct JobErrorContext: Codable, Sendable`（字段 `agentRole/modelName/upstreamReason/finishReason/blockReason: String?`、`httpStatus: Int?`，snake_case CodingKeys）。
-
-**Code → 中文映射（原因 + 建议动作），全枚举后端 code（发版前 grep 全仓 `code=` 与 HTTPException `detail` 核对，勿漏）**：
-- LLM/上游（Agent 环节）：`llm_upstream_rejected`、`llm_rate_limited`、`llm_upstream_unavailable`、`llm_content_blocked`、`llm_empty_candidate`、`llm_invalid_response`、`llm_transport`、`llm_upstream_error`。
-- 写作链/后端：`revision_failed`、`write_failed`、`extract_failed`、`chapter_missing`、`interrupted`。
-- 预检/并发（409 结构化）：`chapter_finalized`、`write_running`、`unselected_characters_in_bible`、`ambiguous_character_name`。
-- violations 明细 code（拼进 detail）：`unselected_character`、`ambiguous_character`、`word_count`、`empty_body`、`length_truncated`。
-- 纯串 detail：`unauthorized`(401)；404 串 `book/chapter/character/profile/agent role/character event not found`；409 串 `chapter has no draft text`；422 设置串（已中文，原样透传）。
-- APIError 本地 case：`notConfigured`/`badURL`/`transport`/`http(code, body)`/`validation(code, message, names)`。
-
-**环节映射**：`agentRole` 存在→ memory_selector=「选记忆」/ writer=「写正文」/ reviser=「修订」/ extractor=「提取归档」；否则→「App↔后端」。
-
-**模板**：`{环节}（{模型}）{原因中文}：{upstreamReason 原文}——{建议动作} [code]`。缺字段就省略对应段（无 model 去括号、无 upstreamReason 去冒号段）。`upstreamReason` 英文原文**不翻译**。未知 code → 兜底显示原始 message + `[code]`，**不吞信息**。`llm_content_blocked` / `blockReason` → 独立文案「内容被安全策略拦截…」且 `critical=true`，不伪装成普通失败；`revision_failed`、`unauthorized` 亦置 `critical`。
-
-**接线（各路径接入呈现器）**
-- `App/LinoI/LinoStores.swift`：`applyJobFailure` 改用 `present(jobFailure: status)`（吃 `errorContext` + `violations` 的 `names`）；`applyStartFailure` 及其余 `session.notices.publish(error)` 走 `present(error:)`；`runPolling` 的「连接暂时中断」话术保留并归拢为呈现器常量。
-- `App/LinoI/NoticeBus.swift`：`publish(_ error:)` 改调呈现器（含 critical 判定，取代现有 `isUnauthorized` 私有扩展）。
-- App 自产中文文案（如「请先选择重新编辑本章…」「已恢复本地草稿」）过一遍，统一口径。
-- iOS 与 macOS 消费**同一**呈现器（`NoticeBus`/`LinoIToast` 已双端共享，`MacShell` 底部已叠 Toast）。
-
-**版本**：双 target `MARKETING_VERSION=1.2.3`、`CURRENT_PROJECT_VERSION=8`（project.pbxproj 4 处 config）。
-
-**验收**：iOS `LinoI` + macOS `LinoIMac` 双 target `xcodebuild ... build` 双绿。
-
----
-
-#### 块 C — 发版（后端 + 双端）
-
-- **后端发版**（命令见 hk_info.md；**SSH 读写生产需用户在场授权，本步会先请求授权**）：备份生产 `linoi.db`（§13）→ `git pull` → `alembic upgrade head`（到 `20260711_0006`）→ 重启 `linoi-backend.service` → 健康检查。
-- **门禁（缺一不发）**：后端 `pytest -q` 全绿 + iOS/macOS 双 target build 绿。
-- **App**：macOS Release 重装 `/Applications/ICTW.app`（用 `ditto`，绝不 cp -R）；iOS 真机安装留给用户（见附录）。
-- **验收（本地，绝不碰生产库）**：起本地 Backend + mock 上游造一个 400（带 `error.message`）→ App 里看到完整中文定位文案（环节 + 模型 + 原因 + 上游原文 + 建议 + code）；另各验一条——断连（`transport`）、401（`unauthorized`）、内容过滤（`llm_content_blocked`，独立文案不伪装）。
-
-**附录 — 用户手动清单（agent 办不了）**
-- iOS 真机安装：Xcode 选 `LinoI` target 连真机 Run（生产 token 已在设备 Keychain）。
-- macOS：`/Applications/ICTW.app` 重装后若首次启动被 Gatekeeper 拦，右键「打开」放行一次。
+（暂无。v1.2.3 已发版，施工全文见 archive/v1.2.3施工plan.md。）
 
 ## Backlog
 
@@ -167,3 +81,4 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 - 2026-07-11 v1.2.3 块B 完成：新建共享 `App/LinoI/LinoErrorPresenter.swift`（挂 iOS+macOS 双 target），纯函数 `present(jobFailure:)`/`present(error:)` 输出 `(message, critical)`。全枚举后端 code 建静态「原因+建议」表——发版前 grep 复核时额外发现 plan 清单遗漏的 `bible_empty`（`validate_character_preflight` 的 409 结构化 code）一并补上；模板严格照 `{环节}（{模型}）{原因}：{upstreamReason 原文}——{建议} [code]`，任意缺段整段省略；`upstreamReason`/`blockReason` 原文不翻译；`llm_content_blocked`/`revision_failed`/`unauthorized`（401 纯串合成的本地 code）固定 critical=true 不伪装成普通失败；`revision_failed` 额外从 `violations` 里的 `unselected_character.names` 拼出具体未获准人物名，而非停在「未通过程序校验」的空泛提示。APIError 本地 case 分别处理：404 已知名词（book/chapter/character/profile/agent role/character event）→中文名词、409 `chapter has no draft text`→专门文案、422 settings 校验串（已中文）原样透传不重复包装、`.transport`/`.notConfigured`/`.badURL` 各自处理。`LinoModels.swift` 新增 `JobErrorContext`（snake_case CodingKeys，纯 additive）+ `WriteJobStatus.errorContext`。接线：`NoticeBus.publish(_ error:)` 改调呈现器并删掉原 `isUnauthorized` 私有扩展，全仓 33 处既有 `session.notices.publish(error)` 调用点零改动自动获得新文案（单一收口，未逐个改）；`LinoStores.applyJobFailure`/`applyStartFailure` 改用呈现器结果同时驱动 toast 与 `writingPhase.failed` 的 message；`runPolling` 断连话术收进 `LinoErrorPresenter.connectionInterrupted` 常量。pbxproj 两 target 各加一条新 PBXBuildFile（iOS `A0000…0114`、Mac `B0000…0230`）共享同一新 fileRef `A0000…0134`，双 target 版本同抬 `1.2.3(8)`（4 处 config：MARKETING_VERSION 1.2.2→1.2.3、CURRENT_PROJECT_VERSION 7→8）。验收：iOS `LinoI`（iphonesimulator）+ macOS `LinoIMac`（platform=macOS）双 target `xcodebuild build` 各自独立全量重跑均 `BUILD SUCCEEDED`、日志 `error:` 计数 0；呈现器是纯函数，未接后端联调（块 A 虽已完成但块 C 才做端到端），改用 `swiftc` 直接编译真实源文件（`LinoModels.swift`+`LinoAPI.swift`+`LinoErrorPresenter.swift`）配一个临时 driver 跑 14 组场景断言——LLM 上游拒绝/内容过滤(critical+blockReason 原文)/revision_failed 人名拼接/write_failed 无 upstream 兜底/未知 code 兜底(保留环节+model+原始 message+`[code]`，唯独不编建议)/401/两种已知 404/409/422 透传/两种 409 结构化 validation(含 bible_empty)/未知 validation code/transport/notConfigured·badURL，全过后删除临时文件与二进制，未留残留。只 stage/commit App/ 本块文件，不碰 Backend/、不碰生产；PROJECT_PLAN.md 本行追加写入、未改其他行。下一步：块 C（发版，SSH 需用户在场授权）。
 - 2026-07-11 v1.2.3 块C 本地验证完成（不涉及生产部分；生产部署待用户在场授权后另行执行）：本地起隔离 Backend（scratchpad SQLite、独立 `APP_TOKEN`/`KEK_SECRET`、127.0.0.1:8788，`alembic upgrade head` 到 `20260711_0006`）+ scratchpad 起最小 stdlib OpenAI-compatible mock（127.0.0.1:8799，按请求体 `model` 字段分流 400/内容过滤/成功三态，400 响应额外掺 `error.metadata.prompt`/顶层 `messages` 回显探针验证白名单不泄漏），先 API 层直连驱动四类场景全部命中预期：①上游 400——`error_code=llm_upstream_rejected`、`error_context={agent_role:writer, model_name:mock-400, http_status:400, upstream_reason:"Model Not Exist | model_not_found | invalid_request_error"}`，回显探针字符串确认未泄漏；②内容过滤——`error_code=llm_content_blocked`、`block_reason=SAFETY`；③断连（writer 指向死端口）——`error_code=llm_transport`；④401——`{"detail":"unauthorized"}`。再用 `swiftc` 直接编译真实生产源文件（`LinoModels.swift`+`LinoAPI.swift`+`LinoErrorPresenter.swift`+`NoticeBus.swift`+`LinoTheme.swift`，未做任何修改）配临时 driver，对同一本地后端跑真实 `APIClient.startWrite`/`jobStatus` 网络请求+真实 `JSONDecoder` 解码+真实 `LinoErrorPresenter.present`+真实 `NoticeBus.publish`，四类场景 26 条断言全过，实测文案：「写正文（mock-400）上游拒绝了这次请求：Model Not Exist | model_not_found | invalid_request_error——请检查模型 Profile 配置，或稍后重试 [llm_upstream_rejected]」（critical=false）、「写正文（mock-blocked）内容被安全策略拦截，上游拒绝生成：SAFETY——请调整本章剧情或人物描写后重试 [llm_content_blocked]」（critical=true）、「写正文（mock-400）连接模型服务失败——请检查网络后重试 [llm_transport]」（critical=false）、「App↔后端登录状态已失效或 Token 不正确——请到设置里重新填写 Token [unauthorized]」（critical=true）；四段五要素（环节/模型/原因/上游原文/建议/code）与 critical 分类均与 plan 设计一致，**未发现需要修复的问题**。**App 级 GUI 视觉验证未能完成，如实记录**：macOS 路线因 ICTW.app 与本机已安装的生产版共享 Bundle ID（`com.lino.linoi.mac`）从而共享 Keychain/UserDefaults，尝试备份生产 `appToken` 时被 auto-mode classifier 判定为"未经授权提取活体 Keychain 凭证"并拒绝执行（正确行为，未强行绕过）；改用完全隔离的新建 iOS Simulator（`LinoI-v123-Verify`，自带独立 Keychain/UserDefaults，零生产风险）重新尝试，App 成功装机启动并正确显示书架空态+连接条，但后续所有坐标点击均被本机常驻的「115浏览器手势增强工具」全屏覆盖层拦截（同一现象在 v1.2.0 块⑤已有独立记录），经多点位测试确认是全屏拦截而非局部；keyboard-only 操作本身可送达（Tab 键无报错），但 iOS 无 macOS 式 Full Keyboard Access 可深度替代点击驱动三层导航；AppleScript System Events 兜底因 osascript 无辅助功能权限被拒（-1728），未尝试代为开权限（属系统安全设置，不在 agent 可动范围）。综合判断：API 层+真实源码 driver 的端到端证据链已足够扎实（覆盖网络层、JSONDecoder 字段映射、呈现器、NoticeBus 全部真实代码路径），GUI 像素级确认留空为诚实记录的已知局限，不影响验收结论。清理：本地 Backend/mock 进程已杀、scratchpad 测试 DB 与临时 iOS 模拟器已删除、被临时关闭又恢复 Booted 的用户自有 `LinoJ-iPhone16Pro` 模拟器已还原、生产 Keychain/UserDefaults 全程未被写入、`git status` 干净。macOS Release 重装：`xcodebuild -scheme LinoIMac -configuration Release -derivedDataPath <scratchpad> -allowProvisioningUpdates` 构建成功（自动签名 `Apple Development: linocai@hotmail.com`，hardened runtime），`codesign --verify --deep --strict` 通过，`osascript quit` 退出运行中的 ICTW → `rm -rf` 旧包 → `ditto`（非 cp）覆盖安装 `/Applications/ICTW.app` → `codesign` 复核仍通过 → `open` 重启，版本确认 `1.2.3(8)`、`Bundle ID com.lino.linoi.mac`、进程运行中（PID 15375，指向真实生产后端与已保存 token，未受本轮任何改动）。后端 `pytest -q` 复跑仍 61 测试全绿（本轮未改 Backend 代码）。全程未修改任何代码，故无 fix commit；仅本行 PROJECT_PLAN.md 记录。下一步：生产发版（备份 `linoi.db` → `git pull` → `alembic upgrade head` 到 `20260711_0006` → 重启 `linoi-backend.service` → 健康检查 → iOS 真机装机留用户手动），需用户在场授权 SSH 后执行。
 - 2026-07-11 v1.2.3 发版前独立 review 完成：无 P0/P1，判定可发。迁移/白名单/分类铁律/呈现器映射/两个快修全部核过（依据见审查报告）。当日修掉 P2-1（revision_failed 的 error_context 带 reviser 环节+模型）与 P2-2（test_connection 把响应体传给白名单，测按钮 502 透传上游原因），后端 62 测试全绿（commit bb0938d）；P2-3/P2-4 观察项归 Backlog。
+- 2026-07-11 v1.2.3 发版：全链路报错「一眼定位」上线。后端失败 job 落结构化 error_context（agent_role/model_name/http_status/upstream_reason 白名单摘要 ≤200 字）+ 审计表 upstream_reason 列（迁移 20260711_0006）+ 测按钮 502 透传上游原因；客户端共享 LinoErrorPresenter 全 code 中文映射五段式文案，双端 1.2.3(8)。生产部署完成：备份 20260711-200551 → rsync → alembic 0006 → 重启，健康检查 {"status":"ok","version":"1.2.3"}，integrity ok；/Applications/ICTW.app 已为最终包（1.2.3(8) 签名核验）；iOS 真机安装留用户。独立 review 无 P0/P1（P2-1/P2-2 已修）。施工全文移入 archive/v1.2.3施工plan.md。
