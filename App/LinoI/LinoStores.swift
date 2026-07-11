@@ -567,7 +567,10 @@ final class ChapterEditorStore: ObservableObject {
     /// and no poll is running, we unconditionally fetch one `jobStatus`,
     /// apply it, and resume polling if the phase is still non-terminal. A
     /// missing/never-started job just returns an error we swallow silently so
-    /// window activations don't spam Toasts. Only called from macOS
+    /// window activations don't spam Toasts. Terminal statuses are applied
+    /// only when the local chapter still believes the job is in flight (a
+    /// completion we missed while backgrounded) — otherwise every activation
+    /// would re-announce the same old failure. Only called from macOS
     /// (`NSApplication.didBecomeActiveNotification`); iOS never invokes it, so
     /// iOS behaviour is unchanged.
     func refreshActiveJobIfNeeded() async {
@@ -576,8 +579,18 @@ final class ChapterEditorStore: ObservableObject {
         do {
             let status = try await session.api.jobStatus(chapterId: chapter.id)
             guard currentChapter?.id == chapter.id else { return }
-            applyJobStatus(status, chapterId: chapter.id)
-            if !Self.isTerminalPhase(status.phase) {
+            if Self.isTerminalPhase(status.phase) {
+                // A terminal job stays "the latest job" forever; re-applying it
+                // on every activation re-publishes its failure Toast each time
+                // the app regains focus. Only catch up on a terminal outcome we
+                // actually missed, i.e. the local chapter still thinks the job
+                // is running because it ended while we were in the background.
+                let missedOutcome = currentChapter?.status == "writing"
+                    || currentChapter?.status == "extracting"
+                guard missedOutcome else { return }
+                applyJobStatus(status, chapterId: chapter.id)
+            } else {
+                applyJobStatus(status, chapterId: chapter.id)
                 pollJob(chapterId: chapter.id)
             }
         } catch {
