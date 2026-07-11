@@ -22,6 +22,16 @@
 		A00000000000000000000111 /* CharactersViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000131 /* CharactersViews.swift */; };
 		A00000000000000000000112 /* SettingsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000132 /* SettingsViews.swift */; };
 		A00000000000000000000113 /* ReadingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000133 /* ReadingViews.swift */; };
+		B00000000000000000000201 /* LinoStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000126 /* LinoStores.swift */; };
+		B00000000000000000000202 /* LinoAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000123 /* LinoAPI.swift */; };
+		B00000000000000000000203 /* LinoModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000122 /* LinoModels.swift */; };
+		B00000000000000000000204 /* ChapterDraftCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000125 /* ChapterDraftCache.swift */; };
+		B00000000000000000000205 /* NoticeBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000124 /* NoticeBus.swift */; };
+		B00000000000000000000206 /* LinoTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000121 /* LinoTheme.swift */; };
+		B00000000000000000000207 /* LinoComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000127 /* LinoComponents.swift */; };
+		B00000000000000000000211 /* LinoIMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000311 /* LinoIMacApp.swift */; };
+		B00000000000000000000212 /* MacShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000312 /* MacShell.swift */; };
+		B00000000000000000000221 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000321 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,10 +52,23 @@
 		A00000000000000000000131 /* CharactersViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharactersViews.swift; sourceTree = "<group>"; };
 		A00000000000000000000132 /* SettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViews.swift; sourceTree = "<group>"; };
 		A00000000000000000000133 /* ReadingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingViews.swift; sourceTree = "<group>"; };
+		B00000000000000000000310 /* LinoIMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LinoIMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000311 /* LinoIMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoIMacApp.swift; sourceTree = "<group>"; };
+		B00000000000000000000312 /* MacShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShell.swift; sourceTree = "<group>"; };
+		B00000000000000000000313 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B00000000000000000000314 /* LinoIMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LinoIMac.entitlements; sourceTree = "<group>"; };
+		B00000000000000000000321 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A00000000000000000000020 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000320 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -59,6 +82,7 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000031 /* LinoI */,
+				B00000000000000000000330 /* LinoIMac */,
 				A00000000000000000000032 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,8 +114,21 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000010 /* LinoI.app */,
+				B00000000000000000000310 /* LinoIMac.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B00000000000000000000330 /* LinoIMac */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000311 /* LinoIMacApp.swift */,
+				B00000000000000000000312 /* MacShell.swift */,
+				B00000000000000000000321 /* Assets.xcassets */,
+				B00000000000000000000313 /* Info.plist */,
+				B00000000000000000000314 /* LinoIMac.entitlements */,
+			);
+			path = LinoIMac;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -114,6 +151,23 @@
 			productReference = A00000000000000000000010 /* LinoI.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B00000000000000000000340 /* LinoIMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B00000000000000000000370 /* Build configuration list for PBXNativeTarget "LinoIMac" */;
+			buildPhases = (
+				B00000000000000000000350 /* Sources */,
+				B00000000000000000000320 /* Frameworks */,
+				B00000000000000000000351 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LinoIMac;
+			productName = LinoIMac;
+			productReference = B00000000000000000000310 /* LinoIMac.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -125,6 +179,9 @@
 				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 					A00000000000000000000040 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+					B00000000000000000000340 = {
 						CreatedOnToolsVersion = 26.6;
 					};
 				};
@@ -144,6 +201,7 @@
 			projectRoot = "";
 			targets = (
 				A00000000000000000000040 /* LinoI */,
+				B00000000000000000000340 /* LinoIMac */,
 			);
 		};
 /* End PBXProject section */
@@ -154,6 +212,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000002 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000351 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000221 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -178,6 +244,22 @@
 				A00000000000000000000111 /* CharactersViews.swift in Sources */,
 				A00000000000000000000112 /* SettingsViews.swift in Sources */,
 				A00000000000000000000113 /* ReadingViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000350 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000206 /* LinoTheme.swift in Sources */,
+				B00000000000000000000203 /* LinoModels.swift in Sources */,
+				B00000000000000000000202 /* LinoAPI.swift in Sources */,
+				B00000000000000000000205 /* NoticeBus.swift in Sources */,
+				B00000000000000000000204 /* ChapterDraftCache.swift in Sources */,
+				B00000000000000000000201 /* LinoStores.swift in Sources */,
+				B00000000000000000000207 /* LinoComponents.swift in Sources */,
+				B00000000000000000000211 /* LinoIMacApp.swift in Sources */,
+				B00000000000000000000212 /* MacShell.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -302,17 +384,17 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LinoI/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = LinoI;
+				INFOPLIST_KEY_CFBundleDisplayName = ICTW;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1.2;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -328,16 +410,16 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LinoI/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = LinoI;
+				INFOPLIST_KEY_CFBundleDisplayName = ICTW;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1.2;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -345,6 +427,57 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		B00000000000000000000382 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = HX73DFL88G;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LinoIMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		B00000000000000000000383 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = HX73DFL88G;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LinoIMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -365,6 +498,15 @@
 			buildConfigurations = (
 				A00000000000000000000082 /* Debug */,
 				A00000000000000000000083 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B00000000000000000000370 /* Build configuration list for PBXNativeTarget "LinoIMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B00000000000000000000382 /* Debug */,
+				B00000000000000000000383 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 struct LinoISectionLabel: View {
     let text: String
@@ -99,7 +101,9 @@ struct LinoISecureField: View {
     var body: some View {
         SecureField(placeholder, text: $text)
             .textFieldStyle(.plain)
+            #if os(iOS)
             .textInputAutocapitalization(.never)
+            #endif
             .autocorrectionDisabled()
             .foregroundStyle(LinoTheme.body)
             .padding(.horizontal, 12)
@@ -120,7 +124,9 @@ struct LinoINumberField: View {
 
     var body: some View {
         TextField(placeholder, value: $value, format: .number)
+            #if os(iOS)
             .keyboardType(.numberPad)
+            #endif
             .textFieldStyle(.plain)
             .foregroundStyle(LinoTheme.body)
             .padding(.horizontal, 12)
@@ -194,6 +200,7 @@ struct LinoIDraftPreview: View {
     }
 }
 
+#if os(iOS)
 /// Wraps `UIActivityViewController` so book export can hand a file straight
 /// to the system share sheet.
 struct ActivityView: UIViewControllerRepresentable {
@@ -205,6 +212,7 @@ struct ActivityView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+#endif
 
 struct LinoIEmptyCard: View {
     let title: String
