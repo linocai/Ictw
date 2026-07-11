@@ -50,6 +50,7 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 ## 变更日志
 
 - 2026-07-12 v1.3.0 发版：Reviser 阶段双端展示最新程序校验原因，最终校验失败保留；Memory Selector 从紧邻已完成上一章最多 700 字原文结尾中选择最短衔接起点，结尾与既有记忆共用 1800 字预算；Writer Prompt 固定 Bible 最高权威与历史参考边界并去除重复世界观；双端同步 job 本地状态并接管 `write_running`；数字型上游 error.code 与带 Z 六位微秒时间串补兼容。后端 68 测试全绿，生产备份 `20260712-062035` 后部署，健康检查 `1.3.0`、数据库检查正常；macOS ICTW `1.3.0(9)` 已重装并真实启动，iOS 真机安装留给用户。（施工全文见 `archive/v1.3.0施工plan.md`。）
+- 2026-07-12 GitHub Release v1.3.0 发布：tag `v1.3.0` + `ICTW-1.3.0.zip`（ditto 保签名压包，SHA-256 `d0bc14a89c065d61f694e98e541ba7bd9605e6cd377359c9b7476543c98d0c19`）已上传至 https://github.com/linocai/Ictw/releases/tag/v1.3.0 。
 - 2026-07-10 v1.0.0 发版：四 Agent 链、记忆选择、Reviser 两次上限、Extractor 权限收口、推理参数配置、删除章节。（施工全文见 archive/v1发版施工plan.md）
 - 2026-07-10 仓库从 GitHub 克隆重建本地工作区；恢复 Backend/.env；建立 PROJECT_PLAN.md 与项目 CLAUDE.md，v1 施工 plan 移入 archive/。
 - 2026-07-10 v1.1.0 立项：去流式 + 任务持久化（job_runs）、accept 异步化、字数放宽 80%~120%、记忆预算固定常量 + summary≤2、短名校验修复 + 章级豁免、LLM 审计表、单条人物事件接口、ChapterPatch 放开 summary/headline、事件 60 字上限；iOS 去流式轮询、阅读模式、新建直进、章节行简化、故事线增删改、梗概可编辑、导出全书、删书。（施工全文见 archive/v1.1.0施工plan.md）
