@@ -198,6 +198,7 @@ def test_reviser_one_attempt_and_two_attempt_failure_restore_baseline(client, au
     assert status["phase"] == "failed"
     assert status["error_code"] == "revision_failed"
     assert status["violations"]
+    assert status["error_context"]["agent_role"] == "reviser"
     assert always_bad.calls == 2
     latest = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert latest["draft_text"] == "旧稿"

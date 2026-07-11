@@ -317,6 +317,10 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
             violations = draft_violations(db, chapter, current_text, finish_reason)
         if violations:
             _restore_baseline(db, job)
+            reviser_context: dict[str, Any] = {"agent_role": "reviser"}
+            reviser_model = getattr(getattr(job.reviser, "llm", None), "model_name", None)
+            if reviser_model:
+                reviser_context["model_name"] = reviser_model
             record_job_phase(
                 session_factory,
                 job.job_id,
@@ -324,6 +328,7 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
                 error_code="revision_failed",
                 error_message="修订两次后仍未通过程序校验，请调整本章剧情后重新生成",
                 violations=violations,
+                error_context=reviser_context,
             )
             job.mark_terminal("failed")
             return

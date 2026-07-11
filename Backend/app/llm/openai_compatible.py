@@ -128,7 +128,12 @@ class OpenAICompatibleClient:
         except httpx.HTTPError as exc:
             raise LLMError("LLM transport failed", code="llm_transport", retryable=True) from exc
         if response.status_code >= 400:
-            raise _http_error(response.status_code, response.headers, prefix="LLM profile test failed")
+            raise _http_error(
+                response.status_code,
+                response.headers,
+                response.content,
+                prefix="LLM profile test failed",
+            )
 
     def _headers(self) -> dict[str, str]:
         return {

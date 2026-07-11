@@ -140,6 +140,23 @@ def test_upstream_reason_whitelists_message_code_type_and_drops_echoes():
     assert "temperature" not in error.upstream_reason
 
 
+def test_profile_test_connection_carries_upstream_reason(monkeypatch):
+    class _FakeResponse:
+        status_code = 401
+        headers: dict[str, str] = {}
+        content = json.dumps({"error": {"message": "Invalid API key", "type": "authentication_error"}}).encode("utf-8")
+
+    monkeypatch.setattr("app.llm.openai_compatible.httpx.get", lambda *args, **kwargs: _FakeResponse())
+    client = OpenAICompatibleClient(base_url="https://example.invalid/v1", api_key="k", model_name="m")
+    with pytest.raises(LLMError) as exc_info:
+        client.test_connection()
+    error = exc_info.value
+    assert str(error) == "LLM profile test failed: 401"
+    assert error.upstream_reason is not None
+    assert "Invalid API key" in error.upstream_reason
+    assert "authentication_error" in error.upstream_reason
+
+
 def test_upstream_reason_truncates_to_200_chars():
     body = json.dumps(
         {
