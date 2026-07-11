@@ -44,6 +44,9 @@
 		B00000000000000000000224 /* MacBookSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000327 /* MacBookSettingsTab.swift */; };
 		B00000000000000000000225 /* MacAgentTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000328 /* MacAgentTab.swift */; };
 		B00000000000000000000226 /* MacExportSaver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000329 /* MacExportSaver.swift */; };
+		B00000000000000000000227 /* MacReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000331 /* MacReaderView.swift */; };
+		B00000000000000000000228 /* MacCommandBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000332 /* MacCommandBus.swift */; };
+		B00000000000000000000229 /* MacSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000333 /* MacSettingsSheet.swift */; };
 		B00000000000000000000221 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000321 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -83,6 +86,9 @@
 		B00000000000000000000327 /* MacBookSettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBookSettingsTab.swift; sourceTree = "<group>"; };
 		B00000000000000000000328 /* MacAgentTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAgentTab.swift; sourceTree = "<group>"; };
 		B00000000000000000000329 /* MacExportSaver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacExportSaver.swift; sourceTree = "<group>"; };
+		B00000000000000000000331 /* MacReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacReaderView.swift; sourceTree = "<group>"; };
+		B00000000000000000000332 /* MacCommandBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCommandBus.swift; sourceTree = "<group>"; };
+		B00000000000000000000333 /* MacSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsSheet.swift; sourceTree = "<group>"; };
 		B00000000000000000000321 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -163,6 +169,9 @@
 				B00000000000000000000327 /* MacBookSettingsTab.swift */,
 				B00000000000000000000328 /* MacAgentTab.swift */,
 				B00000000000000000000329 /* MacExportSaver.swift */,
+				B00000000000000000000331 /* MacReaderView.swift */,
+				B00000000000000000000332 /* MacCommandBus.swift */,
+				B00000000000000000000333 /* MacSettingsSheet.swift */,
 				B00000000000000000000321 /* Assets.xcassets */,
 				B00000000000000000000313 /* Info.plist */,
 				B00000000000000000000314 /* LinoIMac.entitlements */,
@@ -312,6 +321,9 @@
 				B00000000000000000000224 /* MacBookSettingsTab.swift in Sources */,
 				B00000000000000000000225 /* MacAgentTab.swift in Sources */,
 				B00000000000000000000226 /* MacExportSaver.swift in Sources */,
+				B00000000000000000000227 /* MacReaderView.swift in Sources */,
+				B00000000000000000000228 /* MacCommandBus.swift in Sources */,
+				B00000000000000000000229 /* MacSettingsSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

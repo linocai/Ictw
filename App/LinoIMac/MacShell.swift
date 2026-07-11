@@ -1,11 +1,14 @@
 import SwiftUI
 
 /// 单窗状态机：`session.token.isEmpty` → 首启连接页；已连接但未开书 → 书架；
-/// 已开书 → 三栏工作台（`MacWorkspaceView`，块④）。Toast 常驻叠底部。阅读
-/// overlay（块⑤，`MacReaderView` 全窗盖在最上层）与 settings sheet（块⑤，由
-/// `MacCommandBus.showSettings` 驱动）只留结构位，本块不接线。
+/// 已开书 → 三栏工作台（`MacWorkspaceView`）。Toast 常驻叠底部。设置 sheet 由
+/// `MacCommandBus.showSettings` 驱动（⌘, 与书架/工作台的 ⚙ 均经它派发）。
+/// 阅读 overlay（`MacReaderView`）没有挂在这一层——它只能从已打开的章节
+/// 编辑器进入，`MacWorkspaceView` 本身已铺满整窗，挂在那一层可以直接复用其
+/// `selectedChapterId`，不必再为阅读单独建一份跨层共享状态。
 struct MacShell: View {
     @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var commandBus: MacCommandBus
 
     var body: some View {
         ZStack {
@@ -20,8 +23,6 @@ struct MacShell: View {
                     MacWorkspaceView()
                 }
             }
-
-            // 块⑤: MacReaderView 全窗 overlay 叠在这一层之上，退出回工作台。
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
@@ -29,7 +30,8 @@ struct MacShell: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 20)
         }
-        // 块⑤: .sheet(isPresented: $commandBus.showSettings) { MacSettingsSheet() }
-        //       内嵌 MacConnectionView(firstRun: false)，由 ⌘, 与右上 ⚙ 触发。
+        .sheet(isPresented: $commandBus.showSettings) {
+            MacSettingsSheet()
+        }
     }
 }

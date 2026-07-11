@@ -12,6 +12,9 @@ struct MacChapterEditor: View {
     @EnvironmentObject private var editor: ChapterEditorStore
 
     @Binding var selectedChapterId: String?
+    /// 打开阅读 overlay 的回调，由 `MacWorkspaceView` 注入（阅读页挂在它那一
+    /// 层，本视图不持有阅读状态）。
+    let onOpenReader: () -> Void
 
     @State private var draftMode: DraftMode = .preview
     @State private var showingImport = false
@@ -96,7 +99,14 @@ struct MacChapterEditor: View {
                     if let saved = await editor.save() { workspace.upsert(saved) }
                 }
             }
-            LinoMacIconButton(systemName: "book", fontSize: 13, help: "阅读（块⑤开放）", isDisabled: true) {}
+            LinoMacIconButton(
+                systemName: "book",
+                fontSize: 13,
+                help: "阅读",
+                isDisabled: editor.currentChapter?.status != "finalized"
+            ) {
+                onOpenReader()
+            }
             LinoMacIconButton(systemName: "trash", style: .danger, fontSize: 13, help: "删除本章") {
                 confirmingDelete = true
             }

@@ -3,7 +3,7 @@ import SwiftUI
 /// 右栏「Agent」tab：LLM Profiles（增/改/删/测）+ Agent 模型绑定（模型 Picker /
 /// 启用思考 Toggle / 思考强度 Picker / temperature 滑杆 0–2 step 0.05，按
 /// `temperatureAdjustable` 置灰）+ Agent 人格（DisclosureGroup 编辑 / 恢复默认）。
-/// 连接段不放这里（⌘, 的事，块⑤）。全部复用 `AgentSettingsStore`，capability
+/// 连接段不放这里（⌘, / `MacSettingsSheet` 的事）。全部复用 `AgentSettingsStore`，capability
 /// 语义逐条对齐 iOS `LinoIAgentSettingsPane`。
 struct MacAgentTab: View {
     @EnvironmentObject private var agents: AgentSettingsStore

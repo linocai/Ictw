@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// 书架：居中容器（最大宽 `LinoMacMetrics.shelfMaxWidth`）+ 顶部 header
-/// （kicker「书架」/大标题「我的作品」/「新建作品」主按钮/⚙ 占位钮——设置
-/// sheet 是块⑤/连接状态点+baseURL）+ 自适应书卡网格。全部读写走共享
-/// `BookshelfStore`，本视图不持有任何书籍数据的本地拷贝。
+/// （kicker「书架」/大标题「我的作品」/「新建作品」主按钮/⚙ 钮——经
+/// `MacCommandBus.showSettings` 打开 `MacSettingsSheet`/连接状态点+baseURL）+
+/// 自适应书卡网格。全部读写走共享 `BookshelfStore`，本视图不持有任何书籍数据
+/// 的本地拷贝。
 struct MacBookshelfView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var commandBus: MacCommandBus
     @State private var showingNewBook = false
 
     private let columns = [GridItem(.adaptive(minimum: 220), spacing: 22)]
@@ -25,6 +27,11 @@ struct MacBookshelfView: View {
         .task { await bookshelf.load() }
         .sheet(isPresented: $showingNewBook) {
             MacNewBookSheet()
+        }
+        .onChange(of: commandBus.showNewBook) { _, trigger in
+            guard trigger else { return }
+            commandBus.showNewBook = false
+            showingNewBook = true
         }
     }
 
@@ -50,7 +57,9 @@ struct MacBookshelfView: View {
                     .buttonStyle(LinoIPrimaryButtonStyle(compact: true))
                     .onHover { pointer($0) }
 
-                    LinoMacIconButton(systemName: "gearshape", help: "设置（块⑤开放）", isDisabled: true) {}
+                    LinoMacIconButton(systemName: "gearshape", help: "设置") {
+                        commandBus.showSettings = true
+                    }
                 }
                 HStack(spacing: 8) {
                     LinoMacConnectionChip()

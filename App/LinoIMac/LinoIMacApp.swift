@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// macOS 端入口。与 iOS `LinoIApp` 一致地在 `init()` 建同一套共享 Store
-/// 并注入 environment；桌面窗口配置为隐藏原生标题栏 + 最小尺寸约束。
-/// 写作台 UI（书架 / 三栏 / 阅读）在后续块补全，本块 `MacShell` 为占位。
+/// 并注入 environment；桌面窗口配置为隐藏原生标题栏 + 最小尺寸约束。另注入
+/// macOS-only 的 `MacCommandBus`，承接 `.commands` 菜单/⌘ 快捷键派发的
+/// 「设置 / 新建作品 / 新建章节」意图。
 @main
 struct LinoIMacApp: App {
     @StateObject private var notices: NoticeBus
@@ -12,6 +13,7 @@ struct LinoIMacApp: App {
     @StateObject private var charactersStore: CharactersStore
     @StateObject private var chapterEditorStore: ChapterEditorStore
     @StateObject private var agentSettingsStore: AgentSettingsStore
+    @StateObject private var commandBus = MacCommandBus()
 
     init() {
         let notices = NoticeBus()
@@ -35,6 +37,7 @@ struct LinoIMacApp: App {
                 .environmentObject(charactersStore)
                 .environmentObject(chapterEditorStore)
                 .environmentObject(agentSettingsStore)
+                .environmentObject(commandBus)
                 .frame(minWidth: 1080, minHeight: 720)
                 .tint(LinoTheme.accent)
                 .task {
@@ -44,5 +47,25 @@ struct LinoIMacApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("设置…") {
+                    commandBus.showSettings = true
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandGroup(replacing: .newItem) {
+                Button("新建作品") {
+                    commandBus.showNewBook = true
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
+                Button("新建章节") {
+                    commandBus.showNewChapter = true
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(session.currentBook == nil)
+            }
+        }
     }
 }

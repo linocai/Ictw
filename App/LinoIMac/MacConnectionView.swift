@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 连接配置：首启（`firstRun: true`，`MacShell` 在 `session.token.isEmpty`
 /// 时整屏展示，多一段引导文案 + logo）与设置 sheet 内嵌（`firstRun: false`，
-/// 块⑤的 `MacSettingsSheet` 用）共用同一张卡片。样式参考
+/// `MacSettingsSheet` 用）共用同一张卡片。样式参考
 /// `Archive/LinoWritingV2` 的 `MacConnectionSettingsSection`（服务器状态行 +
 /// 等宽地址栏 + 密钥栏 + 保存按钮 + 提示语），语义与颜色一律走本项目
 /// `LinoTheme`/`LinoMacMetrics`，不搬老项目的 KeychainStore/AppStore。
