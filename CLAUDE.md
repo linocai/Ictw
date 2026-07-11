@@ -11,7 +11,7 @@
 ## 铁律
 
 - 生产表结构只走 `alembic upgrade head`，应用启动不 create_all；发版前必须先备份云端 `linoi.db`（命令见 hk_info.md §13）。
-- 字数一律按「去空白字符数」计算，合格区间为目标的 95%~105%，常量定义在 `Backend/app/services/context.py`。
+- 字数一律按「去空白字符数」计算，合格区间为目标的 80%~120%（v1.1.0 起），常量定义在 `Backend/app/services/context.py`。
 - 人物选择 = 本章允许出现集合的**上限**（被提及也算出现）；未选人物不因历史记忆或 Extractor 输出获得授权。
 - 能程序校验的约束不只写在 Prompt 里；模型自报「已修好」不作数，以程序复检为准。
 - 推理参数（thinking/effort）由 capability registry（`model_capabilities.py`）决定能不能发，未知模型一律不发额外参数。

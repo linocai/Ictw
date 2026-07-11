@@ -34,11 +34,15 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 - 每本书单独配置记忆预算公式
 - PostgreSQL 迁移、多 worker 分布式写作任务
 
-**技术债**
+**技术债**（含 2026-07-11 v1.1.0 review 的 P2 遗留）
 - `chapter_style` 兼容字段收口（新 App 验证后）
 - capability registry 扩充（Qwen、Claude、Kimi 等）
-- 短名整词匹配的可选轻量分词方案（提升 2 字名精度，替代当前 1 字左边界启发式）
+- 短名整词匹配的可选轻量分词方案（提升 2 字名精度；1 字名左边界启发式对 CJK 扩展区/々等罕用前字有漏判，一并解决）
 - LLM 审计表的查询/统计入口（当前仅落库，靠直连 DB 查看）
+- iOS：本会话内启动任务后 currentChapter.status 不更新为 writing/extracting，前台恢复轮询的安全网只对冷启动生效（review P2#3）
+- iOS：write_running 等 409 呈现为 failed，未接管已有任务（review P2#5）
+- job_runs「最新一行」并列打破用随机 uuid，可换单调次键（review P2#6）
+- write_registry 为进程内单例，未来多 worker 前必须换 DB 层 job 锁（review P2#7，前瞻）
 - 阅读模式增强（书签、朗读、翻页动画等）
 
 **运维/安全（hk_info.md §12 有排序清单）**
@@ -53,3 +57,4 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 - 2026-07-10 v1.1.0 立项：去流式 + 任务持久化（job_runs）、accept 异步化、字数放宽 80%~120%、记忆预算固定常量 + summary≤2、短名校验修复 + 章级豁免、LLM 审计表、单条人物事件接口、ChapterPatch 放开 summary/headline、事件 60 字上限；iOS 去流式轮询、阅读模式、新建直进、章节行简化、故事线增删改、梗概可编辑、导出全书、删书。（施工全文见 archive/v1.1.0施工plan.md）
 - 2026-07-10 v1.1.0 施工完成并验证：后端 45 测试全绿、iOS xcodebuild 通过、前后端契约交叉检查通过、本地全新建库迁移链 + API 冒烟通过；iOS 版本抬到 1.1.0(2)。本机新生成部署密钥并完成服务器授权与主机键核验（见 hk_info.md）。
 - 2026-07-11 快修上线：Memory Selector 返回非法/截断记忆 ID 不再导致整次写作失败（跳过 + 唯一前缀救回 + Prompt 加固，commit 5ff703b）；真机实报 bug，当日修复部署。
+- 2026-07-11 独立 review 完成：无 P0/P1，7 条 P2。当日修掉 P2#1（memory selector 对非数组/非串 memory_ids 降级为过滤/空选择，不再炸写作）与 P2#2（CLAUDE.md 字数区间订正为 80%~120%）；其余 P2 归入 Backlog 技术债。

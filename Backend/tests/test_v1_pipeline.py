@@ -162,3 +162,24 @@ def test_memory_selector_retries_one_retryable_failure_only():
     llm = RetryOnceLLM()
     assert MemorySelectorAgent(llm, "selector").select("input") == []  # type: ignore[arg-type]
     assert llm.calls == 2
+
+
+def test_memory_selector_tolerates_malformed_id_payload_shapes():
+    class ShapedLLM:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def complete_json(self, **kwargs):
+            return self.payload
+
+    # Mixed non-string items are filtered, not fatal.
+    agent = MemorySelectorAgent(ShapedLLM({"memory_ids": ["chapter:x:headline", 123, None]}), "selector")  # type: ignore[arg-type]
+    assert agent.select("input") == ["chapter:x:headline"]
+    # A bare string is salvaged as a single-item selection.
+    agent = MemorySelectorAgent(ShapedLLM({"memory_ids": "chapter:x:headline"}), "selector")  # type: ignore[arg-type]
+    assert agent.select("input") == ["chapter:x:headline"]
+    # Anything else degrades to the legal empty selection.
+    agent = MemorySelectorAgent(ShapedLLM({"memory_ids": {"a": 1}}), "selector")  # type: ignore[arg-type]
+    assert agent.select("input") == []
+    agent = MemorySelectorAgent(ShapedLLM({}), "selector")  # type: ignore[arg-type]
+    assert agent.select("input") == []

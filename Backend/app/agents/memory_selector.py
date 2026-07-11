@@ -29,9 +29,14 @@ class MemorySelectorAgent:
                     timeout=180,
                 )
                 ids = output.get("memory_ids")
-                if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
-                    raise ValueError("memory selector returned invalid JSON payload")
-                return ids
+                # Malformed shapes degrade to "fewer/no memories" instead of
+                # failing the whole write: an empty selection is a legal outcome,
+                # and pack_selected_memories re-validates every id anyway.
+                if isinstance(ids, str):
+                    ids = [ids]
+                if not isinstance(ids, list):
+                    return []
+                return [item for item in ids if isinstance(item, str)]
             except LLMError as exc:
                 if attempt == 0 and exc.retryable:
                     continue
