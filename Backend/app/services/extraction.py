@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import Chapter, Character, CharacterEvent
+from app.models import Chapter, Character, CharacterEvent, CharacterFieldPatch
 from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
 
 
@@ -81,13 +81,62 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
         db.flush()
         added_event_ids.append(event.id)
 
+    # Re-accepting a chapter must keep the ORIGINAL pre-chapter baseline: the
+    # previous patch row's priors win over the character's current (already
+    # merged) values, otherwise deleting the chapter would revert to the
+    # chapter's own earlier output instead of the state before it.
+    existing_patches = {
+        row.character_id: row
+        for row in db.scalars(
+            select(CharacterFieldPatch).where(CharacterFieldPatch.chapter_id == chapter.id)
+        ).all()
+    }
+    db.execute(delete(CharacterFieldPatch).where(CharacterFieldPatch.chapter_id == chapter.id))
+
     updated_ids: list[str] = []
+    patched_character_ids: set[str] = set()
     for character_id, fields in valid_patches:
         character: Character = character_map[character_id]
-        merged = dict(character.dynamic_fields or {})
+        current = dict(character.dynamic_fields or {})
+        old_row = existing_patches.get(character_id)
+        prior_values: dict[str, Any] = dict(old_row.prior_values or {}) if old_row else {}
+        prior_missing: set[str] = set(old_row.prior_missing or []) if old_row else set()
+        for key in fields:
+            if key in prior_values or key in prior_missing:
+                continue
+            if key in current:
+                prior_values[key] = current[key]
+            else:
+                prior_missing.add(key)
+        db.add(
+            CharacterFieldPatch(
+                book_id=chapter.book_id,
+                chapter_id=chapter.id,
+                character_id=character_id,
+                prior_values=prior_values,
+                prior_missing=sorted(prior_missing),
+            )
+        )
+        patched_character_ids.add(character_id)
+        merged = current
         merged.update(fields)
         character.dynamic_fields = merged
         updated_ids.append(character.id)
+
+    # Characters this chapter patched earlier but not in this re-accept keep
+    # their record: the old merge is still in effect and must stay revertible.
+    for character_id, old_row in existing_patches.items():
+        if character_id in patched_character_ids:
+            continue
+        db.add(
+            CharacterFieldPatch(
+                book_id=chapter.book_id,
+                chapter_id=chapter.id,
+                character_id=character_id,
+                prior_values=dict(old_row.prior_values or {}),
+                prior_missing=list(old_row.prior_missing or []),
+            )
+        )
 
     chapter.summary = summary.strip()
     chapter.headline = headline.strip()

@@ -93,7 +93,7 @@ struct LinoIChapterEditorScreen: View {
 
     private var deleteDialogMessage: String {
         if editor.currentChapter?.status == "finalized" {
-            return "此操作不可撤销。本章记忆和人物事件会被删除，但不会回滚人物当前动态状态，也不会重新提取后续章节。"
+            return "此操作不可撤销。本章记忆、人物事件与本章造成的动态字段更新都会被删除回滚（已被后续章节覆盖的字段以后续章节为准），不会重新提取后续章节。"
         }
         return "此操作不可撤销。本章正文、人物关联与本章事件都会被删除，后续章节序号将自动收拢。"
     }

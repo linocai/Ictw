@@ -272,7 +272,7 @@ def test_accept_rejects_live_job(client, auth_headers):
         write_registry.clear()
 
 
-def test_delete_finalized_chapter_cascades_events_but_keeps_dynamic_state(client, auth_headers, wait_for_terminal):
+def test_delete_finalized_chapter_cascades_events_and_reverts_dynamic_state(client, auth_headers, wait_for_terminal):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     character = client.post(
         f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
@@ -296,6 +296,7 @@ def test_delete_finalized_chapter_cascades_events_but_keeps_dynamic_state(client
     client.delete(f"/api/v1/chapters/{chapters[1]['id']}", headers=auth_headers).raise_for_status()
     detail = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()
     assert detail["events"] == []
-    assert detail["dynamic_fields"]["current_status"] == "完成关键行动后休整"
+    # v1.1.2: the chapter introduced this key, so deleting the chapter removes it.
+    assert "current_status" not in detail["dynamic_fields"]
     listed = client.get(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers).json()
     assert [(item["id"], item["index"]) for item in listed] == [(chapters[2]["id"], 1)]

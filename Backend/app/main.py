@@ -42,7 +42,7 @@ def recover_interrupted_chapters(db) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="LinoI API", version="1.1.1", lifespan=lifespan)
+    app = FastAPI(title="LinoI API", version="1.1.2", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -55,7 +55,7 @@ def create_app() -> FastAPI:
 
     @app.get(f"{prefix}/health", dependencies=deps)
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "1.1.1"}
+        return {"status": "ok", "version": "1.1.2"}
 
     app.include_router(books.router, prefix=prefix, dependencies=deps)
     app.include_router(characters.router, prefix=prefix, dependencies=deps)

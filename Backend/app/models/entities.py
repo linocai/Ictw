@@ -105,6 +105,27 @@ class CharacterEvent(Base):
     chapter = relationship("Chapter", back_populates="events")
 
 
+class CharacterFieldPatch(Base):
+    """Per-chapter record of which dynamic fields a chapter's extraction touched.
+
+    prior_values holds the pre-merge value for keys that existed before the
+    chapter; prior_missing lists keys the chapter introduced. Together they are
+    the chapter's applied-key set and allow per-key rollback on chapter delete.
+    """
+
+    __tablename__ = "character_field_patches"
+    __table_args__ = (UniqueConstraint("chapter_id", "character_id", name="uq_field_patch_chapter_character"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    book_id: Mapped[str] = mapped_column(String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    chapter_id: Mapped[str] = mapped_column(String(36), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True)
+    character_id: Mapped[str] = mapped_column(String(36), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False, index=True)
+    prior_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    prior_missing: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
 class AgentPersona(Base):
     __tablename__ = "agent_personas"
 
