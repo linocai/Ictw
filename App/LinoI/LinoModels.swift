@@ -341,6 +341,29 @@ struct Violation: Codable, Hashable, Sendable {
     }
 }
 
+/// Additive per-failure context attached to a job's terminal `failed` phase
+/// (backend `job_runs.error_context`, populated only for `LLMError`-sourced
+/// failures). Old clients that never decode this key keep working off
+/// `errorMessage` alone; `LinoErrorPresenter` uses it to name the failing
+/// Agent/model and to surface the raw upstream/block reason verbatim.
+struct JobErrorContext: Codable, Sendable {
+    var agentRole: String?
+    var modelName: String?
+    var upstreamReason: String?
+    var finishReason: String?
+    var blockReason: String?
+    var httpStatus: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case agentRole = "agent_role"
+        case modelName = "model_name"
+        case upstreamReason = "upstream_reason"
+        case finishReason = "finish_reason"
+        case blockReason = "block_reason"
+        case httpStatus = "http_status"
+    }
+}
+
 /// Snapshot of a background write/extract job, returned by `POST /write`,
 /// `POST /accept` and polled via `GET /chapters/{id}/job`. There is no more
 /// SSE token stream — the client polls this endpoint until `phase` reaches a
@@ -352,6 +375,7 @@ struct WriteJobStatus: Codable, Sendable {
     var attempt: Int?
     var errorCode: String?
     var errorMessage: String?
+    var errorContext: JobErrorContext?
     var violations: [Violation]?
     var chapter: Chapter?
     var updatedCharacterIds: [String]?
@@ -362,6 +386,7 @@ struct WriteJobStatus: Codable, Sendable {
         case kind, phase, attempt
         case errorCode = "error_code"
         case errorMessage = "error_message"
+        case errorContext = "error_context"
         case violations, chapter
         case updatedCharacterIds = "updated_character_ids"
         case addedEventIds = "added_event_ids"

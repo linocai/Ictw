@@ -22,6 +22,7 @@
 		A00000000000000000000111 /* CharactersViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000131 /* CharactersViews.swift */; };
 		A00000000000000000000112 /* SettingsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000132 /* SettingsViews.swift */; };
 		A00000000000000000000113 /* ReadingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000133 /* ReadingViews.swift */; };
+		A00000000000000000000114 /* LinoErrorPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000134 /* LinoErrorPresenter.swift */; };
 		B00000000000000000000201 /* LinoStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000126 /* LinoStores.swift */; };
 		B00000000000000000000202 /* LinoAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000123 /* LinoAPI.swift */; };
 		B00000000000000000000203 /* LinoModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000122 /* LinoModels.swift */; };
@@ -47,6 +48,7 @@
 		B00000000000000000000227 /* MacReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000331 /* MacReaderView.swift */; };
 		B00000000000000000000228 /* MacCommandBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000332 /* MacCommandBus.swift */; };
 		B00000000000000000000229 /* MacSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000333 /* MacSettingsSheet.swift */; };
+		B00000000000000000000230 /* LinoErrorPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000134 /* LinoErrorPresenter.swift */; };
 		B00000000000000000000221 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000321 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -68,6 +70,7 @@
 		A00000000000000000000131 /* CharactersViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharactersViews.swift; sourceTree = "<group>"; };
 		A00000000000000000000132 /* SettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViews.swift; sourceTree = "<group>"; };
 		A00000000000000000000133 /* ReadingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingViews.swift; sourceTree = "<group>"; };
+		A00000000000000000000134 /* LinoErrorPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoErrorPresenter.swift; sourceTree = "<group>"; };
 		B00000000000000000000310 /* LinoIMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LinoIMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000311 /* LinoIMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoIMacApp.swift; sourceTree = "<group>"; };
 		B00000000000000000000312 /* MacShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShell.swift; sourceTree = "<group>"; };
@@ -136,6 +139,7 @@
 				A00000000000000000000131 /* CharactersViews.swift */,
 				A00000000000000000000132 /* SettingsViews.swift */,
 				A00000000000000000000133 /* ReadingViews.swift */,
+				A00000000000000000000134 /* LinoErrorPresenter.swift */,
 				A00000000000000000000012 /* Assets.xcassets */,
 				A00000000000000000000013 /* Info.plist */,
 			);
@@ -292,6 +296,7 @@
 				A00000000000000000000111 /* CharactersViews.swift in Sources */,
 				A00000000000000000000112 /* SettingsViews.swift in Sources */,
 				A00000000000000000000113 /* ReadingViews.swift in Sources */,
+				A00000000000000000000114 /* LinoErrorPresenter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -324,6 +329,7 @@
 				B00000000000000000000227 /* MacReaderView.swift in Sources */,
 				B00000000000000000000228 /* MacCommandBus.swift in Sources */,
 				B00000000000000000000229 /* MacSettingsSheet.swift in Sources */,
+				B00000000000000000000230 /* LinoErrorPresenter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -448,7 +454,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -458,7 +464,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.2;
+				MARKETING_VERSION = 1.2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -474,7 +480,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LinoI/Info.plist;
@@ -483,7 +489,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.2;
+				MARKETING_VERSION = 1.2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -500,7 +506,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -510,7 +516,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.2.2;
+				MARKETING_VERSION = 1.2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;
@@ -526,7 +532,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -536,7 +542,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.2.2;
+				MARKETING_VERSION = 1.2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;

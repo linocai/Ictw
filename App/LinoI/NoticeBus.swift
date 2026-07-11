@@ -22,22 +22,12 @@ final class NoticeBus: ObservableObject {
     }
 
     func publish(_ error: Error) {
-        if let apiError = error as? APIError {
-            publish(apiError.localizedDescription, critical: apiError.isUnauthorized)
-        } else {
-            publish(error.localizedDescription)
-        }
+        let presented = LinoErrorPresenter.present(error: error)
+        publish(presented.message, critical: presented.critical)
     }
 
     func dismiss() {
         current = nil
-    }
-}
-
-private extension APIError {
-    var isUnauthorized: Bool {
-        if case .http(let code, _) = self, code == 401 { return true }
-        return false
     }
 }
 

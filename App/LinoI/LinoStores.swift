@@ -671,7 +671,7 @@ final class ChapterEditorStore: ObservableObject {
                 guard !Task.isCancelled, pollingChapterId == chapterId else { return }
                 if !pollingErrorNotified {
                     pollingErrorNotified = true
-                    session.notices.publish("与服务器的连接暂时中断，正在自动重试。")
+                    session.notices.publish(LinoErrorPresenter.connectionInterrupted)
                 }
             }
             do {
@@ -717,14 +717,14 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     private func applyJobFailure(_ status: WriteJobStatus, chapterId: String) {
-        let message = status.errorMessage ?? "任务失败"
-        writingPhase = .failed(code: status.errorCode, message: message)
+        let presented = LinoErrorPresenter.present(jobFailure: status)
+        writingPhase = .failed(code: status.errorCode, message: presented.message)
         pendingExemptionNames = []
         if let violation = status.violations?.first(where: { $0.code == "unselected_character" }),
            let names = violation.names, !names.isEmpty {
             pendingExemptionNames = names
         }
-        session.notices.publish(message, critical: status.errorCode == "revision_failed")
+        session.notices.publish(presented.message, critical: presented.critical)
         Task { [weak self] in
             await self?.refreshChapterAfterFailure(chapterId)
         }
@@ -736,15 +736,16 @@ final class ChapterEditorStore: ObservableObject {
             return
         }
         pendingExemptionNames = []
+        let presented = LinoErrorPresenter.present(error: error)
         if let apiError = error as? APIError,
-           case let .validation(code, message, names) = apiError,
+           case let .validation(code, _, names) = apiError,
            code == "unselected_characters_in_bible" {
             pendingExemptionNames = names
-            writingPhase = .failed(code: code, message: message)
+            writingPhase = .failed(code: code, message: presented.message)
         } else {
-            writingPhase = .failed(code: nil, message: error.localizedDescription)
+            writingPhase = .failed(code: nil, message: presented.message)
         }
-        session.notices.publish(error)
+        session.notices.publish(presented.message, critical: presented.critical)
     }
 
     private func refreshChapterAfterFailure(_ chapterId: String) async {
