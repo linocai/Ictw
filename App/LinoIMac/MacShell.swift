@@ -1,96 +1,72 @@
 import SwiftUI
 
-/// 桌面外壳设计系统冒烟页（块②）。**块③会把本页整体替换**为真正的单窗
-/// 状态机（`session.token.isEmpty` → 连接配置 / 书架 / 工作台 + reader
-/// /settings overlay）。本页只用来肉眼验收玻璃材质、描边、hover、状态点
-/// 是否正常，不承载任何真实业务逻辑，也不读写任何 Store 的数据。
+/// 单窗状态机：`session.token.isEmpty` → 首启连接页；已连接但未开书 → 书架；
+/// 已开书 → 工作台。三栏工作台（块④）上线前，先用一块写明"工作台施工中"
+/// 的玻璃占位页顶上，保证"新建/打开/返回书架"这条链路本块就能整体跑通。
+/// Toast 常驻叠底部。阅读 overlay（块⑤，`MacReaderView` 全窗盖在最上层）与
+/// settings sheet（块⑤，由 `MacCommandBus.showSettings` 驱动）只留结构位，
+/// 本块不接线。
 struct MacShell: View {
-    @State private var previewEditSelection = "预览"
-    @State private var rightPanelTabSelection = "角色"
+    @EnvironmentObject private var session: AppSession
 
     var body: some View {
         ZStack {
             LinoTheme.background.ignoresSafeArea()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    header
-                    glassTiers
-                    controlsSection
-                    statusSection
+
+            Group {
+                if session.token.isEmpty {
+                    MacConnectionView(firstRun: true)
+                } else if session.currentBook == nil {
+                    MacBookshelfView()
+                } else {
+                    MacWorkspacePlaceholder()
                 }
-                .padding(32)
-                .frame(maxWidth: LinoMacMetrics.contentMaxWidth, alignment: .leading)
-                .frame(maxWidth: .infinity)
             }
+
+            // 块⑤: MacReaderView 全窗 overlay 叠在这一层之上，退出回工作台。
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottom) {
+            LinoIToast()
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
+        }
+        // 块⑤: .sheet(isPresented: $commandBus.showSettings) { MacSettingsSheet() }
+        //       内嵌 MacConnectionView(firstRun: false)，由 ⌘, 与右上 ⚙ 触发。
     }
+}
 
-    private var header: some View {
-        HStack(spacing: 14) {
-            LinoIAvatar(name: "L", size: 44, rounded: true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("LinoI for Mac · 设计系统冒烟页")
-                    .font(.system(size: 18, weight: .semibold))
+/// 块④三栏工作台上线前的占位页：确认已进入某本书、可以退回书架。不读写
+/// 章节/人物数据，也不预置任何块④会用到的状态。
+private struct MacWorkspacePlaceholder: View {
+    @EnvironmentObject private var session: AppSession
+
+    var body: some View {
+        VStack(spacing: 22) {
+            VStack(spacing: 12) {
+                Image(systemName: "hammer.fill")
+                    .font(.system(size: 32, weight: .light))
+                    .foregroundStyle(LinoTheme.faint)
+                Text("工作台施工中")
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(LinoTheme.ink)
-                Text("块③ 会把这页换成连接配置 / 书架 / 工作台状态机")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(LinoTheme.muted)
+                if let book = session.currentBook {
+                    Text("《\(book.title.isEmpty ? "未命名书籍" : book.title)》的三栏写作台将在块④上线。")
+                        .font(.system(size: 13))
+                        .foregroundStyle(LinoTheme.muted)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Spacer()
-            LinoMacConnectionChip()
-        }
-    }
-
-    private var glassTiers: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LinoISectionLabel("三档玻璃")
-            HStack(spacing: 14) {
-                tierLabel("Toolbar\n工具栏 · 最亮")
-                    .linoToolbarGlass(cornerRadius: LinoMacMetrics.cardRadius)
-                tierLabel("Sidebar\n侧栏 · 中等")
-                    .linoSidebarGlass(cornerRadius: LinoMacMetrics.cardRadius)
-                tierLabel("Panel\n内容面板 · 最透")
-                    .linoPanelGlass()
+            Button("返回书架") {
+                session.closeBook()
             }
+            .buttonStyle(LinoITintButtonStyle())
+            .onHover { pointer($0) }
         }
-    }
-
-    private func tierLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12.5, weight: .semibold))
-            .foregroundStyle(LinoTheme.ink)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .frame(height: 84)
-    }
-
-    private var controlsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LinoISectionLabel("图标钮 · 分段控件")
-            HStack(spacing: 14) {
-                LinoMacIconButton(systemName: "gearshape", help: "设置（普通）") {}
-                LinoMacIconButton(systemName: "trash", style: .danger, help: "删除（danger）") {}
-                LinoMacIconButton(systemName: "exclamationmark.triangle", style: .warning, help: "警告（warning）") {}
-                LinoMacSegmented(options: ["预览", "编辑"], label: { $0 }, selection: $previewEditSelection)
-                Spacer()
-            }
-            .padding(16)
-            .linoPanelGlass()
-        }
-    }
-
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LinoISectionLabel("状态徽标 · 右栏 Tab 分段")
-            HStack(spacing: 14) {
-                LinoIStatusPill(text: "已完成", status: "finalized")
-                LinoIStatusPill(text: "写作中", status: "writing")
-                LinoMacSegmented(options: ["角色", "书设定", "Agent"], label: { $0 }, selection: $rightPanelTabSelection)
-                Spacer()
-            }
-            .padding(16)
-            .linoPanelGlass()
-        }
+        .padding(40)
+        .frame(maxWidth: 420)
+        .linoPanelGlass(cornerRadius: LinoMacMetrics.cardRadius)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

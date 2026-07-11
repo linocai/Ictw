@@ -20,7 +20,7 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 - v1.1.1 已发版上线（绑定级 temperature）；Alembic head `20260711_0004`；后端 52 测试全绿。
 - v1.1.2 已发版上线（删章回滚人物动态字段，迁移 `20260711_0005`）；iOS 版本 1.1.2(4)。
 - v1.2.0 立项（2026-07-11）：新增 macOS App（target `LinoIMac`，Bundle `com.lino.linoi.mac`），功能与 iOS 完全对等；同一 `App/LinoI.xcodeproj` 手工加 macOS target，共享数据层，桌面三栏 UI 只借鉴 `Archive/LinoWritingV2` 的样式与交互结构（语义一律本项目为准）。不动后端。详见「当前 Plan」。
-- v1.2.0 块①②已完成（块①加 target、块②桌面玻璃设计系统与控件），块③书架＋首启连接待做。
+- v1.2.0 块①②③已完成（块①加 target、块②桌面玻璃设计系统与控件、块③书架＋首启连接），块④（三栏工作台）待做。
 
 ## 当前 Plan
 
@@ -150,8 +150,8 @@ xcodebuild -project App/LinoI.xcodeproj -scheme LinoI \
 ---
 
 **附录 A — iOS 功能对等 checklist（验收逐项勾）**
-1. [ ] 书架：书卡网格 + 新建书 + 删书确认 + 连接状态条
-2. [ ] 首启连接配置：baseURL + Bearer Token 存 Keychain
+1. [x] 书架：书卡网格 + 新建书 + 删书确认 + 连接状态条
+2. [x] 首启连接配置：baseURL + Bearer Token 存 Keychain
 3. [ ] 工作台入口四区可达：章节（左栏）/ 人物 / 设定 / Agent（右栏三 tab 覆盖后三者）
 4. [ ] 章节编辑①：标题 / 剧情 Bible / 目标字数 / 作者备注
 5. [ ] 章节编辑②：允许人物 chips，上限语义（被提及也算出现）
@@ -217,3 +217,4 @@ xcodebuild -project App/LinoI.xcodeproj -scheme LinoI \
 - 2026-07-11 v1.2.0 立项：macOS App（target LinoIMac，Bundle com.lino.linoi.mac）与 iOS 完全对等。五块施工——①加 macOS target + 共享层去 iOS 化（仅 LinoComponents.swift 4 处）②桌面玻璃设计系统与控件移植 ③书架＋首启连接 ④三栏工作台（章节编辑器三阶段＋右栏人物/设定/Agent，复用 ChapterEditorStore 轮询、macOS 前台无条件续查绕开 P2#3）⑤阅读模式（NSTextView 宋体两端对齐）＋⌘快捷键＋设置＋收尾。不改后端。施工 plan 见「当前 Plan」，完成后补发版记录并移入 archive/。
 - 2026-07-11 v1.2.0 块① 完成：手工改 project.pbxproj（objectVersion 71，Mac 侧对象用 B000… 段）新增 LinoIMac native target（application，SDKROOT=macosx、MACOSX_DEPLOYMENT_TARGET=26.0、Bundle com.lino.linoi.mac、沙盒 entitlements），7 个共享文件（LinoStores/LinoAPI/LinoModels/ChapterDraftCache/NoticeBus/LinoTheme/LinoComponents）各建新 PBXBuildFile 复用现有 fileRef 挂进 Mac Sources；新建 App/LinoIMac/（Info.plist、entitlements、Assets、LinoIMacApp @main、MacShell 占位）与共享 scheme LinoIMac.xcscheme。LinoComponents.swift 去 iOS 化 4 处（import UIKit→canImport、ActivityView→#if os(iOS)、textInputAutocapitalization/keyboardType→#if os(iOS)）。iOS 与 macOS 两 target 同抬 MARKETING_VERSION=1.2.0、CURRENT_PROJECT_VERSION=5。验收：macOS scheme LinoIMac build + iOS scheme LinoI 回归 build 双绿。
 - 2026-07-11 v1.2.0 块② 完成：新建 `App/LinoIMac/LinoMacTheme.swift`（`LinoMacMetrics` 度量常量 + `.linoToolbarGlass()`/`.linoSidebarGlass()`/`.linoPanelGlass()` 三档玻璃，`glassEffect(.regular,in:)` + 顶部 1px 高光 + 0.5px hairline 描边，色值一律经 `LinoTheme.hex`/`LinoTheme.page` 派生，未建平行色板）与 `LinoMacControls.swift`（`LinoMacIconButton` 34×34 玻璃图标钮支持 normal/danger/warning 三态 tint + hover 亮度 + `NSCursor.pointingHand` + help tooltip；`LinoMacSegmented<Option>` 泛型玻璃分段控件；`pointer(_:)` hover helper；`LinoMacConnectionChip` 三态连接点，探测=一次 `session.api.request("/books")`，2xx→已连接、401→Token 失效、其余→未连接，`.task(id:)` 随 baseURL/token 变化自动重探）。状态徽标直接复用共享 `LinoIStatusPill`，未新写。`MacShell.swift` 占位页换成设计系统冒烟页（三档玻璃卡 + 3 个 LinoMacIconButton + 2 个 LinoMacSegmented + 2 个 LinoIStatusPill + LinoMacConnectionChip），注释标明块③会整体替换。两个新文件挂进 pbxproj（B00000000000000000000213/214 build file、B00000000000000000000315/316 fileRef，沿用 B000… 段）。验收：macOS scheme LinoIMac build + iOS scheme LinoI 回归 build 双绿；本机 `open` 已编译的 .app 并用 computer-use 截图肉眼确认三档玻璃亮度差异化、danger/warning 图标钮 tint、hover 亮度变化 + help tooltip、分段控件选中态、状态徽标配色、连接点默认「未配置」态均正常。
+- 2026-07-11 v1.2.0 块③ 完成：`MacShell.swift` 补全为单窗状态机（`token.isEmpty`→`MacConnectionView(firstRun:true)`；`currentBook==nil`→`MacBookshelfView`；否则→占位工作台页「工作台施工中」+ 返回书架，块④会整体替换），底部叠 `LinoIToast`，reader/settings 留结构位注释。新建 `MacBookshelfView.swift`（居中容器 + header：kicker/大标题/新建作品主按钮/⚙占位钮/`LinoMacConnectionChip`+baseURL；`LazyVGrid(.adaptive(minimum:220))` 书卡+虚线新建卡；书卡 hover 上浮3px+阴影加深+手型，右键菜单打开/删除，删除 `confirmationDialog` 文案对齐 iOS；空态+首次加载 ProgressView；全部复用 `BookshelfStore`）、`MacNewBookSheet.swift`（固定尺寸 sheet，书名+创建，`createBook` 自带自动 open 无需额外调用）、`MacConnectionView.swift`（firstRun 与设置内嵌共用一张卡片，baseURL 等宽字段+Token 安全字段+保存并连接，Return 键可提交，真实反馈靠卡片内 `LinoMacConnectionChip` 探测）。三新文件挂 pbxproj（215-217 build file、317-319 fileRef，沿用 B000… 段）。**过程中意外发现并修复**：后端 SQLite 落库丢失时区标记，`updated_at` 实际是裸时间字符串（如 `2026-07-11T05:57:11.827494`，无 `Z`），若照搬 iOS `linoShortDate` 的纯 `ISO8601DateFormatter` 解析会稳定返回 nil——书卡相对时间会永远卡在"最近更新"退化态；`MacBookshelfView` 新增 `parseBackendTimestamp` 按 UTC 显式兜底解析裸时间戳（经 swift 脚本用真实后端响应验证），今天/昨天/N天前/M月d日四态均正确。验收：macOS/iOS 双 target build 绿，后端 57 测试绿；本地起 Backend（`alembic upgrade head` 补齐迁移）实测：Keychain 空→首启连接页渲染正确；错误 token 保存后正确路由到书架并显示「Token 失效」红点 + critical toast「unauthorized」（键盘输入触发，因电脑上无关背景 App 的全屏手势遮罩挡住了 computer-use 的点击判定，退化用 Tab+键入+Return 全键盘流验证，遮罩不影响截图/hover/键盘操作）；正确 token 下书架真实渲染 2 本种子书（含 hover 阴影变化）；书籍 CRUD（创建/列表/删除）直接对真实后端 curl 验证响应结构与 `Book` 模型字段一致；打开书→工作台占位页→返回书架的路由用临时 `#if DEBUG` 环境变量钩子复用真实 `open(_:)` 验证后已还原（git diff 确认 `LinoIMacApp.swift` 无残留）。测试书目与本机 UserDefaults/Keychain 测试态已清理干净。

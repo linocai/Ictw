@@ -33,6 +33,9 @@
 		B00000000000000000000212 /* MacShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000312 /* MacShell.swift */; };
 		B00000000000000000000213 /* LinoMacTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000315 /* LinoMacTheme.swift */; };
 		B00000000000000000000214 /* LinoMacControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000316 /* LinoMacControls.swift */; };
+		B00000000000000000000215 /* MacBookshelfView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000317 /* MacBookshelfView.swift */; };
+		B00000000000000000000216 /* MacNewBookSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000318 /* MacNewBookSheet.swift */; };
+		B00000000000000000000217 /* MacConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000319 /* MacConnectionView.swift */; };
 		B00000000000000000000221 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000321 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -61,6 +64,9 @@
 		B00000000000000000000314 /* LinoIMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LinoIMac.entitlements; sourceTree = "<group>"; };
 		B00000000000000000000315 /* LinoMacTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoMacTheme.swift; sourceTree = "<group>"; };
 		B00000000000000000000316 /* LinoMacControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoMacControls.swift; sourceTree = "<group>"; };
+		B00000000000000000000317 /* MacBookshelfView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBookshelfView.swift; sourceTree = "<group>"; };
+		B00000000000000000000318 /* MacNewBookSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNewBookSheet.swift; sourceTree = "<group>"; };
+		B00000000000000000000319 /* MacConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacConnectionView.swift; sourceTree = "<group>"; };
 		B00000000000000000000321 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -130,6 +136,9 @@
 				B00000000000000000000312 /* MacShell.swift */,
 				B00000000000000000000315 /* LinoMacTheme.swift */,
 				B00000000000000000000316 /* LinoMacControls.swift */,
+				B00000000000000000000317 /* MacBookshelfView.swift */,
+				B00000000000000000000318 /* MacNewBookSheet.swift */,
+				B00000000000000000000319 /* MacConnectionView.swift */,
 				B00000000000000000000321 /* Assets.xcassets */,
 				B00000000000000000000313 /* Info.plist */,
 				B00000000000000000000314 /* LinoIMac.entitlements */,
@@ -268,6 +277,9 @@
 				B00000000000000000000212 /* MacShell.swift in Sources */,
 				B00000000000000000000213 /* LinoMacTheme.swift in Sources */,
 				B00000000000000000000214 /* LinoMacControls.swift in Sources */,
+				B00000000000000000000215 /* MacBookshelfView.swift in Sources */,
+				B00000000000000000000216 /* MacNewBookSheet.swift in Sources */,
+				B00000000000000000000217 /* MacConnectionView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
