@@ -133,6 +133,7 @@ class AgentModelBinding(Base):
     llm_profile_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("llm_profiles.id", ondelete="SET NULL"))
     thinking_enabled: Mapped[bool | None] = mapped_column(nullable=True)
     reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    temperature: Mapped[float | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 

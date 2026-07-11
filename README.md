@@ -1,4 +1,4 @@
-# LinoI v1.1.0
+# LinoI v1.1.1
 
 LinoI 是一个个人小说写作工作台，由 SwiftUI iOS App 和 FastAPI 后端组成。写作流程为：
 

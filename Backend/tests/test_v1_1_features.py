@@ -314,8 +314,8 @@ def test_chapter_patch_summary_and_headline(client, auth_headers):
     assert patched["headline"] == "新大事"
 
 
-def test_health_reports_v1_1_0(client, auth_headers):
-    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.1.0"
+def test_health_reports_current_version(client, auth_headers):
+    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.1.1"
 
 
 # --- B8 migration from the production revision --------------------------------

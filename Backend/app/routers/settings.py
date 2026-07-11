@@ -21,6 +21,8 @@ from app.services.model_capabilities import (
     effective_binding_settings,
     resolve_capabilities,
     sanitized_settings,
+    sanitized_temperature,
+    temperature_sendable,
 )
 from app.services.personas import AGENT_ROLES, DEFAULT_PERSONAS
 
@@ -34,13 +36,17 @@ def _binding_response(binding: AgentModelBinding, db: Session) -> dict[str, obje
         profile.base_url if profile else None,
     )
     effective_thinking, effective_effort = effective_binding_settings(binding, profile)
+    adjustable = profile is not None and temperature_sendable(effective_thinking, capabilities)
     return {
         "agent_role": binding.agent_role,
         "llm_profile_id": binding.llm_profile_id,
         "thinking_enabled": binding.thinking_enabled,
         "reasoning_effort": binding.reasoning_effort,
+        "temperature": binding.temperature,
         "effective_thinking_enabled": effective_thinking,
         "effective_reasoning_effort": effective_effort,
+        "effective_temperature": sanitized_temperature(binding.temperature, effective_thinking, capabilities),
+        "temperature_adjustable": adjustable,
         "capabilities": capabilities.as_dict(),
         "updated_at": binding.updated_at,
     }
@@ -56,6 +62,9 @@ def _sanitize_profile_bindings(db: Session, profile: LLMProfile) -> None:
             binding.thinking_enabled,
             binding.reasoning_effort,
             capabilities,
+        )
+        binding.temperature = sanitized_temperature(
+            binding.temperature, binding.thinking_enabled, capabilities
         )
 
 
@@ -186,17 +195,34 @@ def patch_binding(agent_role: str, payload: AgentModelBindingPatch, db: Session 
         profile.base_url if profile else None,
     )
     thinking, effort = binding.thinking_enabled, binding.reasoning_effort
+    temperature = binding.temperature
     if "llm_profile_id" in fields:
         thinking, effort = sanitized_settings(thinking, effort, capabilities)
+        temperature = sanitized_temperature(temperature, thinking, capabilities)
     if "thinking_enabled" in fields:
         thinking = payload.thinking_enabled
         if thinking is not True and "reasoning_effort" not in fields:
             effort = None
     if "reasoning_effort" in fields:
         effort = payload.reasoning_effort
+    if "temperature" in fields:
+        temperature = payload.temperature
 
     if capabilities.family == "unknown" and (thinking is not None or effort is not None):
         raise HTTPException(status_code=422, detail="此模型未声明可调思考参数")
+    # Only an explicit temperature in this request is rejected; a carried-over
+    # value is silently sanitized away below (mirrors effort clearing).
+    if temperature is not None and "temperature" in fields:
+        if not (0.0 <= temperature <= 2.0):
+            raise HTTPException(status_code=422, detail="temperature 需在 0.0～2.0 之间")
+        effective_thinking = True if capabilities.thinking_required else thinking
+        if not temperature_sendable(effective_thinking, capabilities):
+            detail = (
+                "此模型不支持调整 temperature"
+                if capabilities.thinking_required
+                else "关闭思考后才能调整 temperature"
+            )
+            raise HTTPException(status_code=422, detail=detail)
     if capabilities.thinking_required and thinking is False:
         raise HTTPException(status_code=422, detail="此模型的思考模式不能关闭")
     if effort is not None and effort not in capabilities.reasoning_effort_levels:
@@ -213,6 +239,7 @@ def patch_binding(agent_role: str, payload: AgentModelBindingPatch, db: Session 
         effort,
         capabilities,
     )
+    binding.temperature = sanitized_temperature(temperature, binding.thinking_enabled, capabilities)
     db.commit()
     db.refresh(binding)
     return _binding_response(binding, db)

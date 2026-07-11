@@ -19,6 +19,7 @@ class OpenAICompatibleClient:
         model_name: str,
         thinking_enabled: bool | None = None,
         reasoning_effort: str | None = None,
+        temperature_override: float | None = None,
         capability_family: str = "unknown",
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -26,6 +27,7 @@ class OpenAICompatibleClient:
         self.model_name = model_name
         self.thinking_enabled = thinking_enabled
         self.reasoning_effort = reasoning_effort
+        self.temperature_override = temperature_override
         self.capability_family = capability_family
         self.last_finish_reason: str | None = None
         self.last_usage: dict[str, Any] | None = None
@@ -143,6 +145,10 @@ class OpenAICompatibleClient:
         for key in ("temperature", "max_tokens", "response_format"):
             if kwargs.get(key) is not None:
                 payload[key] = kwargs[key]
+        # A user-configured binding temperature beats the per-agent default; the
+        # family rules below still drop it whenever thinking makes it inert.
+        if self.temperature_override is not None:
+            payload["temperature"] = self.temperature_override
         if self.capability_family == "deepseek_v4" and self.thinking_enabled is not None:
             payload["thinking"] = {"type": "enabled" if self.thinking_enabled else "disabled"}
             if self.thinking_enabled:

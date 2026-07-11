@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import Base, make_engine
+from app.llm.openai_compatible import OpenAICompatibleClient
 from app.models import AgentModelBinding, LLMProfile
-from app.routers.settings import patch_binding, patch_profile
+from app.routers.settings import _sanitize_profile_bindings, patch_binding, patch_profile
 from app.schemas.settings import AgentModelBindingPatch, LLMProfilePatch
 from app.services.model_capabilities import resolve_capabilities
 
@@ -199,3 +200,108 @@ def test_v1_migration_preserves_notes_bindings_and_child_rows(tmp_path, monkeypa
         ).scalar_one() == "lp"
         assert migrated.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
     get_settings.cache_clear()
+
+
+def _binding_db(tmp_path, model_name: str, **binding_kwargs):
+    engine = make_engine(f"sqlite:///{tmp_path / f'temp-{model_name}.db'}")
+    Base.metadata.create_all(engine)
+    db = Session(engine)
+    profile = LLMProfile(
+        id="profile",
+        name="P",
+        provider="openai-compatible",
+        base_url="https://api.example",
+        api_key_encrypted="unused",
+        model_name=model_name,
+    )
+    db.add(profile)
+    db.commit()
+    db.add(AgentModelBinding(agent_role="writer", llm_profile_id="profile", **binding_kwargs))
+    db.commit()
+    return db
+
+
+def test_temperature_adjustable_and_persisted_when_thinking_off(tmp_path) -> None:
+    with _binding_db(tmp_path, "deepseek-v4-pro", thinking_enabled=False) as db:
+        response = patch_binding("writer", AgentModelBindingPatch(temperature=1.3), db)
+        assert response["temperature"] == 1.3
+        assert response["effective_temperature"] == 1.3
+        assert response["temperature_adjustable"] is True
+
+
+def test_temperature_rejected_while_thinking_on_and_cleared_by_enabling(tmp_path) -> None:
+    with _binding_db(tmp_path, "deepseek-v4-pro", thinking_enabled=True) as db:
+        with pytest.raises(HTTPException) as blocked:
+            patch_binding("writer", AgentModelBindingPatch(temperature=0.9), db)
+        assert blocked.value.status_code == 422
+
+        patch_binding("writer", AgentModelBindingPatch(thinking_enabled=False), db)
+        patch_binding("writer", AgentModelBindingPatch(temperature=0.9), db)
+        # Turning thinking back on clears the stored temperature.
+        response = patch_binding("writer", AgentModelBindingPatch(thinking_enabled=True), db)
+        assert response["temperature"] is None
+        assert response["temperature_adjustable"] is False
+
+
+def test_temperature_rejected_for_locked_thinking_and_out_of_range(tmp_path) -> None:
+    with _binding_db(tmp_path, "gemini-3.5-flash") as db:
+        with pytest.raises(HTTPException) as blocked:
+            patch_binding("writer", AgentModelBindingPatch(temperature=0.7), db)
+        assert blocked.value.status_code == 422
+        assert db.get(AgentModelBinding, "writer").temperature is None
+    with _binding_db(tmp_path, "custom-model") as db:
+        with pytest.raises(HTTPException) as out_of_range:
+            patch_binding("writer", AgentModelBindingPatch(temperature=2.5), db)
+        assert out_of_range.value.status_code == 422
+        response = patch_binding("writer", AgentModelBindingPatch(temperature=0.4), db)
+        assert response["temperature"] == 0.4
+        assert response["temperature_adjustable"] is True
+
+
+def test_temperature_override_reaches_payload_only_when_sendable() -> None:
+    deepseek_off = OpenAICompatibleClient(
+        base_url="https://example.invalid/v1",
+        api_key="secret",
+        model_name="deepseek-v4-pro",
+        thinking_enabled=False,
+        temperature_override=1.1,
+        capability_family="deepseek_v4",
+    )
+    assert deepseek_off._payload(system="s", user="u", stream=False, temperature=0.7)["temperature"] == 1.1
+
+    deepseek_on = OpenAICompatibleClient(
+        base_url="https://example.invalid/v1",
+        api_key="secret",
+        model_name="deepseek-v4-pro",
+        thinking_enabled=True,
+        temperature_override=1.1,
+        capability_family="deepseek_v4",
+    )
+    assert "temperature" not in deepseek_on._payload(system="s", user="u", stream=False, temperature=0.7)
+
+    gemini = OpenAICompatibleClient(
+        base_url="https://example.invalid/v1",
+        api_key="secret",
+        model_name="gemini-3.5-flash",
+        temperature_override=1.1,
+        capability_family="gemini_3_5_flash",
+    )
+    assert "temperature" not in gemini._payload(system="s", user="u", stream=False, temperature=0.7)
+
+    unknown = OpenAICompatibleClient(
+        base_url="https://example.invalid/v1",
+        api_key="secret",
+        model_name="custom",
+        temperature_override=0.3,
+        capability_family="unknown",
+    )
+    assert unknown._payload(system="s", user="u", stream=False, temperature=0.7)["temperature"] == 0.3
+
+
+def test_model_change_to_gemini_clears_temperature(tmp_path) -> None:
+    with _binding_db(tmp_path, "deepseek-v4-pro", thinking_enabled=False, temperature=1.2) as db:
+        profile = db.get(LLMProfile, "profile")
+        profile.model_name = "gemini-3.5-flash"
+        _sanitize_profile_bindings(db, profile)
+        db.commit()
+        assert db.get(AgentModelBinding, "writer").temperature is None

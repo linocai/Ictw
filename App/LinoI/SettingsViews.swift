@@ -92,6 +92,7 @@ struct LinoIAgentSettingsPane: View {
 
 private struct LinoIAgentBindingCard: View {
     @EnvironmentObject private var agents: AgentSettingsStore
+    @State private var temperatureDraft: Double?
 
     let role: String
 
@@ -142,6 +143,37 @@ private struct LinoIAgentBindingCard: View {
                 .disabled(!canChooseEffort)
             }
 
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Temperature")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(LinoTheme.body)
+                    Spacer()
+                    Text(temperatureValueLabel)
+                        .font(.footnote.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(canAdjustTemperature ? LinoTheme.accentDeep : LinoTheme.faint)
+                    if binding?.temperature != nil {
+                        Button("默认") {
+                            temperatureDraft = nil
+                            Task { await agents.configureTemperature(role: role, temperature: nil) }
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(LinoTheme.accentDeep)
+                    }
+                }
+                Slider(
+                    value: temperatureSelection,
+                    in: 0.0...2.0,
+                    step: 0.05
+                ) { editing in
+                    if !editing {
+                        Task { await agents.configureTemperature(role: role, temperature: temperatureDraft) }
+                    }
+                }
+                .disabled(!canAdjustTemperature)
+            }
+
             Text(capabilityDescription)
                 .font(.caption2)
                 .foregroundStyle(LinoTheme.muted)
@@ -149,6 +181,9 @@ private struct LinoIAgentBindingCard: View {
         }
         .padding(12)
         .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onChange(of: binding?.temperature) { _, _ in
+            temperatureDraft = nil
+        }
     }
 
     private var binding: AgentBinding? {
@@ -170,6 +205,24 @@ private struct LinoIAgentBindingCard: View {
         capabilities.thinkingToggleSupported &&
         capabilities.thinkingCanDisable &&
         !capabilities.thinkingRequired
+    }
+
+    private var canAdjustTemperature: Bool {
+        binding?.llmProfileId != nil && (binding?.temperatureAdjustable ?? false)
+    }
+
+    private var temperatureValueLabel: String {
+        if let value = temperatureDraft ?? binding?.temperature {
+            return String(format: "%.2f", value)
+        }
+        return "模型默认"
+    }
+
+    private var temperatureSelection: Binding<Double> {
+        Binding(
+            get: { temperatureDraft ?? binding?.temperature ?? 0.7 },
+            set: { temperatureDraft = ($0 * 100).rounded() / 100 }
+        )
     }
 
     private var canChooseEffort: Bool {

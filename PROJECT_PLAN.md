@@ -58,3 +58,4 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 - 2026-07-10 v1.1.0 施工完成并验证：后端 45 测试全绿、iOS xcodebuild 通过、前后端契约交叉检查通过、本地全新建库迁移链 + API 冒烟通过；iOS 版本抬到 1.1.0(2)。本机新生成部署密钥并完成服务器授权与主机键核验（见 hk_info.md）。
 - 2026-07-11 快修上线：Memory Selector 返回非法/截断记忆 ID 不再导致整次写作失败（跳过 + 唯一前缀救回 + Prompt 加固，commit 5ff703b）；真机实报 bug，当日修复部署。
 - 2026-07-11 独立 review 完成：无 P0/P1，7 条 P2。当日修掉 P2#1（memory selector 对非数组/非串 memory_ids 降级为过滤/空选择，不再炸写作）与 P2#2（CLAUDE.md 字数区间订正为 80%~120%）；其余 P2 归入 Backlog 技术债。
+- 2026-07-11 v1.1.1 发版：AgentModelBinding 新增 temperature 设置（迁移 20260711_0004）。语义=「请求实际会携带 temperature 才可调」：DeepSeek 关思考时可调、未知模型恒可调、Gemini 恒锁；开思考自动清 temperature（与关思考清 effort 对称）；范围 0.0~2.0。iOS 绑定卡新增滑杆 + 模型默认复位，按 temperature_adjustable 置灰；版本 1.1.1(3)。

@@ -7,7 +7,11 @@ from app.db import get_db
 from app.llm.openai_compatible import OpenAICompatibleClient
 from app.models import AgentModelBinding, LLMProfile
 from app.services.crypto import decrypt_secret
-from app.services.model_capabilities import effective_binding_settings, resolve_capabilities
+from app.services.model_capabilities import (
+    effective_binding_settings,
+    resolve_capabilities,
+    sanitized_temperature,
+)
 
 
 def build_llm_client(db: Session, agent_role: str) -> OpenAICompatibleClient:
@@ -25,6 +29,7 @@ def build_llm_client(db: Session, agent_role: str) -> OpenAICompatibleClient:
         model_name=profile.model_name,
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
+        temperature_override=sanitized_temperature(binding.temperature, thinking_enabled, capabilities),
         capability_family=capabilities.family,
     )
 

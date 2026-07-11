@@ -247,8 +247,11 @@ struct AgentBinding: Codable, Identifiable, Hashable, Sendable {
     var llmProfileId: String?
     var thinkingEnabled: Bool?
     var reasoningEffort: String?
+    var temperature: Double?
     var effectiveThinkingEnabled: Bool?
     var effectiveReasoningEffort: String?
+    var effectiveTemperature: Double?
+    var temperatureAdjustable: Bool
     var capabilities: ModelCapabilities
 
     enum CodingKeys: String, CodingKey {
@@ -256,8 +259,11 @@ struct AgentBinding: Codable, Identifiable, Hashable, Sendable {
         case llmProfileId = "llm_profile_id"
         case thinkingEnabled = "thinking_enabled"
         case reasoningEffort = "reasoning_effort"
+        case temperature
         case effectiveThinkingEnabled = "effective_thinking_enabled"
         case effectiveReasoningEffort = "effective_reasoning_effort"
+        case effectiveTemperature = "effective_temperature"
+        case temperatureAdjustable = "temperature_adjustable"
         case capabilities
     }
 
@@ -267,8 +273,11 @@ struct AgentBinding: Codable, Identifiable, Hashable, Sendable {
         llmProfileId = try container.decodeIfPresent(String.self, forKey: .llmProfileId)
         thinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled)
         reasoningEffort = try container.decodeIfPresent(String.self, forKey: .reasoningEffort)
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
         effectiveThinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .effectiveThinkingEnabled)
         effectiveReasoningEffort = try container.decodeIfPresent(String.self, forKey: .effectiveReasoningEffort)
+        effectiveTemperature = try container.decodeIfPresent(Double.self, forKey: .effectiveTemperature)
+        temperatureAdjustable = try container.decodeIfPresent(Bool.self, forKey: .temperatureAdjustable) ?? false
         capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities) ?? .unsupported
     }
 }

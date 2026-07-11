@@ -100,3 +100,27 @@ def effective_binding_settings(
     if capabilities.thinking_required:
         thinking = True
     return thinking, effort
+
+
+def temperature_sendable(thinking_enabled: bool | None, capabilities: ModelCapabilities) -> bool:
+    """Whether a request in this state would actually carry a temperature value.
+
+    Mirrors OpenAICompatibleClient._payload: gemini always drops temperature,
+    deepseek drops it only while thinking is explicitly enabled, and every other
+    family (including unknown) passes it through.
+    """
+    if capabilities.family == "gemini_3_5_flash":
+        return False
+    if capabilities.family == "deepseek_v4" and thinking_enabled is True:
+        return False
+    return True
+
+
+def sanitized_temperature(
+    temperature: float | None,
+    thinking_enabled: bool | None,
+    capabilities: ModelCapabilities,
+) -> float | None:
+    if temperature is None:
+        return None
+    return temperature if temperature_sendable(thinking_enabled, capabilities) else None

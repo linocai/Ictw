@@ -48,8 +48,11 @@ class AgentModelBindingRead(ORMModel):
     llm_profile_id: str | None
     thinking_enabled: bool | None
     reasoning_effort: str | None
+    temperature: float | None
     effective_thinking_enabled: bool | None
     effective_reasoning_effort: str | None
+    effective_temperature: float | None
+    temperature_adjustable: bool
     capabilities: "ModelCapabilitiesRead"
     updated_at: datetime
 
@@ -58,6 +61,7 @@ class AgentModelBindingPatch(BaseModel):
     llm_profile_id: str | None = None
     thinking_enabled: bool | None = None
     reasoning_effort: str | None = None
+    temperature: float | None = None
 
 
 class ModelCapabilitiesRead(BaseModel):

@@ -805,7 +805,8 @@ final class AgentSettingsStore: ObservableObject {
             let payload = AgentBindingPayload(
                 llmProfileId: profileId,
                 thinkingEnabled: nil,
-                reasoningEffort: nil
+                reasoningEffort: nil,
+                temperature: nil
             )
             let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload)
             if let idx = bindings.firstIndex(where: { $0.agentRole == role }) {
@@ -824,7 +825,28 @@ final class AgentSettingsStore: ObservableObject {
             let payload = AgentBindingPayload(
                 llmProfileId: current.llmProfileId,
                 thinkingEnabled: enabled,
-                reasoningEffort: enabled == false ? nil : effort
+                reasoningEffort: enabled == false ? nil : effort,
+                temperature: enabled == true ? nil : current.temperature
+            )
+            let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload)
+            if let idx = bindings.firstIndex(where: { $0.agentRole == role }) {
+                bindings[idx] = binding
+            } else {
+                bindings.append(binding)
+            }
+        } catch {
+            session.notices.publish(error)
+        }
+    }
+
+    func configureTemperature(role: String, temperature: Double?) async {
+        guard let current = bindings.first(where: { $0.agentRole == role }) else { return }
+        do {
+            let payload = AgentBindingPayload(
+                llmProfileId: current.llmProfileId,
+                thinkingEnabled: current.thinkingEnabled,
+                reasoningEffort: current.reasoningEffort,
+                temperature: temperature
             )
             let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload)
             if let idx = bindings.firstIndex(where: { $0.agentRole == role }) {
@@ -974,11 +996,13 @@ private struct AgentBindingPayload: Encodable, Sendable {
     let llmProfileId: String?
     let thinkingEnabled: Bool?
     let reasoningEffort: String?
+    let temperature: Double?
 
     enum CodingKeys: String, CodingKey {
         case llmProfileId = "llm_profile_id"
         case thinkingEnabled = "thinking_enabled"
         case reasoningEffort = "reasoning_effort"
+        case temperature
     }
 
     func encode(to encoder: Encoder) throws {
@@ -986,6 +1010,7 @@ private struct AgentBindingPayload: Encodable, Sendable {
         try container.encode(llmProfileId, forKey: .llmProfileId)
         try container.encode(thinkingEnabled, forKey: .thinkingEnabled)
         try container.encode(reasoningEffort, forKey: .reasoningEffort)
+        try container.encode(temperature, forKey: .temperature)
     }
 }
 
