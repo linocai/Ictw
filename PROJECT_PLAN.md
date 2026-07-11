@@ -14,168 +14,101 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 
 ## 当前状态（2026-07-11）
 
-- v1.0.0 已发版上线，云端健康检查正常；Alembic head `20260710_0002`。
-- 线上数据：2 本书、23 章、11 个人物；仓库从 https://github.com/linocai/Ictw 克隆。
-- 后端 31 个测试全绿（本地新克隆验证过）；`chapter_style` 兼容窗口仍开着（本轮不收口）。
-- v1.1.1 已发版上线（绑定级 temperature）；Alembic head `20260711_0004`；后端 52 测试全绿。
-- v1.1.2 已发版上线（删章回滚人物动态字段，迁移 `20260711_0005`）；iOS 版本 1.1.2(4)。
-- v1.2.0 立项（2026-07-11）：新增 macOS App（target `LinoIMac`，Bundle `com.lino.linoi.mac`），功能与 iOS 完全对等；同一 `App/LinoI.xcodeproj` 手工加 macOS target，共享数据层，桌面三栏 UI 只借鉴 `Archive/LinoWritingV2` 的样式与交互结构（语义一律本项目为准）。不动后端。详见「当前 Plan」。
-- v1.2.0 块①②③④⑤全部完成（块⑤：阅读模式 NSTextView 宋体两端对齐＋三主题整窗变色、⌘快捷键（⌘,/⌘N/⌘⇧N）经 MacCommandBus 派发、设置 sheet、macOS AppIcon）。双 target 编译绿、后端 55 测试绿、附录 A 21 项全勾。**待用户在真机 Xcode 签名 + 生产 token 下做最终验收（附录 B）**，验收通过后再将「当前 Plan」移入 archive/ 并补发版记录。
+- 线上生产运行中：iOS + macOS（ICTW）双端并用；后端 Alembic head `20260711_0005`、55 测试全绿（v1.2.x 均未碰后端）。
+- 版本轨迹：v1.0.0 / v1.1.0 / v1.1.1 / v1.1.2 均已发版。v1.2.0（macOS App 与 iOS 完全对等）五块施工全部完工并已在生产真实使用，视为验收通过，施工全文（含附录 A/B）已移入 `archive/v1.2.0施工plan.md`。
+- v1.2.1（后端裸时间串解析统一收口 `String.linoBackendDate`）、v1.2.2（Mac 端每次激活重复弹旧失败 Toast）两个快修已单独发版并各有变更日志记录；当前双 target 版本 `1.2.2(7)`。
+- `chapter_style` 兼容窗口仍开着（本轮不收口）。
+- v1.2.3 立项（2026-07-11）：全链路报错「一眼定位」——环节 + 模型 + 上游具体原因 + 建议动作，全中文呈现，iOS/macOS 同步发版。详见「当前 Plan」。
 
 ## 当前 Plan
 
-### v1.2.0 — macOS App（与 iOS 完全对等）
+### v1.2.3 — 报错「一眼定位」（iOS + macOS 同步发版）
 
-**目标**：在同一 `App/LinoI.xcodeproj` 内新增原生 SwiftUI macOS target，复用现有数据层与写作链，桌面端做三栏工作台 + 沉浸阅读。硬约束：**iOS 有的功能 macOS 必须都有**（对等清单见附录 A）；**iOS 回归不破坏**；**不改后端**（双端并发 409 是已知 P2，Mac 端只做友好呈现，不接管任务）。
+**目标**：所有报错让用户一眼定位——`{环节}`（哪个 Agent，还是 App↔后端本身）+ `{模型}` + `{上游具体原因}` + `{建议动作}`，全中文呈现。不改写作链语义，纯做错误的采集 → 透传 → 呈现增强。两端同抬 `1.2.3(8)`。
 
-**技术选型（定死，不留给 build 决定）**
-- 单工程双 target：新 target `LinoIMac`，产物 `LinoIMac.app`，Bundle ID `com.lino.linoi.mac`，`SDKROOT=macosx`、`MACOSX_DEPLOYMENT_TARGET=26.0`、`SWIFT_VERSION=6.0`、`DEVELOPMENT_TEAM=HX73DFL88G`、`CODE_SIGN_STYLE=Automatic`、`ENABLE_HARDENED_RUNTIME=YES`、`GENERATE_INFOPLIST_FILE=NO`。手工改 `project.pbxproj`（objectVersion 71，沿用现有友好 ID 风格，Mac 侧用 `B00000000000000000000xxx` 段），不引入 xcodegen。
-- 沙盒 entitlements：`com.apple.security.app-sandbox` + `com.apple.security.network.client` + `com.apple.security.files.user-selected.read-write`（导出存盘用）。
-- macOS 桌面 UI 全部**新写**（三栏、自绘标题栏、hover、⌘ 快捷键、NSTextView 阅读排版），只从 `Archive/LinoWritingV2/App/LinoWriting/` 借样式与布局结构；iOS 的 14 个 View 文件不复用到 Mac，也不改动其行为。
-- 生成流程：**复用 `ChapterEditorStore` 轮询状态机**（`GET /chapters/{id}/job` 每 2.5s，`WritingPhase` 状态机），**不做假打字机**；后端非流式，正文只在 `phase==done` 落 `draftText`，写作中只显示 phase pill + spinner + 上一版预览（与 iOS 一致）。
-- 版本：iOS 与 macOS 两 target 同抬 `MARKETING_VERSION=1.2.0`、`CURRENT_PROJECT_VERSION=5`（共享层动过，iOS 需重编回归，故一并升版）。
-
-**共享边界（唯一权威分类）**
-- **双端编译（7 个文件，`App/LinoI/` 原地，同时挂进两个 target 的 Sources）**：`LinoStores.swift`、`LinoAPI.swift`、`LinoModels.swift`、`ChapterDraftCache.swift`、`NoticeBus.swift`（含 `LinoIToast`，跨平台）、`LinoTheme.swift`（`glassEffect` 在 macOS 26 可用）、`LinoComponents.swift`（去 iOS 化后共享，见块①）。核对结论：前 6 个已零 iOS 依赖，只有 `LinoComponents.swift` 有 4 处 iOS API 需处理。
-- **iOS-only（留在 LinoI target，不进 Mac target，无需改）**：`LinoIApp.swift`、`ShelfViews.swift`、`WorkspaceViews.swift`、`ChapterEditorViews.swift`、`CharactersViews.swift`、`SettingsViews.swift`、`ReadingViews.swift`。它们的 iOS-only modifier（`navigationBarTitleDisplayMode`/`presentationDetents`/`.topBarTrailing` 等）因不在 Mac target 编译，**一律不用动**。
-- **macOS-only（新建，仅进 Mac target，放 `App/LinoIMac/`）**：见各块新文件清单。
+**硬约束（照铁律，逐条对齐）**
+- 不落正文、不落 API Key：上游错误只按白名单摘 `error.message`/`error.code`/`error.type`，截断 ≤200 字符，绝不保留整个 body。
+- 分类不得伪装：`llm_content_blocked`（内容过滤）保持独立 code + 独立文案，不混进普通失败；`blockReason`/`finishReason` 分类保留。
+- 后端自身 4xx 的 `detail`（`code`/`message`/`details`）**wire 兼容**，既有 code 枚举一个不改，只做 additive（新增字段老客户端忽略、新客户端才读）。
+- 生产表结构只走 `alembic upgrade head`；发版前先备份云端 `linoi.db`（hk_info.md §13）。
 
 ---
 
-#### 块① pbxproj 加 target + 共享层去 iOS 化 + 双 target 编译通过
+#### 块 A — 后端：错误上下文采集与透传（additive，小改）
 
-**改现有文件**
-- `App/LinoI/LinoComponents.swift`（4 处，最小改动）：
-  1. 顶部 `import UIKit`（L2）→ `#if canImport(UIKit)\nimport UIKit\n#endif`。
-  2. `ActivityView`（L197–207，`UIViewControllerRepresentable`）整体包 `#if os(iOS)`（Mac 导出改走块④的 `MacExportSaver`）。
-  3. `LinoISecureField` 的 `.textInputAutocapitalization(.never)`（L102）包 `#if os(iOS)`（`.autocorrectionDisabled()` 跨平台，保留）。
-  4. `LinoINumberField` 的 `.keyboardType(.numberPad)`（L123）包 `#if os(iOS)`。
-- `App/LinoI.xcodeproj/project.pbxproj`（手写）：
-  - 新增 `PBXGroup "LinoIMac"`（指向 `App/LinoIMac/`）。
-  - 新增 `PBXNativeTarget "LinoIMac"`（productType application），自带 Sources / Frameworks / Resources 三个 build phase。
-  - Mac 的 Sources phase：为 **7 个共享文件各建一个新的 `PBXBuildFile`**（复用同一 fileRef，新 uuid）挂入；再挂 Mac-only 新文件（块①–⑤陆续加）。
-  - 新增 `LinoIMac` 的 Debug/Release `XCBuildConfiguration` 与 `XCConfigurationList`；关键 buildSettings：`SDKROOT=macosx`、`MACOSX_DEPLOYMENT_TARGET=26.0`、`PRODUCT_BUNDLE_IDENTIFIER=com.lino.linoi.mac`、`MARKETING_VERSION=1.2.0`、`CURRENT_PROJECT_VERSION=5`、`INFOPLIST_FILE=LinoIMac/Info.plist`、`CODE_SIGN_ENTITLEMENTS=LinoIMac/LinoIMac.entitlements`、`CODE_SIGN_STYLE=Automatic`、`DEVELOPMENT_TEAM=HX73DFL88G`、`ENABLE_HARDENED_RUNTIME=YES`、`GENERATE_INFOPLIST_FILE=NO`、`SWIFT_VERSION=6.0`、`ASSETCATALOG_COMPILER_APPICON_NAME=AppIcon`、`SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG`（Debug）。
-  - 在 `PBXProject.targets` 与 `TargetAttributes` 注册新 target；iOS 两个 config 的 `MARKETING_VERSION` 改 `1.2.0`、`CURRENT_PROJECT_VERSION` 改 `5`。
-  - 在 `App/LinoI.xcodeproj/xcshareddata/xcschemes/` 建共享 scheme `LinoIMac.xcscheme`（xcodebuild 按名字找 scheme）。
+**改 `Backend/app/llm/base.py`**
+- `LLMError` 增三个可选字段：`agent_role: str | None`、`model_name: str | None`、`upstream_reason: str | None`（`status_code` 即 http_status 已有；`finish_reason`/`block_reason` 已有）。`safe_details()` 追加这三项（非 None 才带）。
 
-**新文件（`App/LinoIMac/`）**
-- `Info.plist`（`CFBundleDisplayName=LinoI`、`LSMinimumSystemVersion=$(MACOSX_DEPLOYMENT_TARGET)`、`NSPrincipalClass=NSApplication`、`ITSAppUsesNonExemptEncryption=false`）。
-- `LinoIMac.entitlements`（上述三项沙盒）。
-- `Assets.xcassets`（macOS `AppIcon` 图标集，可由现有 1024 生成；`AccentColor` 复用色值）。
-- `LinoIMacApp.swift`：`@main`，与 `LinoIApp` 一样用 `init()` 建 `NoticeBus/AppSession/BookshelfStore/WorkspaceStore/CharactersStore/ChapterEditorStore/AgentSettingsStore` 并注入；再注入 macOS-only 的 `MacCommandBus`（块⑤）。`WindowGroup { MacShell() }` + `.frame(minWidth:1080,minHeight:720)` + `.windowStyle(.hiddenTitleBar)` + `.windowResizability(.contentMinSize)` + `.task { await session.bootstrap(); await bookshelf.load() }`。本块先放一个占位 `MacShell`（只显示一块玻璃面板），后续块替换。commands 块⑤补。
-- `MacShell.swift`：占位版（块③补全状态机）。
+**改 `Backend/app/llm/openai_compatible.py`**
+- 扩 `_safe_provider_reasons(body)`：在现有 `finish_reason`/`block_reason` 之外，从 body 顶层 `error` 对象**只**取 `message`/`code`/`type` 三键，拼成一行 `upstream_reason`，`strip` 后**截断 ≤200 字符**；`error` 非 dict / 缺失 → None。**白名单外一律不取**（尤其防 `error.metadata`/`error.param` 及任何回显的 prompt/messages）。返回值扩为 `(finish_reason, block_reason, upstream_reason)`。
+- `_http_error(...)`：把 `upstream_reason` 塞进返回的 `LLMError`。
+- Gemini 形状说明：本项目 LLM 统一走 OpenAI-compatible 网关，错误体即 `{"error":{...}}`，白名单直接命中；Gemini 原生 `promptFeedback.blockReason` 已由现有 `_extract_content` / 流式路径单独走 `llm_content_blocked`，**不重复摘、不改**。
 
-**关键决策**：`LinoComponents.swift` 提升为第 7 个共享文件（iOS 设计系统直接复用到 Mac，视觉统一）；`ActivityView` 仅 iOS 编译，Mac 用 save panel。Keychain service 仍是 `LinoI`——iOS 与 Mac 是不同沙盒容器，**不共享 token**，Mac 需各自配一次连接（预期行为，附录 B 注明）。
+**改 `Backend/app/services/write_jobs.py`**
+- 四个 agent 调用点（`_run_memory_selector`/`_run_writer`/`_run_reviser` 及 `_run_extract_job` 的 extractor 调用）在各自 `except LLMError as exc:` 里、audit 之后 re-raise 之前，盖章 `exc.agent_role = "<role>"`（memory_selector/writer/reviser/extractor）、`exc.model_name = getattr(client, "model_name", None)`。
+- `record_job_phase(...)` 增可选 `error_context` 参数，写入 `run.error_context`。
+- `_run_job` / `_run_extract_job` 顶层 `except LLMError as exc:`：构造 `error_context = {agent_role, model_name, http_status(=exc.status_code), upstream_reason, finish_reason, block_reason}`（去 None），随 `record_job_phase(..., "failed", error_code=exc.code, error_message=str(exc), error_context=...)` 落库。非 LLMError 兜底（`write_failed`/`extract_failed`）`error_context` 可为空。
+- `_record_llm(...)` 错误路径把 `exc.upstream_reason` 传给审计（见下）。
 
-**验收**：两条命令都要过。
-```
-# macOS 新 target 编译通过
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-xcodebuild -project App/LinoI.xcodeproj -scheme LinoIMac \
-  -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
-# iOS 回归编译通过（去 iOS 化不破坏 iOS）
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-xcodebuild -project App/LinoI.xcodeproj -scheme LinoI \
-  -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
-```
+**改 `Backend/app/services/audit.py`**：`record_llm_call` 增可选 `upstream_reason` 参数并写入。
+
+**改 `Backend/app/models/entities.py`**：`JobRun` 增 `error_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)`；`LLMCallAudit` 增 `upstream_reason: Mapped[str | None] = mapped_column(Text, nullable=True)`（审计仅离线排查用）。
+
+**改 `Backend/app/schemas/chapter.py` + `Backend/app/routers/chapters.py`**：`WriteJobStatus` 增可选 `error_context: dict | None = None`；`_job_status_from_run` 把 `run.error_context` 带进响应（failed 时必带）。这是 additive——老 iOS 客户端忽略未知键、走既有 `error_message`；新客户端读 `error_context`。
+
+**新迁移 `Backend/alembic/versions/20260711_0006_error_context.py`**（`down_revision="20260711_0005"`，命名规范照旧）：`job_runs.error_context`(JSON, nullable) + `llm_call_audits.upstream_reason`(Text, nullable)，两列均 nullable/additive。
+
+**可选小增益（同一白名单复用，低风险、建议做）**：`Backend/app/routers/settings.py` 的 `test_profile` 把 `client.test_connection()` 包 `try/except LLMError` → `HTTPException(status_code=502, detail={"code": exc.code, "message": str(exc), "details": exc.safe_details()})`，否则「测」按钮的上游失败当前是裸 500，呈现器兜底但信息弱。时间紧可移 Backlog。
+
+**测试（`Backend/tests/`，铁律=能程序校验的必须写测试）**
+- 白名单：构造 400 body 含 `error.message`+`error.code`+`error.type` **以及**额外 `error.metadata.prompt` / 顶层 `messages` 回显，断言 `LLMError.upstream_reason` 只含前三者、长度 ≤200、绝不含任何回显子串。
+- 失败 job 落库：mock 上游 400 跑 `_run_job`，断言 `job_runs.error_context` 含 agent_role/model_name/http_status/upstream_reason，且 `GET /chapters/{id}/job` 带出 `error_context`；`error_code` 分类正确（`llm_upstream_rejected`）；内容过滤场景 `llm_content_blocked` 不被伪装。
+- 审计列：断言失败调用 `llm_call_audits.upstream_reason` 落值，正文/key 不落。
+
+**验收**：`cd Backend && .venv/bin/python -m pytest -q` 全绿（现 55 + 新增）。
 
 ---
 
-#### 块② 设计系统与组件移植（桌面玻璃 + 交互控件）
+#### 块 B — 客户端共享呈现器（一处改双端生效）
 
-**新文件（`App/LinoIMac/`，全部 macOS-only）**
-- `LinoMacTheme.swift`：port `LWMetrics` → `LinoMacMetrics`（`sidebarWidth 258`、`rightPanelWidth 326`、`contentMaxWidth 720`、`shelfMaxWidth 1080`、窗口 min `1080×720`、default `1280×840`、`cardRadius 14`、`controlRadius 10`、hairline `rgba(40,45,70,0.10)`）。View 扩展 `.linoToolbarGlass()`/`.linoSidebarGlass()`/`.linoPanelGlass()`（port `LiquidGlass.swift` 的 `glassEffect(.regular,in:)` + 顶部 1px 高光 + 0.5px 描边），色值取 `LinoTheme`。
-- `LinoMacControls.swift`：`LinoMacIconButton`（hover 变 `NSCursor.pointingHand`、可设 size/fontSize/help）、`LinoMacSegmented`（玻璃分段控件，供右栏 tab / 正文预览-编辑切换）、`pointer(_:)` hover helper、`LinoMacConnectionChip`（连接状态点：未配置/已连接/未连接，探测方式=一次 `session.api.request("/books")`，2xx→已连接、401→token 失效、transport error→未连接；复用现有授权调用，不假设 health 路径）。
-- 状态徽标复用共享 `LinoIStatusPill`（已含 `numericText` 动画，无需再 port 老项目 StatusBadge）。
+**新文件 `App/LinoI/LinoErrorPresenter.swift`（挂 iOS + macOS 双 target）**：纯函数 + 映射表，输出 `(message: String, critical: Bool)`。
 
-**关键决策**：桌面「工具栏/侧栏/面板」三档玻璃亮度差异化（对齐老项目 lwToolbar/lwSidebar/lwPanel），但底座是共享 `LinoTheme` 色，避免依赖 macOS-only 主题文件（老项目 CLAUDE.md 的跨平台色值坑）。
+**共享模型（改 `App/LinoI/LinoModels.swift`，双端）**：`WriteJobStatus` 增可选 `errorContext: JobErrorContext?`（CodingKey `error_context`）；新增 `struct JobErrorContext: Codable, Sendable`（字段 `agentRole/modelName/upstreamReason/finishReason/blockReason: String?`、`httpStatus: Int?`，snake_case CodingKeys）。
 
-**验收**：`LinoIMacApp` 临时页放几个 `LinoMacIconButton`/分段控件/三档玻璃面板 + 一个 `LinoIStatusPill`，`xcodebuild -scheme LinoIMac ... build` 通过，Xcode 预览或 Run 起来玻璃/描边/hover 正常。
+**Code → 中文映射（原因 + 建议动作），全枚举后端 code（发版前 grep 全仓 `code=` 与 HTTPException `detail` 核对，勿漏）**：
+- LLM/上游（Agent 环节）：`llm_upstream_rejected`、`llm_rate_limited`、`llm_upstream_unavailable`、`llm_content_blocked`、`llm_empty_candidate`、`llm_invalid_response`、`llm_transport`、`llm_upstream_error`。
+- 写作链/后端：`revision_failed`、`write_failed`、`extract_failed`、`chapter_missing`、`interrupted`。
+- 预检/并发（409 结构化）：`chapter_finalized`、`write_running`、`unselected_characters_in_bible`、`ambiguous_character_name`。
+- violations 明细 code（拼进 detail）：`unselected_character`、`ambiguous_character`、`word_count`、`empty_body`、`length_truncated`。
+- 纯串 detail：`unauthorized`(401)；404 串 `book/chapter/character/profile/agent role/character event not found`；409 串 `chapter has no draft text`；422 设置串（已中文，原样透传）。
+- APIError 本地 case：`notConfigured`/`badURL`/`transport`/`http(code, body)`/`validation(code, message, names)`。
 
----
+**环节映射**：`agentRole` 存在→ memory_selector=「选记忆」/ writer=「写正文」/ reviser=「修订」/ extractor=「提取归档」；否则→「App↔后端」。
 
-#### 块③ 书架 + 首启连接配置
+**模板**：`{环节}（{模型}）{原因中文}：{upstreamReason 原文}——{建议动作} [code]`。缺字段就省略对应段（无 model 去括号、无 upstreamReason 去冒号段）。`upstreamReason` 英文原文**不翻译**。未知 code → 兜底显示原始 message + `[code]`，**不吞信息**。`llm_content_blocked` / `blockReason` → 独立文案「内容被安全策略拦截…」且 `critical=true`，不伪装成普通失败；`revision_failed`、`unauthorized` 亦置 `critical`。
 
-**新文件（`App/LinoIMac/`）**
-- `MacShell.swift`（补全）：单窗状态机 ZStack——`session.token.isEmpty` → `MacConnectionView(firstRun:true)`；否则 `session.currentBook == nil` → `MacBookshelfView`；否则 `MacWorkspaceView`（块④）。reader overlay（块⑤）叠在 ZStack 顶层；settings sheet（块⑤）由 `MacCommandBus.showSettings` 驱动。底部叠共享 `LinoIToast`。
-- `MacBookshelfView.swift`：书卡网格（`LinoTheme.coverGradient(book.id)`、hover 上浮 3px、书名/章数/人物数/相对时间）、"新建书"虚线卡、顶部连接状态条（`LinoMacConnectionChip` + baseURL）、右上 ⚙（开 settings）。删除：`contextMenu` + `confirmationDialog`（macOS 可用）。复用 `BookshelfStore.load/createBook/open/delete`。
-- `MacNewBookSheet.swift`：`LinoITextField` 书名 + 创建（`bookshelf.createBook` 后自动 `open`）。
-- `MacConnectionView.swift`：首启 + ⌘, 连接段共用——baseURL（`LinoITextField`）+ token（`LinoISecureField`）+ 保存（`session.baseURL/token` → `session.saveConnection()` → `bookshelf.load()`）。首启态多一句引导文案。
+**接线（各路径接入呈现器）**
+- `App/LinoI/LinoStores.swift`：`applyJobFailure` 改用 `present(jobFailure: status)`（吃 `errorContext` + `violations` 的 `names`）；`applyStartFailure` 及其余 `session.notices.publish(error)` 走 `present(error:)`；`runPolling` 的「连接暂时中断」话术保留并归拢为呈现器常量。
+- `App/LinoI/NoticeBus.swift`：`publish(_ error:)` 改调呈现器（含 critical 判定，取代现有 `isUnauthorized` 私有扩展）。
+- App 自产中文文案（如「请先选择重新编辑本章…」「已恢复本地草稿」）过一遍，统一口径。
+- iOS 与 macOS 消费**同一**呈现器（`NoticeBus`/`LinoIToast` 已双端共享，`MacShell` 底部已叠 Toast）。
 
-**验收**：token 空→首启连接页；填 baseURL+token 保存→书架列出线上书；新建/打开/删除（含确认）均生效；`xcodebuild -scheme LinoIMac` 与 iOS 回归双绿。
+**版本**：双 target `MARKETING_VERSION=1.2.3`、`CURRENT_PROJECT_VERSION=8`（project.pbxproj 4 处 config）。
 
----
-
-#### 块④ 三栏工作台（章节编辑器三阶段 + 右栏 人物/设定/Agent）
-
-**新文件（`App/LinoIMac/`）**
-- `MacWorkspaceView.swift`：`GeometryReader` reflow——`≥1100` 三栏并列；`800–1100` 右栏收成工具栏切换的抽屉；`<800` 左侧栏也收抽屉。自绘标题栏（46 高 `.linoToolbarGlass` + `.hiddenTitleBar` 已在 App 层保证不被原生栏压洗）：左「写作台」logo chip（点回书架）、居中书名、右侧 `LinoMacConnectionChip` + ⚙ + 抽屉开关。body row：`MacChapterSidebar | MacChapterEditor | MacRightPanel`。选中章节用本视图 `@State selectedChapterId`（不动共享 store），变化时 `await editor.load(summary)`。
-- `MacChapterSidebar.swift`：章节列表（序号封面块 + 标题 + `LinoIStatusPill`），顶部"新建章节"（`workspace.createChapter`，⌘⇧N）。复用 `WorkspaceStore.chapters`。
-- `MacChapterEditor.swift`：三阶段——① 标题/剧情 Bible/目标字数/作者备注（`LinoITextField`/`LinoIEditor`/`LinoINumberField`）；② 允许人物 chips（`FlowLayout` + 选中态，文案写明"选择=允许出现上限，被提及也算出现"）；③ 正文（`LinoMacSegmented` 预览/编辑，`LinoIDraftPreview`）+ 生成/停止/接受/重开 + 豁免重试 prompt + 导入正文 sheet + 字数（`editor.draftCharCount`，去空白）+ status/phase 双 pill。Extractor 结果段（headline `LinoITextField` + summary `LinoIEditor`，可编辑保存）。删除本章（menu + `confirmationDialog`，finalized 与 draft 两套文案照 iOS）。"阅读"按钮 → 开 reader overlay。**全部复用** `ChapterEditorStore` 的 `generate/accept/cancelWriting/reopen/exemptAndRetry/importDraft/save`，不新增写作逻辑。
-- `MacRightPanel.swift`：`LinoMacSegmented` 三 tab = 角色 / 书设定 / Agent。
-  - `MacCharacterTab.swift`：人物 chips 横向选择 + 选中卡（姓名/身份/固定设定可编辑；动态字段只读；故事线 events 单条增/改/删）+ 新建/导入人物卡 + 删除人物。复用 `CharactersStore` 全套。
-  - `MacBookSettingsTab.swift`：书名 + 世界观 editor + 保存（`workspace.saveBook`）+ 导出全书 `.txt`（走 `MacExportSaver`）。
-  - `MacAgentTab.swift`：LLM Profiles（增/改/删/测）+ Agent 绑定（模型 Picker / 启用思考 Toggle / 思考强度 Picker / temperature 滑杆 0–2，按 `temperatureAdjustable` 置灰，同 iOS 的 capability 语义）+ Agent 人格（编辑/恢复默认）。复用 `AgentSettingsStore` 全套。
-- `MacExportSaver.swift`：`NSSavePanel` 存 `.txt`（替代 iOS `ActivityView`），数据取 `session.api.rawRequest("/books/{id}/export.txt")`。
-
-**关键决策**：右栏三 tab 直接满足任务要求的「人物/设定/Agent」；书设定里的导出、Agent 里的模型/人格全部到位，功能对等不靠 ⌘, 兜底（⌘, 只放连接）。并发 409（`write_running` 等）：`applyStartFailure` 已把结构化错误经 `NoticeBus` 弹 Toast——Mac 端只需保证不崩、把消息呈现出来，不接管已有任务（对齐 iOS P2#5）。
-
-**前台/启动恢复轮询（重点，绕开 iOS P2#3 同类坑）**
-- iOS 靠 `scenePhase.active → handleScenePhaseActive()`，但该方法有 `status==writing/extracting` 的前置守卫，本会话内启动的任务因本地 `status` 不刷新而漏网（Backlog P2#3）。
-- macOS **不复制这个守卫**：在 `ChapterEditorStore` 新增 macOS 专用方法 `func refreshActiveJobIfNeeded()`——若有 `currentChapter` 且当前非 active，则**无条件**发一次 `jobStatus(chapterId:)`，`applyJobStatus` 后若非终态就 `pollJob`。此方法**只被 macOS 调用**（iOS 行为零变化，无回归）。
-- `MacWorkspaceView` 用 `.onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))`（`import AppKit`）触发它；切换侧栏选中章节时 `editor.load` 已自带 stale-poll 收尾，无需额外处理。
-
-**验收**：三栏渲染 + 三档 reflow 随窗宽切换；对真实后端跑通 生成→轮询→待接受→接受→提取→已完成 全链；停止/重开/豁免重试生效；字数=去空白；删章文案正确；右栏三 tab 全功能；把 App 切后台再切回，写作中任务能自动续查（不靠冷启动）；`xcodebuild -scheme LinoIMac` 与 iOS 回归双绿。
+**验收**：iOS `LinoI` + macOS `LinoIMac` 双 target `xcodebuild ... build` 双绿。
 
 ---
 
-#### 块⑤ 阅读模式 + 设置 + 快捷键 + 收尾验证
+#### 块 C — 发版（后端 + 双端）
 
-**新文件（`App/LinoIMac/`）**
-- `MacReaderView.swift`：全窗 overlay 阅读页。正文用 `NSTextView`（`NSViewRepresentable`）宋体两端对齐——`firstLineHeadIndent = fontSize*2`、`lineHeightMultiple = 2.05`、`paragraphSpacing = fontSize*1.5`（port 老 `ReaderView` 的 `ReaderBodyText`，macOS 稳定可搬）。字号 `@AppStorage` 阶梯 `[18,19,20,21,23]` A−/A+（≥ iOS 三档，属超集，允许）；相邻 **finalized** 章 in-place 翻页（按 id 重载）；退出回编辑态。三主题（day/sepia/night 整窗变色，port `ReadingTheme`）作为附带 polish 一并搬。
-- `MacSettingsSheet.swift`：⌘, 打开的 sheet，内嵌 `MacConnectionView(firstRun:false)`（连接段）。首启连接与它共用 `MacConnectionView`。
-- `MacCommandBus.swift`：macOS-only `ObservableObject`（`showNewBook`/`showNewChapter`/`showSettings` 三个 `@Published`）；`LinoIMacApp` 注入，`MacShell`/`MacBookshelfView`/`MacChapterSidebar` 监听触发对应 sheet/动作。避免动共享 store。
-- `LinoIMacApp.swift`（补 commands）：`.commands { CommandGroup(replacing: .appSettings){ 设置... ⌘, } ; CommandGroup(replacing: .newItem){ 新建书 ⌘N ; 新建章节 ⌘⇧N（`currentBook==nil` 时 disabled） } }`。
+- **后端发版**（命令见 hk_info.md；**SSH 读写生产需用户在场授权，本步会先请求授权**）：备份生产 `linoi.db`（§13）→ `git pull` → `alembic upgrade head`（到 `20260711_0006`）→ 重启 `linoi-backend.service` → 健康检查。
+- **门禁（缺一不发）**：后端 `pytest -q` 全绿 + iOS/macOS 双 target build 绿。
+- **App**：macOS Release 重装 `/Applications/ICTW.app`（用 `ditto`，绝不 cp -R）；iOS 真机安装留给用户（见附录）。
+- **验收（本地，绝不碰生产库）**：起本地 Backend + mock 上游造一个 400（带 `error.message`）→ App 里看到完整中文定位文案（环节 + 模型 + 原因 + 上游原文 + 建议 + code）；另各验一条——断连（`transport`）、401（`unauthorized`）、内容过滤（`llm_content_blocked`，独立文案不伪装）。
 
-**关键决策**：`.windowStyle(.hiddenTitleBar)` 必须保留（老项目坑：不隐藏则原生工具栏压洗自绘标题栏）。`LWTextArea` 夺焦那类坑本期用共享 `LinoIEditor`（SwiftUI `TextEditor`）规避，不 port 老的 AppKit 文本域。
-
-**验收**：finalized 章进阅读页宋体两端对齐正确、字号持久化、相邻 finalized 翻页、退出回编辑；⌘N/⌘⇧N/⌘, 均生效且 ⌘⇧N 无书时禁用；窗口 min 1080×720、自绘标题栏不被压洗；critical Toast 常驻；**附录 A 对等清单逐项勾**；最终 `xcodebuild -scheme LinoIMac` 与 iOS 回归双绿；连真实后端手测主流程通。
-
----
-
-**版本与变更日志占位**
-- 两 target `MARKETING_VERSION=1.2.0`、`CURRENT_PROJECT_VERSION=5`。
-- 收尾后在「变更日志」补一条 v1.2.0 发版记录（macOS 上线 + iOS 随共享层改动重编），本 plan 移入 `archive/v1.2.0施工plan.md`。
-
----
-
-**附录 A — iOS 功能对等 checklist（验收逐项勾）**
-1. [x] 书架：书卡网格 + 新建书 + 删书确认 + 连接状态条
-2. [x] 首启连接配置：baseURL + Bearer Token 存 Keychain
-3. [x] 工作台入口四区可达：章节（左栏）/ 人物 / 设定 / Agent（右栏三 tab 覆盖后三者）
-4. [x] 章节编辑①：标题 / 剧情 Bible / 目标字数 / 作者备注
-5. [x] 章节编辑②：允许人物 chips，上限语义（被提及也算出现）
-6. [x] 章节编辑③：正文 预览/编辑 + 生成 / 停止 / 接受 / 重开
-7. [x] 豁免重试（未授权人物 → 本章豁免并重试）
-8. [x] 导入正文
-9. [x] Extractor 结果：headline / summary 可编辑保存
-10. [x] 删除章节：finalized 与 draft 两套确认文案
-11. [x] 人物卡：固定设定可编辑 / 动态字段只读 / 故事线 events 单条改/删（数据层无新增事件接口，与 iOS 一致）
-12. [x] 新建人物 + 导入人物卡 + 删除人物
-13. [x] 书设定：书名 / 世界观 / 导出全书 .txt（NSSavePanel）
-14. [x] 设置-连接：baseURL / token（⌘, 或右栏）
-15. [x] LLM Profile：增 / 删 / 改 / 测
-16. [x] AgentModelBinding：模型 Picker / 思考 Toggle / 强度 Picker / temperature 滑杆 0–2 按 `temperature_adjustable` 置灰
-17. [x] Agent 人格：编辑 / 恢复默认
-18. [x] 阅读模式：宋体 + 字号档位 AppStorage + 相邻 finalized 翻页
-19. [x] Toast：critical 常驻可手动关
-20. [x] 本地草稿缓存自动生效（`ChapterDraftCache`）
-21. [x] 写作状态机：selectingMemory/writing/revising(attempt)/extracting/failed 呈现 + 字数=去空白 + 前台恢复轮询
-
-**附录 B — 用户手动操作清单（Xcode GUI / 网页，agent 办不了）**
-- 首次为新 Bundle ID 签名：Xcode 选 `LinoIMac` target → Signing & Capabilities → 确认 Automatic + Team `HX73DFL88G`，让 Xcode 生成 macOS 开发签名；若自动失败，去 https://developer.apple.com/account/resources/identifiers/list 确认/注册 App ID `com.lino.linoi.mac`。
-- 首次运行：Keychain 访问弹窗点「始终允许」（app 读写 service=`LinoI` 的 token；Mac 与 iOS 沙盒隔离，需在 Mac 上**重新填一次** baseURL + Bearer Token）。
-- 分发（Developer ID / 公证）不在本期范围；本期只需本机 Run + 双 target xcodebuild 编译通过。
+**附录 — 用户手动清单（agent 办不了）**
+- iOS 真机安装：Xcode 选 `LinoI` target 连真机 Run（生产 token 已在设备 Keychain）。
+- macOS：`/Applications/ICTW.app` 重装后若首次启动被 Gatekeeper 拦，右键「打开」放行一次。
 
 ## Backlog
 
@@ -223,3 +156,7 @@ xcodebuild -project App/LinoI.xcodeproj -scheme LinoI \
 - 2026-07-11 v1.2.1 快修：后端裸时间串（SQLite 落库丢时区标记）解析统一收口到共享 `String.linoBackendDate`（LinoModels.swift，裸串按 UTC 解释，保留标准 ISO8601 分支）。修复 iOS 书卡相对时间因解析恒失败永远显示「最近更新」兜底（块③施工时发现的同源 bug）；同类隐患 `ChapterDraftCache.parseRemoteDate` 一并修复——此前「远端更新则放弃本地草稿」的比较因解析失败恒短路为保留本地，双端并用后此判断开始要紧；Mac 端删除私有重复实现 `parseBackendTimestamp` 改调共享层。独立 swift 脚本验证六种时间串形态（裸串带/不带小数、带 Z、带偏移、垃圾串）+ 双 target 构建绿；版本双 target 同抬 1.2.1(6)。
 - 2026-07-11 v1.2.2 快修：Mac 端 App 每次激活重复弹旧失败 Toast——`refreshActiveJobIfNeeded` 对终态 job 无条件 `applyJobStatus`，而失败 job 永远是「最新」，每次前台激活都重新 publish 失败通知。修复为：非终态照旧续轮询（保留 P2#3 绕坑）；终态仅当本地章节 status 仍为 writing/extracting（后台错过的收尾）才应用。iOS 零改动；双 target 构建绿，版本 1.2.2(7)，/Applications/ICTW.app 已重装。真实诱因（LLM 上游 400，llm_upstream_rejected）待查生产审计表定位是哪个 Agent/模型。
 - 2026-07-11 macOS 首次本机安装：产品名改 ICTW（PRODUCT_NAME + CFBundleDisplayName，Bundle ID 不变仍 com.lino.linoi.mac，图标即块⑤由 iOS 1024 生成的同款）；Release 构建自动签名（开发证书，hardened runtime）通过 codesign 校验，`ditto` 安装到 /Applications/ICTW.app 并启动验证。
+- 2026-07-11 v1.2.0 发版：macOS App（target `LinoIMac`，Bundle `com.lino.linoi.mac`，产品名/展示名 ICTW）上线，与 iOS 完全对等（附录 A 21 项全过）；iOS 随共享层改动重编回归。五块施工——①加 macOS target + 共享层去 iOS 化 ②桌面玻璃设计系统与控件 ③书架+首启连接 ④三栏工作台（复用 ChapterEditorStore 轮询、macOS 前台无条件续查绕开 P2#3）⑤阅读模式 NSTextView 宋体两端对齐+⌘快捷键+设置。不改后端。用户已在生产真实使用，视为验收通过；施工全文（含附录 A/B）移入 `archive/v1.2.0施工plan.md`。（v1.2.1 后端裸时间串收口、v1.2.2 Mac 重复弹旧失败 Toast 两个快修已单独有记录。）
+- 2026-07-11 v1.2.3 立项：全链路报错「一眼定位」（环节+模型+上游原因+建议动作全中文，iOS/macOS 同步发版）。块 A 后端 additive——上游错误按白名单摘 `error.message/code/type`（≤200 字符，不落正文/key）、`LLMError`/失败 job 补 `error_context`（agent_role/model_name/http_status/upstream_reason，含 `job_runs.error_context` 与 `GET /job` 透传）、迁移 20260711_0006 加 `job_runs.error_context` + `llm_call_audits.upstream_reason`，4xx wire 兼容不改既有 code；块 B 新建共享 `LinoErrorPresenter`（全枚举后端 code + APIError 本地 case → 中文，模板 `{环节}（{模型}）{原因}：{upstream_reason}——{建议} [code]`，内容过滤不伪装）接入 applyJobFailure/applyStartFailure/runPolling/NoticeBus，双 target 抬 1.2.3(8)；块 C 备份→迁移→重启发版（SSH 需授权）。
+- 2026-07-11 v1.2.3 块A 完成（commit `96d84dd`）：后端错误上下文采集与透传，全 additive，照 plan 逐条落地无偏离。`LLMError` 增 `agent_role`/`model_name`/`upstream_reason` 三个可选字段（`safe_details()` 同步收录）；新增 `openai_compatible._safe_upstream_reason` 白名单，只摘 body 顶层 `error.message`/`code`/`type` 三键、strip 后拼一行截断 ≤200 字符，`error.metadata`/`error.param`/顶层 `messages` 回显一律不取，Gemini 原生 `promptFeedback.blockReason` 路径不重复改；`write_jobs.py` 四个 agent 调用点（memory_selector/writer/reviser/extractor）在各自 `except LLMError` 里先审计再盖章 `agent_role`/`model_name` 后 re-raise，`_run_job`/`_run_extract_job` 顶层捕获时用新 `_error_context()` 组装（agent_role/model_name/http_status/upstream_reason/finish_reason/block_reason，去 None）随 `record_job_phase` 落 `job_runs.error_context`；`record_llm_call` 同步落 `llm_call_audits.upstream_reason`（离线排查用，正文/key 均不落）。`WriteJobStatus`/`GET /chapters/{id}/job` additive 带出 `error_context`，老客户端忽略不受影响；`chapter_style` 等既有 code 枚举一个未改。顺手做了 plan 里的可选小增益：`POST /llm_profiles/{id}/test` 的上游 `LLMError` 包成结构化 502（`{code,message,details}`），不再是裸 500。新迁移 `20260711_0006`（`job_runs.error_context` JSON + `llm_call_audits.upstream_reason` Text，均 nullable）。测试新增 6 条——白名单防回显+截断+缺失分支 3 条（test_v1_pipeline.py）、失败 job 落库+`GET /job` 透传+`llm_content_blocked` 不被伪装 2 条（test_api.py）、审计列落值不落密钥 1 条（test_v1_1_features.py）；后端 61 测试全绿（55 现有 + 6 新增）。本地新建库 `alembic upgrade head` 验证迁移链完整到 `20260711_0006`，并额外做了 downgrade→re-upgrade 往返验证，无 FK 问题。只 stage/commit 了 Backend/ 12 个文件，`PROJECT_PLAN.md` 本行为追加写入、未碰其他行。下一步：块 B（客户端共享呈现器）、块 C（发版）。
+- 2026-07-11 v1.2.3 块B 完成：新建共享 `App/LinoI/LinoErrorPresenter.swift`（挂 iOS+macOS 双 target），纯函数 `present(jobFailure:)`/`present(error:)` 输出 `(message, critical)`。全枚举后端 code 建静态「原因+建议」表——发版前 grep 复核时额外发现 plan 清单遗漏的 `bible_empty`（`validate_character_preflight` 的 409 结构化 code）一并补上；模板严格照 `{环节}（{模型}）{原因}：{upstreamReason 原文}——{建议} [code]`，任意缺段整段省略；`upstreamReason`/`blockReason` 原文不翻译；`llm_content_blocked`/`revision_failed`/`unauthorized`（401 纯串合成的本地 code）固定 critical=true 不伪装成普通失败；`revision_failed` 额外从 `violations` 里的 `unselected_character.names` 拼出具体未获准人物名，而非停在「未通过程序校验」的空泛提示。APIError 本地 case 分别处理：404 已知名词（book/chapter/character/profile/agent role/character event）→中文名词、409 `chapter has no draft text`→专门文案、422 settings 校验串（已中文）原样透传不重复包装、`.transport`/`.notConfigured`/`.badURL` 各自处理。`LinoModels.swift` 新增 `JobErrorContext`（snake_case CodingKeys，纯 additive）+ `WriteJobStatus.errorContext`。接线：`NoticeBus.publish(_ error:)` 改调呈现器并删掉原 `isUnauthorized` 私有扩展，全仓 33 处既有 `session.notices.publish(error)` 调用点零改动自动获得新文案（单一收口，未逐个改）；`LinoStores.applyJobFailure`/`applyStartFailure` 改用呈现器结果同时驱动 toast 与 `writingPhase.failed` 的 message；`runPolling` 断连话术收进 `LinoErrorPresenter.connectionInterrupted` 常量。pbxproj 两 target 各加一条新 PBXBuildFile（iOS `A0000…0114`、Mac `B0000…0230`）共享同一新 fileRef `A0000…0134`，双 target 版本同抬 `1.2.3(8)`（4 处 config：MARKETING_VERSION 1.2.2→1.2.3、CURRENT_PROJECT_VERSION 7→8）。验收：iOS `LinoI`（iphonesimulator）+ macOS `LinoIMac`（platform=macOS）双 target `xcodebuild build` 各自独立全量重跑均 `BUILD SUCCEEDED`、日志 `error:` 计数 0；呈现器是纯函数，未接后端联调（块 A 虽已完成但块 C 才做端到端），改用 `swiftc` 直接编译真实源文件（`LinoModels.swift`+`LinoAPI.swift`+`LinoErrorPresenter.swift`）配一个临时 driver 跑 14 组场景断言——LLM 上游拒绝/内容过滤(critical+blockReason 原文)/revision_failed 人名拼接/write_failed 无 upstream 兜底/未知 code 兜底(保留环节+model+原始 message+`[code]`，唯独不编建议)/401/两种已知 404/409/422 透传/两种 409 结构化 validation(含 bible_empty)/未知 validation code/transport/notConfigured·badURL，全过后删除临时文件与二进制，未留残留。只 stage/commit App/ 本块文件，不碰 Backend/、不碰生产；PROJECT_PLAN.md 本行追加写入、未改其他行。下一步：块 C（发版，SSH 需用户在场授权）。
