@@ -93,6 +93,8 @@ class WriteJobStatus(BaseModel):
     attempt: int | None = None
     error_code: str | None = None
     error_message: str | None = None
+    # Additive: old iOS clients ignore this and keep reading error_message.
+    error_context: dict | None = None
     violations: list[dict] | None = None
     chapter: ChapterRead | None = None
     updated_character_ids: list[str] | None = None

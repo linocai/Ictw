@@ -170,6 +170,7 @@ class JobRun(Base):
     attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     violations: Mapped[list | None] = mapped_column(JSON, nullable=True)
     updated_character_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     added_event_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
@@ -191,6 +192,8 @@ class LLMCallAudit(Base):
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     finish_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Offline-troubleshooting only; already whitelist-extracted, never a raw body.
+    upstream_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     chapter_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

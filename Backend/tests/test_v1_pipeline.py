@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -107,6 +109,56 @@ def test_provider_reasons_are_preserved_without_exposing_body():
     assert error.finish_reason == "SAFETY"
     assert error.block_reason == "PROHIBITED_CONTENT"
     assert "PROHIBITED_CONTENT" not in str(error)
+
+
+def test_upstream_reason_whitelists_message_code_type_and_drops_echoes():
+    body = json.dumps(
+        {
+            "error": {
+                "message": "上游拒绝了请求：内容不符合规范",
+                "code": "invalid_request_error",
+                "type": "invalid_request_error_type",
+                # Neither of these whitelist-adjacent keys may leak through.
+                "metadata": {"prompt": "PROMPT_ECHO_MARKER 完整提示词回显内容"},
+                "param": "temperature",
+            },
+            # A top-level echo of the request, as some providers return on 4xx.
+            "messages": [{"role": "user", "content": "MESSAGES_ECHO_MARKER 完整用户消息回显内容"}],
+        }
+    ).encode("utf-8")
+    error = _http_error(400, {}, body)
+    assert error.code == "llm_upstream_rejected"
+    assert error.upstream_reason is not None
+    assert len(error.upstream_reason) <= 200
+    assert "上游拒绝了请求：内容不符合规范" in error.upstream_reason
+    assert "invalid_request_error" in error.upstream_reason
+    assert "invalid_request_error_type" in error.upstream_reason
+    assert "PROMPT_ECHO_MARKER" not in error.upstream_reason
+    assert "MESSAGES_ECHO_MARKER" not in error.upstream_reason
+    # "temperature" only appears as the whitelist-excluded `param` value here, so its
+    # absence proves `param` itself was never read.
+    assert "temperature" not in error.upstream_reason
+
+
+def test_upstream_reason_truncates_to_200_chars():
+    body = json.dumps(
+        {
+            "error": {
+                "message": "上游拒绝：" + "字" * 250,
+                "code": "invalid_request_error",
+                "type": "invalid_request_error_type",
+            }
+        }
+    ).encode("utf-8")
+    error = _http_error(400, {}, body)
+    assert error.upstream_reason is not None
+    assert len(error.upstream_reason) == 200
+
+
+def test_upstream_reason_absent_when_error_missing_or_not_object():
+    assert _http_error(400, {}, json.dumps({}).encode("utf-8")).upstream_reason is None
+    assert _http_error(400, {}, json.dumps({"error": "plain string"}).encode("utf-8")).upstream_reason is None
+    assert _http_error(400, {}, None).upstream_reason is None
 
 
 def test_stale_cancelled_job_cannot_restore_over_replacement(tmp_path):

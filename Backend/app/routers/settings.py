@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.llm.base import LLMError
 from app.llm.openai_compatible import OpenAICompatibleClient
 from app.models import AgentModelBinding, AgentPersona, LLMProfile
 from app.schemas.settings import (
@@ -159,7 +160,13 @@ def test_profile(profile_id: str, db: Session = Depends(get_db)) -> dict[str, st
         api_key=decrypt_secret(profile.api_key_encrypted),
         model_name=profile.model_name,
     )
-    client.test_connection()
+    try:
+        client.test_connection()
+    except LLMError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": exc.code, "message": str(exc), "details": exc.safe_details()},
+        ) from exc
     return {"status": "ok"}
 
 

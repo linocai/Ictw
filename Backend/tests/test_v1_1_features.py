@@ -237,6 +237,48 @@ def test_llm_audit_records_error_code_on_failure(client, auth_headers, wait_for_
     assert any(row.agent_role == "writer" and row.error_code == "llm_upstream_unavailable" for row in rows)
 
 
+def test_llm_audit_records_upstream_reason_without_prompt_or_key(client, auth_headers, wait_for_terminal):
+    import app.db as db_module
+    from app.llm.factory import get_writer_client
+
+    class FailingWriter(FixedText):
+        def complete_stream(self, **kwargs):
+            raise LLMError(
+                "upstream rejected",
+                code="llm_upstream_rejected",
+                status_code=400,
+                upstream_reason="content policy violation | invalid_request_error | invalid_request_error_type",
+            )
+            yield  # pragma: no cover - keep generator
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
+    client.app.dependency_overrides[get_writer_client] = lambda: FailingWriter("")
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "failed"
+
+    db = db_module.SessionLocal()
+    try:
+        rows = db.scalars(select(LLMCallAudit)).all()
+    finally:
+        db.close()
+    writer_rows = [row for row in rows if row.agent_role == "writer"]
+    assert writer_rows
+    assert (
+        writer_rows[0].upstream_reason
+        == "content policy violation | invalid_request_error | invalid_request_error_type"
+    )
+
+    # Same invariant as test_llm_audit_records_writer_row_without_secrets, re-asserted
+    # here because this row is the one that actually carries a populated upstream_reason.
+    columns = set(LLMCallAudit.__table__.columns.keys())
+    assert not (columns & {"api_key", "prompt", "content", "draft_text", "system_prompt", "body"})
+
+
 # --- B4 character event editing / truncation ----------------------------------
 
 

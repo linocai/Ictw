@@ -27,6 +27,9 @@ class LLMError(Exception):
         retry_after: str | None = None,
         finish_reason: str | None = None,
         block_reason: str | None = None,
+        agent_role: str | None = None,
+        model_name: str | None = None,
+        upstream_reason: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -35,6 +38,11 @@ class LLMError(Exception):
         self.retry_after = retry_after
         self.finish_reason = finish_reason
         self.block_reason = block_reason
+        # Stamped by the write_jobs worker once the call site is known; not set
+        # at raise time inside openai_compatible.py itself.
+        self.agent_role = agent_role
+        self.model_name = model_name
+        self.upstream_reason = upstream_reason
 
     def safe_details(self) -> dict[str, Any]:
         return {
@@ -44,6 +52,9 @@ class LLMError(Exception):
                 "retry_after": self.retry_after,
                 "finish_reason": self.finish_reason,
                 "block_reason": self.block_reason,
+                "agent_role": self.agent_role,
+                "model_name": self.model_name,
+                "upstream_reason": self.upstream_reason,
             }.items()
             if value is not None
         }

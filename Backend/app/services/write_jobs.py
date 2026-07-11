@@ -169,6 +169,7 @@ def record_job_phase(
         run.violations = fields.get("violations")
         run.error_code = fields.get("error_code")
         run.error_message = fields.get("error_message")
+        run.error_context = fields.get("error_context")
         run.updated_character_ids = fields.get("updated_character_ids")
         run.added_event_ids = fields.get("added_event_ids")
         if phase in TERMINAL_PHASES:
@@ -178,6 +179,27 @@ def record_job_phase(
         db.close()
 
 
+def _error_context(exc: LLMError) -> dict[str, Any]:
+    """Build the additive job_runs.error_context payload for an LLMError.
+
+    Mirrors LLMError.safe_details()'s "only if not None" shape so a partially
+    stamped exception (e.g. one raised before an agent_role could be attached)
+    never writes literal Nones into the persisted JSON.
+    """
+    return {
+        key: value
+        for key, value in {
+            "agent_role": exc.agent_role,
+            "model_name": exc.model_name,
+            "http_status": exc.status_code,
+            "upstream_reason": exc.upstream_reason,
+            "finish_reason": exc.finish_reason,
+            "block_reason": exc.block_reason,
+        }.items()
+        if value is not None
+    }
+
+
 def _record_llm(
     session_factory: sessionmaker[Session],
     agent_role: str,
@@ -185,6 +207,8 @@ def _record_llm(
     start: float,
     error_code: str | None,
     job: WriteJob,
+    *,
+    upstream_reason: str | None = None,
 ) -> None:
     duration_ms = int((time.monotonic() - start) * 1000)
     record_llm_call(
@@ -195,6 +219,7 @@ def _record_llm(
         error_code=error_code,
         chapter_id=job.chapter_id,
         job_id=job.job_id,
+        upstream_reason=upstream_reason,
     )
 
 
@@ -207,7 +232,9 @@ def _run_memory_selector(job: WriteJob, session_factory: sessionmaker[Session]) 
     try:
         result = job.memory_selector.select(job.selector_user_message)
     except LLMError as exc:
-        _record_llm(session_factory, "memory_selector", client, start, exc.code, job)
+        _record_llm(session_factory, "memory_selector", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
+        exc.agent_role = "memory_selector"
+        exc.model_name = getattr(client, "model_name", None)
         raise
     _record_llm(session_factory, "memory_selector", client, start, None, job)
     return result
@@ -223,7 +250,9 @@ def _run_writer(job: WriteJob, session_factory: sessionmaker[Session], message: 
             if _should_stop(job):
                 break
     except LLMError as exc:
-        _record_llm(session_factory, "writer", client, start, exc.code, job)
+        _record_llm(session_factory, "writer", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
+        exc.agent_role = "writer"
+        exc.model_name = getattr(client, "model_name", None)
         raise
     _record_llm(session_factory, "writer", client, start, None, job)
     return "".join(chunks)
@@ -235,7 +264,9 @@ def _run_reviser(job: WriteJob, session_factory: sessionmaker[Session], message:
     try:
         result = job.reviser.revise(message)
     except LLMError as exc:
-        _record_llm(session_factory, "reviser", client, start, exc.code, job)
+        _record_llm(session_factory, "reviser", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
+        exc.agent_role = "reviser"
+        exc.model_name = getattr(client, "model_name", None)
         raise
     _record_llm(session_factory, "reviser", client, start, None, job)
     return result
@@ -311,7 +342,14 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
     except LLMError as exc:
         db.rollback()
         _restore_baseline(db, job)
-        record_job_phase(session_factory, job.job_id, "failed", error_code=exc.code, error_message=str(exc))
+        record_job_phase(
+            session_factory,
+            job.job_id,
+            "failed",
+            error_code=exc.code,
+            error_message=str(exc),
+            error_context=_error_context(exc),
+        )
         job.mark_terminal("failed")
     except Exception as exc:  # noqa: BLE001 - converted to a stable failed job_run
         db.rollback()
@@ -335,7 +373,9 @@ def _run_extract_job(job: WriteJob, session_factory: sessionmaker[Session]) -> N
         try:
             output = job.extractor.extract(job.extractor_user_message, job.selected_character_ids)
         except LLMError as exc:
-            _record_llm(session_factory, "extractor", client, start, exc.code, job)
+            _record_llm(session_factory, "extractor", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
+            exc.agent_role = "extractor"
+            exc.model_name = getattr(client, "model_name", None)
             raise
         _record_llm(session_factory, "extractor", client, start, None, job)
         if job.cancel_event.is_set() or not write_registry.is_current(job):
@@ -355,7 +395,14 @@ def _run_extract_job(job: WriteJob, session_factory: sessionmaker[Session]) -> N
     except LLMError as exc:
         db.rollback()
         _restore_draft_ready(db, job)
-        record_job_phase(session_factory, job.job_id, "failed", error_code=exc.code, error_message=str(exc))
+        record_job_phase(
+            session_factory,
+            job.job_id,
+            "failed",
+            error_code=exc.code,
+            error_message=str(exc),
+            error_context=_error_context(exc),
+        )
         job.mark_terminal("failed")
     except Exception as exc:  # noqa: BLE001 - keep the chapter editable on failure
         db.rollback()

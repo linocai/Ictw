@@ -73,6 +73,7 @@ def _job_status_from_run(chapter: Chapter, run: JobRun) -> WriteJobStatus:
         attempt=run.attempt,
         error_code=run.error_code,
         error_message=run.error_message,
+        error_context=run.error_context,
         violations=run.violations,
     )
     if run.phase == "done":

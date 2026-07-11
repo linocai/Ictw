@@ -256,6 +256,71 @@ def test_upstream_failure_restores_old_draft_and_status(client, auth_headers, wa
     assert (latest["draft_text"], latest["status"]) == ("旧稿", "draft_ready")
 
 
+def test_failed_job_persists_error_context_and_job_endpoint_surfaces_it(client, auth_headers, wait_for_terminal):
+    class FailingWriter(TextLLM):
+        def complete_stream(self, **kwargs):
+            raise LLMError(
+                "LLM upstream request failed: 400",
+                code="llm_upstream_rejected",
+                status_code=400,
+                # Pre-shaped as openai_compatible._safe_upstream_reason would produce it;
+                # the whitelist extraction itself is covered in test_v1_pipeline.py.
+                upstream_reason="content policy violation | invalid_request_error | invalid_request_error_type",
+            )
+            yield  # pragma: no cover - keep this a generator
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
+    writer = FailingWriter("")
+    writer.model_name = "gpt-test-4"
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
+    status = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert status["phase"] == "failed"
+    assert status["error_code"] == "llm_upstream_rejected"
+    ctx = status["error_context"]
+    assert ctx["agent_role"] == "writer"
+    assert ctx["model_name"] == "gpt-test-4"
+    assert ctx["http_status"] == 400
+    assert ctx["upstream_reason"] == "content policy violation | invalid_request_error | invalid_request_error_type"
+
+    # The polling endpoint independently surfaces the same error_context, not just the POST response.
+    fetched = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert fetched["error_context"] == ctx
+
+
+def test_content_blocked_failure_is_not_disguised_as_generic_rejection(client, auth_headers, wait_for_terminal):
+    class BlockedWriter(TextLLM):
+        def complete_stream(self, **kwargs):
+            raise LLMError(
+                "LLM blocked the request",
+                code="llm_content_blocked",
+                block_reason="PROHIBITED_CONTENT",
+            )
+            yield  # pragma: no cover - keep this a generator
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
+    client.app.dependency_overrides[get_writer_client] = lambda: BlockedWriter("")
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
+    status = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert status["phase"] == "failed"
+    # Content-filter failures keep their own distinct code; block_reason classification
+    # must never collapse into the generic upstream-rejected bucket.
+    assert status["error_code"] == "llm_content_blocked"
+    assert status["error_code"] != "llm_upstream_rejected"
+    assert status["error_context"]["block_reason"] == "PROHIBITED_CONTENT"
+    assert status["error_context"]["agent_role"] == "writer"
+
+
 def test_accept_rejects_live_job(client, auth_headers):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(

@@ -240,7 +240,7 @@ def _http_error(
         code = "llm_upstream_unavailable"
     else:
         code = "llm_upstream_rejected"
-    finish_reason, block_reason = _safe_provider_reasons(body)
+    finish_reason, block_reason, upstream_reason = _safe_provider_reasons(body)
     return LLMError(
         f"{prefix}: {status_code}",
         code=code,
@@ -249,23 +249,49 @@ def _http_error(
         retry_after=headers.get("Retry-After") if headers is not None else None,
         finish_reason=finish_reason,
         block_reason=block_reason,
+        upstream_reason=upstream_reason,
     )
 
 
-def _safe_provider_reasons(body: bytes | None) -> tuple[str | None, str | None]:
+def _safe_provider_reasons(body: bytes | None) -> tuple[str | None, str | None, str | None]:
     """Extract only stable provider reasons; never retain upstream bodies."""
     if not body:
-        return None, None
+        return None, None, None
     try:
         data = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-        return None, None
+        return None, None, None
     if not isinstance(data, dict):
-        return None, None
+        return None, None, None
     finish_reason = _extract_finish_reason(data)
     feedback = data.get("promptFeedback") or data.get("prompt_feedback")
     block_reason = None
     if isinstance(feedback, dict):
         value = feedback.get("blockReason") or feedback.get("block_reason")
         block_reason = str(value) if value is not None else None
-    return finish_reason, block_reason
+    upstream_reason = _safe_upstream_reason(data.get("error"))
+    return finish_reason, block_reason, upstream_reason
+
+
+def _safe_upstream_reason(error: Any) -> str | None:
+    """Whitelist-only extraction from the top-level ``error`` object.
+
+    Only the string values of ``message``/``code``/``type`` are ever read.
+    Anything else on the error object (``metadata``, ``param``, ...) or
+    elsewhere in the body (e.g. an echoed ``messages`` array) is never
+    touched, so a provider that echoes the prompt back in its error body
+    cannot leak it into ``upstream_reason``. Gemini's native
+    ``promptFeedback.blockReason`` is handled separately by
+    ``_extract_content``/the streaming path and is not duplicated here.
+    """
+    if not isinstance(error, dict):
+        return None
+    parts = [
+        error[key].strip()
+        for key in ("message", "code", "type")
+        if isinstance(error.get(key), str) and error[key].strip()
+    ]
+    if not parts:
+        return None
+    reason = " | ".join(parts).strip()
+    return reason[:200] if reason else None
