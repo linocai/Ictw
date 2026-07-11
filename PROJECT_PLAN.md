@@ -4,32 +4,25 @@
 
 ## 概述
 
-LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心是四 Agent 写作链——Memory Selector（按本章 Bible 从大事记/梗概/人物事件中选记忆 ID）→ Writer（白名单约束下流式写初稿）→ Reviser(仅程序校验不合格时修订，最多两次)→ 用户接受 → Extractor（只归档已选人物）。数据库负责记得全，Writer Prompt 只保留当前工作集。
+LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。核心是四 Agent 写作链——Memory Selector（按本章 Bible 选择历史记忆与紧邻上一章结尾起点）→ Writer（白名单约束下写初稿）→ Reviser（仅程序校验不合格时修订，最多两次）→ 用户接受 → Extractor（只归档已选人物）。数据库负责记得全，Writer Prompt 只保留当前工作集。
 
 ## 技术选型
 
-- **App**：SwiftUI（iOS），无第三方依赖；Token 存 Keychain，本地草稿缓存在 Application Support。
+- **App**：SwiftUI（iOS + macOS），无第三方依赖；Token 存 Keychain，本地草稿缓存在 Application Support。
 - **后端**：FastAPI + SQLAlchemy 2 + Alembic + SQLite，单 worker uvicorn；LLM 走 OpenAI-compatible 协议，capability registry 管推理参数（DeepSeek V4 Pro/Flash、Gemini 3.5 Flash、未知模型）。
 - **部署**：HK 云服务器，Nginx HTTPS 反代 → 127.0.0.1:8787，systemd `linoi-backend.service`。详情见 `~/Lino/hk_info.md`。
 
-## 当前状态（2026-07-11）
+## 当前状态（2026-07-12）
 
-- 线上生产运行中：iOS + macOS（ICTW）双端并用；后端 Alembic head `20260711_0005`、55 测试全绿（v1.2.x 均未碰后端）。
-- 版本轨迹：v1.0.0 / v1.1.0 / v1.1.1 / v1.1.2 均已发版。v1.2.0（macOS App 与 iOS 完全对等）五块施工全部完工并已在生产真实使用，视为验收通过，施工全文（含附录 A/B）已移入 `archive/v1.2.0施工plan.md`。
-- v1.2.1（后端裸时间串解析统一收口 `String.linoBackendDate`）、v1.2.2（Mac 端每次激活重复弹旧失败 Toast）两个快修已单独发版并各有变更日志记录；当前双 target 版本 `1.2.2(7)`。
-- `chapter_style` 兼容窗口仍开着（本轮不收口）。
-- v1.2.3 立项（2026-07-11）：全链路报错「一眼定位」——环节 + 模型 + 上游具体原因 + 建议动作，全中文呈现，iOS/macOS 同步发版。详见「当前 Plan」。
-- v1.2.3 已发版（2026-07-11）：后端迁移至 `20260711_0006`、健康检查版本 `1.2.3`、62 测试全绿；macOS ICTW `1.2.3(8)` 已装；iOS 真机安装待用户。
+- v1.2.3 生产运行中：后端 Alembic head `20260711_0006`，macOS ICTW `1.2.3(8)` 已装；iOS 真机安装由用户管理。
+- v1.3.0 本地施工完成：Reviser 实时校验原因、紧邻上一章结尾衔接与 1800 字共享预算、Bible 权威 Prompt、双端任务状态/接管修复及两个防御修复；后端 67 测试全绿，双 target `1.3.0(9)` 构建通过。
+- v1.3.0 待完成生产部署、macOS 重装与 GitHub Release；`chapter_style` 兼容窗口继续保留。
 
 ## 当前 Plan
 
-（暂无。v1.2.3 已发版，施工全文见 archive/v1.2.3施工plan.md。）
+v1.3.0 发布收尾：提交推送 → 生产备份/部署/健康检查 → macOS 重装验证 → tag 与 GitHub Release。iOS 真机安装留给用户。
 
 ## Backlog
-
-**v1.2.3 review P2 观察项（可不修）**
-- 白名单只取字符串型 error.code，数字型 code 的网关会被丢弃（保守不泄漏，仅轻损完整性）
-- `linoBackendDate` 对未来「带 Z + 6 位微秒」形态可能落 nil，后端改带时区序列化时回看
 
 **产品/功能（v1 明确延后项）**
 - 向量数据库 / embedding 记忆检索（预筛接口已预留）
@@ -45,8 +38,6 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 - capability registry 扩充（Qwen、Claude、Kimi 等）
 - 短名整词匹配的可选轻量分词方案（提升 2 字名精度；1 字名左边界启发式对 CJK 扩展区/々等罕用前字有漏判，一并解决）
 - LLM 审计表的查询/统计入口（当前仅落库，靠直连 DB 查看）
-- iOS：本会话内启动任务后 currentChapter.status 不更新为 writing/extracting，前台恢复轮询的安全网只对冷启动生效（review P2#3）
-- iOS：write_running 等 409 呈现为 failed，未接管已有任务（review P2#5）
 - job_runs「最新一行」并列打破用随机 uuid，可换单调次键（review P2#6）
 - write_registry 为进程内单例，未来多 worker 前必须换 DB 层 job 锁（review P2#7，前瞻）
 - 阅读模式增强（书签、朗读、翻页动画等）
@@ -58,6 +49,7 @@ LinoI 是单人小说写作工作台：SwiftUI iOS App + FastAPI 后端。核心
 
 ## 变更日志
 
+- 2026-07-12 v1.3.0 本地施工完成：Reviser 阶段双端展示最新程序校验原因，最终失败保留；Memory Selector 从紧邻已完成上一章最多 700 字原文结尾中选择最短衔接起点，结尾与既有记忆共用 1800 字预算；Writer Prompt 固定 Bible 最高权威与历史参考边界并去除重复世界观；双端同步 job 本地状态并接管 `write_running`；数字型上游 error.code 与带 Z 六位微秒时间串补兼容。后端 67 测试全绿，iOS/macOS `1.3.0(9)` Debug 构建通过。待生产部署与 Release。
 - 2026-07-10 v1.0.0 发版：四 Agent 链、记忆选择、Reviser 两次上限、Extractor 权限收口、推理参数配置、删除章节。（施工全文见 archive/v1发版施工plan.md）
 - 2026-07-10 仓库从 GitHub 克隆重建本地工作区；恢复 Backend/.env；建立 PROJECT_PLAN.md 与项目 CLAUDE.md，v1 施工 plan 移入 archive/。
 - 2026-07-10 v1.1.0 立项：去流式 + 任务持久化（job_runs）、accept 异步化、字数放宽 80%~120%、记忆预算固定常量 + summary≤2、短名校验修复 + 章级豁免、LLM 审计表、单条人物事件接口、ChapterPatch 放开 summary/headline、事件 60 字上限；iOS 去流式轮询、阅读模式、新建直进、章节行简化、故事线增删改、梗概可编辑、导出全书、删书。（施工全文见 archive/v1.1.0施工plan.md）

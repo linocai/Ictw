@@ -3,12 +3,23 @@ from __future__ import annotations
 from app.models import Book, Chapter, ChapterCharacter, Character, CharacterEvent
 from app.services.context import (
     MEMORY_BUDGET_CHARS,
+    PREVIOUS_ENDING_MAX_CHARS,
     MemoryBlock,
     memory_budget,
     memory_candidates,
+    memory_selector_user_message,
     pack_selected_memories,
+    pack_writer_context,
     writer_user_message,
 )
+from app.services.personas import DEFAULT_PERSONAS
+
+
+def test_default_memory_selector_persona_covers_ending_start_without_rewriting():
+    prompt = DEFAULT_PERSONAS["memory_selector"]
+    assert "结尾起点 ID" in prompt
+    assert "最短原文片段" in prompt
+    assert "不得重写" in prompt
 
 
 def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_headers):
@@ -65,15 +76,18 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
         "# 世界观",
         "# 本章允许人物白名单",
         "# 人物卡",
-        "# 只读工作记忆",
+        "# 历史参考资料",
         "# 作者对本章的备注",
         "# 本章剧情 Bible",
-        "# 字数和交稿契约",
+        "# 最终执行契约",
     ]
     positions = [text.index(header) for header in headers]
     assert positions == sorted(positions)
     assert "固定" in text and "清醒" in text
     assert "旧故事线" not in text
+    assert text.count("# 世界观") == 1
+    assert "Bible 是本次写作的最高情节权威" in text
+    assert "不得据此增加 Bible 未要求的剧情" in text
 
 
 def test_memory_candidates_scope_and_budget_packing(client, auth_headers):
@@ -107,3 +121,80 @@ def test_memory_candidates_scope_and_budget_packing(client, auth_headers):
     blocks = [MemoryBlock("too-big", "甲" * 700, 1), MemoryBlock("fits", "乙" * 500, 1)]
     packed = pack_selected_memories(blocks, ["too-big", "fits"], 600)
     assert [item.id for item in packed] == ["fits"]
+
+
+def test_previous_ending_uses_only_adjacent_finalized_chapter_and_preserves_source(client, auth_headers):
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        book = Book(title="书")
+        db.add(book)
+        db.flush()
+        old = Chapter(book_id=book.id, index=1, status="finalized", draft_text="更早章节结尾")
+        adjacent = Chapter(
+            book_id=book.id,
+            index=2,
+            status="finalized",
+            draft_text="第一段原文\n第二段原文\n最后一段原文",
+        )
+        current = Chapter(book_id=book.id, index=3, user_prompt="承接开场")
+        db.add_all([old, adjacent, current])
+        db.commit()
+        db.refresh(current)
+        blocks = memory_candidates(db, current)
+        selector_prompt = memory_selector_user_message(current, blocks, MEMORY_BUDGET_CHARS)
+    finally:
+        db.close()
+
+    ending = [block for block in blocks if block.memory_type == "previous_ending"]
+    assert [block.text for block in ending] == ["第一段原文", "第二段原文", "最后一段原文"]
+    assert all(str(adjacent.id) in block.id for block in ending)
+    assert all("更早章节结尾" not in block.text for block in ending)
+
+    packed = pack_writer_context(blocks, [], ending[1].id, MEMORY_BUDGET_CHARS)
+    assert packed.previous_ending == "第二段原文\n\n最后一段原文"
+    assert "previous_ending_start_id" in selector_prompt
+    assert "满足开场衔接所需的最短片段起点" in selector_prompt
+    assert "[" + ending[0].id + "]\n第一段原文" in selector_prompt
+
+
+def test_previous_ending_is_capped_and_invalid_start_falls_back_deterministically(client, auth_headers):
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        book = Book(title="书")
+        db.add(book)
+        db.flush()
+        previous = Chapter(
+            book_id=book.id,
+            index=1,
+            status="finalized",
+            draft_text="甲" * 500 + "\n" + "乙" * 500,
+        )
+        current = Chapter(book_id=book.id, index=2, user_prompt="继续")
+        db.add_all([previous, current])
+        db.commit()
+        db.refresh(current)
+        blocks = memory_candidates(db, current)
+    finally:
+        db.close()
+
+    ending = [block for block in blocks if block.memory_type == "previous_ending"]
+    assert sum(len(block.text) for block in ending) == PREVIOUS_ENDING_MAX_CHARS
+    assert ending[0].text == "甲" * 200
+    assert ending[1].text == "乙" * 500
+    fallback = pack_writer_context(blocks, [], "invented-id", MEMORY_BUDGET_CHARS)
+    assert fallback.previous_ending == "甲" * 200 + "\n\n" + "乙" * 500
+
+
+def test_previous_ending_and_memories_share_single_budget():
+    blocks = [
+        MemoryBlock("previous_ending:x:p1", "甲" * 700, 1, memory_type="previous_ending"),
+        MemoryBlock("fits", "乙" * 1100, 1),
+        MemoryBlock("over", "丙", 1),
+    ]
+    packed = pack_writer_context(blocks, ["fits", "over"], None, MEMORY_BUDGET_CHARS)
+    assert len(packed.previous_ending) == 700
+    assert [block.id for block in packed.memories] == ["fits"]

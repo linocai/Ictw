@@ -281,7 +281,9 @@ def _safe_provider_reasons(body: bytes | None) -> tuple[str | None, str | None, 
 def _safe_upstream_reason(error: Any) -> str | None:
     """Whitelist-only extraction from the top-level ``error`` object.
 
-    Only the string values of ``message``/``code``/``type`` are ever read.
+    Only string ``message``/``type`` values and string or numeric ``code``
+    values are ever read. Boolean codes are deliberately excluded even though
+    ``bool`` is an ``int`` subclass in Python.
     Anything else on the error object (``metadata``, ``param``, ...) or
     elsewhere in the body (e.g. an echoed ``messages`` array) is never
     touched, so a provider that echoes the prompt back in its error body
@@ -291,11 +293,17 @@ def _safe_upstream_reason(error: Any) -> str | None:
     """
     if not isinstance(error, dict):
         return None
-    parts = [
-        error[key].strip()
-        for key in ("message", "code", "type")
-        if isinstance(error.get(key), str) and error[key].strip()
-    ]
+    parts: list[str] = []
+    for key in ("message", "code", "type"):
+        value = error.get(key)
+        if isinstance(value, str):
+            value = value.strip()
+        elif key == "code" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            value = str(value)
+        else:
+            continue
+        if value:
+            parts.append(value)
     if not parts:
         return None
     reason = " | ".join(parts).strip()

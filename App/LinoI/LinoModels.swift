@@ -434,7 +434,14 @@ extension String {
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = fractional.date(from: self) { return date }
         if let date = ISO8601DateFormatter().date(from: self) { return date }
-        for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss"] {
+        // Some Foundation versions fail the ISO8601 fractional-seconds branch
+        // for six-digit microseconds followed by `Z`, so keep an explicit UTC
+        // fallback in addition to the timezone-less SQLite formats.
+        for format in [
+            "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
+            "yyyy-MM-dd'T'HH:mm:ss",
+        ] {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.timeZone = TimeZone(identifier: "UTC")

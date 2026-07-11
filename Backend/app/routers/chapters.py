@@ -324,6 +324,19 @@ def chapter_job(chapter_id: str, db: Session = Depends(get_db)) -> WriteJobStatu
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    live_job = write_registry.get_live(chapter_id)
+    if live_job is not None and (not live_job.job_id or run is None or run.id != live_job.job_id):
+        # reserve() necessarily happens before the request transaction commits.
+        # A second client can therefore receive write_running and query /job in
+        # the tiny window where the registry knows the new job but SQLite still
+        # exposes the previous terminal row. Return a stable non-terminal
+        # snapshot so that client can adopt and poll the real job instead of
+        # treating the stale row as its outcome.
+        return WriteJobStatus(
+            chapter_id=chapter_id,
+            kind=live_job.kind,
+            phase=live_job.phase,
+        )
     if run is None:
         return WriteJobStatus(chapter_id=chapter_id, kind="write", phase="idle")
     return _job_status_from_run(chapter, run)

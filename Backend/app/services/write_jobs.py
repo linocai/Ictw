@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents.memory_selector import MemorySelectorAgent
+from app.agents.memory_selector import MemorySelection, MemorySelectorAgent
 from app.agents.reviser import ReviserAgent
 from app.agents.writer import WriterAgent
 from app.llm.base import LLMError
@@ -17,7 +17,7 @@ from app.services.context import (
     MEMORY_BUDGET_CHARS,
     MemoryBlock,
     draft_violations,
-    pack_selected_memories,
+    pack_writer_context,
     reviser_user_message,
     writer_user_message,
 )
@@ -226,7 +226,7 @@ def _record_llm(
 # --- Timed, audited agent calls ------------------------------------------------
 
 
-def _run_memory_selector(job: WriteJob, session_factory: sessionmaker[Session]) -> list[str]:
+def _run_memory_selector(job: WriteJob, session_factory: sessionmaker[Session]) -> MemorySelection:
     start = time.monotonic()
     client = getattr(job.memory_selector, "llm", None)
     try:
@@ -284,17 +284,27 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
             job.mark_terminal("failed")
             return
         memories: list[MemoryBlock] = []
+        previous_ending = ""
         if job.memory_selector is not None:
             record_job_phase(session_factory, job.job_id, "selecting_memory")
-            selected_ids = _run_memory_selector(job, session_factory)
-            memories = pack_selected_memories(job.memory_candidates, selected_ids, job.memory_budget)
+            selection = _run_memory_selector(job, session_factory)
+            packed = pack_writer_context(
+                job.memory_candidates,
+                selection.memory_ids,
+                selection.previous_ending_start_id,
+                job.memory_budget,
+            )
+            memories = packed.memories
+            previous_ending = packed.previous_ending
         if _should_stop(job):
             _restore_baseline(db, job)
             job.mark_terminal()
             return
 
         record_job_phase(session_factory, job.job_id, "writing")
-        message = job.legacy_writer_user_message or writer_user_message(chapter.book, chapter, memories)
+        message = job.legacy_writer_user_message or writer_user_message(
+            chapter.book, chapter, memories, previous_ending
+        )
         current_text = _run_writer(job, session_factory, message)
         if _should_stop(job):
             _restore_baseline(db, job)

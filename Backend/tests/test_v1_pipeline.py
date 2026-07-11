@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.agents.extractor import extractor_schema
-from app.agents.memory_selector import MemorySelectorAgent
+from app.agents.memory_selector import MEMORY_SELECTION_FIXED_CONTRACT, MemorySelectorAgent
 from app.db import Base, make_engine
 from app.llm.base import LLMError
 from app.llm.openai_compatible import OpenAICompatibleClient, _extract_content, _http_error
@@ -140,6 +140,22 @@ def test_upstream_reason_whitelists_message_code_type_and_drops_echoes():
     assert "temperature" not in error.upstream_reason
 
 
+def test_upstream_reason_accepts_numeric_code_but_rejects_boolean_code():
+    integer_error = _http_error(
+        400,
+        {},
+        json.dumps({"error": {"message": "rejected", "code": 40017, "secret": "DO_NOT_LEAK"}}).encode(),
+    )
+    assert integer_error.upstream_reason == "rejected | 40017"
+    assert "DO_NOT_LEAK" not in integer_error.upstream_reason
+
+    float_error = _http_error(400, {}, json.dumps({"error": {"code": 40017.5}}).encode())
+    assert float_error.upstream_reason == "40017.5"
+
+    boolean_error = _http_error(400, {}, json.dumps({"error": {"code": True}}).encode())
+    assert boolean_error.upstream_reason is None
+
+
 def test_profile_test_connection_carries_upstream_reason(monkeypatch):
     class _FakeResponse:
         status_code = 401
@@ -229,8 +245,25 @@ def test_memory_selector_retries_one_retryable_failure_only():
             return {"memory_ids": []}
 
     llm = RetryOnceLLM()
-    assert MemorySelectorAgent(llm, "selector").select("input") == []  # type: ignore[arg-type]
+    selection = MemorySelectorAgent(llm, "selector").select("input")  # type: ignore[arg-type]
+    assert selection.memory_ids == []
+    assert selection.previous_ending_start_id is None
     assert llm.calls == 2
+
+
+def test_memory_selector_appends_fixed_contract_to_existing_custom_persona():
+    class CapturingLLM:
+        system = ""
+
+        def complete_json(self, **kwargs):
+            self.system = kwargs["system"]
+            return {"memory_ids": [], "previous_ending_start_id": None}
+
+    llm = CapturingLLM()
+    MemorySelectorAgent(llm, "旧的自定义人格：只返回有序记忆 ID").select("input")  # type: ignore[arg-type]
+    assert "旧的自定义人格" in llm.system
+    assert MEMORY_SELECTION_FIXED_CONTRACT in llm.system
+    assert "previous_ending_start_id" in llm.system
 
 
 def test_memory_selector_tolerates_malformed_id_payload_shapes():
@@ -243,12 +276,18 @@ def test_memory_selector_tolerates_malformed_id_payload_shapes():
 
     # Mixed non-string items are filtered, not fatal.
     agent = MemorySelectorAgent(ShapedLLM({"memory_ids": ["chapter:x:headline", 123, None]}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input") == ["chapter:x:headline"]
+    assert agent.select("input").memory_ids == ["chapter:x:headline"]
     # A bare string is salvaged as a single-item selection.
     agent = MemorySelectorAgent(ShapedLLM({"memory_ids": "chapter:x:headline"}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input") == ["chapter:x:headline"]
+    assert agent.select("input").memory_ids == ["chapter:x:headline"]
     # Anything else degrades to the legal empty selection.
     agent = MemorySelectorAgent(ShapedLLM({"memory_ids": {"a": 1}}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input") == []
+    assert agent.select("input").memory_ids == []
     agent = MemorySelectorAgent(ShapedLLM({}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input") == []
+    assert agent.select("input").memory_ids == []
+
+    selected = MemorySelectorAgent(  # type: ignore[arg-type]
+        ShapedLLM({"memory_ids": [], "previous_ending_start_id": " previous_ending:x:p2 "}),
+        "selector",
+    ).select("input")
+    assert selected.previous_ending_start_id == "previous_ending:x:p2"

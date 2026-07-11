@@ -331,6 +331,9 @@ def test_accept_rejects_live_job(client, auth_headers):
     job = WriteJob(chapter["id"], writer=None)  # type: ignore[arg-type]
     write_registry.reserve(job)
     try:
+        adopted = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers)
+        assert adopted.status_code == 200
+        assert adopted.json()["phase"] == "writing"
         response = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "write_running"

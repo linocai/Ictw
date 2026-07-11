@@ -378,9 +378,22 @@ private struct LinoIChapterEditor: View {
             }
 
             if case .revising(let attempt) = editor.writingPhase {
-                Text("程序校验未通过，Reviser 正在进行第 \(attempt)/2 次修订。修订不会自行增加新剧情。")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("程序校验未通过，Reviser 正在进行第 \(attempt)/2 次修订。修订不会自行增加新剧情。")
+                    if let reason = editor.currentValidationReason {
+                        Text("未通过验证：\(reason)")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(LinoTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if editor.writingPhase.isFailed, let reason = editor.currentValidationReason {
+                Text("未通过验证：\(reason)")
                     .font(.caption)
                     .foregroundStyle(LinoTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else if editor.currentChapter?.status == "finalized" {
                 Text("已完成章节必须先“重新编辑本章”，才能重新生成。")
                     .font(.caption)

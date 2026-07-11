@@ -359,6 +359,9 @@ final class ChapterEditorStore: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isSaving = false
     @Published private(set) var writingPhase: WritingPhase = .idle
+    /// Latest programmatic validation explanation shown while Reviser is
+    /// running. Kept when the final revision fails so the user can see why.
+    @Published private(set) var currentValidationReason: String?
     @Published private(set) var restoredLocalDraft = false
     /// Names the last preflight/job failure reported as unauthorized-but-present.
     /// Non-empty exactly when the editor should offer "本章豁免并重试".
@@ -395,6 +398,7 @@ final class ChapterEditorStore: ObservableObject {
                 cache.saveClean(remote)
             }
             pendingExemptionNames = []
+            currentValidationReason = nil
             resumePollingIfNeeded()
         } catch {
             session.notices.publish(error)
@@ -464,6 +468,7 @@ final class ChapterEditorStore: ObservableObject {
         }
         let replace = !chapter.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || chapter.status == "writing"
         pendingExemptionNames = []
+        currentValidationReason = nil
         guard await save() != nil else { return nil }
         return await startWrite(replaceDraft: replace)
     }
@@ -475,6 +480,7 @@ final class ChapterEditorStore: ObservableObject {
         guard !writingPhase.isActive, !writingPhase.isFailed else { return nil }
         guard let saved = await save() else { return nil }
         pendingExemptionNames = []
+        currentValidationReason = nil
         writingPhase = .extracting
         do {
             let status = try await session.api.accept(chapterId: saved.id)
@@ -484,6 +490,9 @@ final class ChapterEditorStore: ObservableObject {
             }
             return currentChapter
         } catch {
+            if await adoptRunningJobIfNeeded(error, chapterId: saved.id) {
+                return currentChapter
+            }
             applyStartFailure(error, chapterId: saved.id)
             return nil
         }
@@ -518,6 +527,7 @@ final class ChapterEditorStore: ObservableObject {
         guard let chapter = currentChapter else { return nil }
         stopPolling(for: chapter.id)
         writingPhase = .idle
+        currentValidationReason = nil
         do {
             let cancelled = try await session.api.cancelWrite(chapterId: chapter.id)
             currentChapter = cancelled
@@ -540,6 +550,7 @@ final class ChapterEditorStore: ObservableObject {
             cache.remove(chapterId: deletingId)
             writingPhase = .idle
             pendingExemptionNames = []
+            currentValidationReason = nil
             if currentChapter?.id == deletingId {
                 currentChapter = nil
             }
@@ -561,9 +572,7 @@ final class ChapterEditorStore: ObservableObject {
 
     /// macOS-only foreground recovery. Deliberately **omits** the
     /// `status == writing/extracting` guard that `handleScenePhaseActive()`
-    /// carries: a job started in *this same session* never flips the local
-    /// `currentChapter.status` to `writing`/`extracting`, so that guard makes
-    /// iOS miss it (Backlog P2#3). Here, whenever there is a `currentChapter`
+    /// carries. Here, whenever there is a `currentChapter`
     /// and no poll is running, we unconditionally fetch one `jobStatus`,
     /// apply it, and resume polling if the phase is still non-terminal. A
     /// missing/never-started job just returns an error we swallow silently so
@@ -609,6 +618,9 @@ final class ChapterEditorStore: ObservableObject {
             }
             return currentChapter
         } catch {
+            if await adoptRunningJobIfNeeded(error, chapterId: chapter.id) {
+                return currentChapter
+            }
             applyStartFailure(error, chapterId: chapter.id)
             return nil
         }
@@ -694,23 +706,39 @@ final class ChapterEditorStore: ObservableObject {
         switch status.phase {
         case "selecting_memory":
             writingPhase = .selectingMemory
+            setCurrentChapterStatus("writing", chapterId: chapterId)
         case "writing":
             writingPhase = .writing
+            setCurrentChapterStatus("writing", chapterId: chapterId)
         case "revising":
             writingPhase = .revising(attempt: min(max(status.attempt ?? 1, 1), 2))
+            setCurrentChapterStatus("writing", chapterId: chapterId)
+            if let reason = Self.validationReason(from: status.violations) {
+                currentValidationReason = reason
+            }
         case "extracting":
             writingPhase = .extracting
+            setCurrentChapterStatus("extracting", chapterId: chapterId)
         case "done":
             if let chapter = status.chapter {
                 currentChapter = chapter
                 cache.saveClean(chapter)
+            } else {
+                Task { [weak self] in
+                    await self?.refreshChapter(chapterId)
+                }
             }
             writingPhase = .idle
             pendingExemptionNames = []
+            currentValidationReason = nil
         case "failed":
             applyJobFailure(status, chapterId: chapterId)
         case "cancelled":
             writingPhase = .idle
+            currentValidationReason = nil
+            Task { [weak self] in
+                await self?.refreshChapter(chapterId)
+            }
         default:
             break
         }
@@ -719,6 +747,14 @@ final class ChapterEditorStore: ObservableObject {
     private func applyJobFailure(_ status: WriteJobStatus, chapterId: String) {
         let presented = LinoErrorPresenter.present(jobFailure: status)
         writingPhase = .failed(code: status.errorCode, message: presented.message)
+        if let reason = Self.validationReason(from: status.violations) {
+            currentValidationReason = reason
+        } else if status.errorCode != "revision_failed" {
+            // A Reviser transport/provider failure is not another programmatic
+            // validation result; do not leave the previous attempt's reason on
+            // screen as though it explained the model-service failure.
+            currentValidationReason = nil
+        }
         pendingExemptionNames = []
         if let violation = status.violations?.first(where: { $0.code == "unselected_character" }),
            let names = violation.names, !names.isEmpty {
@@ -748,7 +784,61 @@ final class ChapterEditorStore: ObservableObject {
         session.notices.publish(presented.message, critical: presented.critical)
     }
 
+    /// A 409 `write_running` means another client (or a previous request whose
+    /// response was lost) already owns the chapter job. Adopt its latest
+    /// snapshot instead of turning a healthy in-flight job into a local error.
+    private func adoptRunningJobIfNeeded(_ error: Error, chapterId: String) async -> Bool {
+        guard let apiError = error as? APIError,
+              case let .validation(code, _, _) = apiError,
+              code == "write_running" else { return false }
+        do {
+            let status = try await session.api.jobStatus(chapterId: chapterId)
+            guard currentChapter?.id == chapterId else { return true }
+            applyJobStatus(status, chapterId: chapterId)
+            if Self.isTerminalPhase(status.phase) {
+                if status.chapter == nil {
+                    await refreshChapter(chapterId)
+                }
+            } else if Self.isActiveJobPhase(status.phase) {
+                pollJob(chapterId: chapterId)
+            } else {
+                // An unexpected/stale snapshot such as `idle` is not a job to
+                // poll forever. Reconcile the chapter and return to rest.
+                writingPhase = .idle
+                await refreshChapter(chapterId)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func validationReason(from violations: [Violation]?) -> String? {
+        let messages = violations?
+            .map { $0.message.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        guard !messages.isEmpty else { return nil }
+        return messages.joined(separator: "；")
+    }
+
+    private static func isActiveJobPhase(_ phase: String) -> Bool {
+        switch phase {
+        case "selecting_memory", "writing", "revising", "extracting": return true
+        default: return false
+        }
+    }
+
+    private func setCurrentChapterStatus(_ status: String, chapterId: String) {
+        guard var chapter = currentChapter, chapter.id == chapterId else { return }
+        chapter.status = status
+        currentChapter = chapter
+    }
+
     private func refreshChapterAfterFailure(_ chapterId: String) async {
+        await refreshChapter(chapterId)
+    }
+
+    private func refreshChapter(_ chapterId: String) async {
         guard let refreshed: Chapter = try? await session.api.request("/chapters/\(chapterId)") else { return }
         cache.saveClean(refreshed)
         if currentChapter?.id == chapterId {

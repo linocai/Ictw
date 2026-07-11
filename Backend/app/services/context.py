@@ -15,6 +15,7 @@ from app.models import Book, Chapter, Character, CharacterEvent
 WORD_COUNT_MIN_RATIO = 0.80
 WORD_COUNT_MAX_RATIO = 1.20
 MEMORY_BUDGET_CHARS = 1800
+PREVIOUS_ENDING_MAX_CHARS = 700
 MEMORY_SUMMARY_MAX_ITEMS = 2
 CHARACTER_EVENT_MAX_CHARS = 60
 
@@ -57,6 +58,12 @@ class MemoryBlock:
     memory_type: str = ""
 
 
+@dataclass(frozen=True)
+class PackedWriterContext:
+    memories: list[MemoryBlock]
+    previous_ending: str = ""
+
+
 def memory_budget(bible: str = "") -> int:
     # Fixed budget, decoupled from Bible length. Argument is ignored but the
     # signature is kept for callers that still pass a Bible string.
@@ -76,6 +83,9 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
         ).all()
     )
     blocks: list[MemoryBlock] = []
+    previous = next((item for item in prior if item.index == chapter.index - 1), None)
+    if previous is not None and previous.draft_text.strip():
+        blocks.extend(_previous_ending_blocks(previous))
     for item in prior:
         if item.headline.strip():
             blocks.append(
@@ -129,7 +139,9 @@ def prefilter_memory_candidates(
     chapter: Chapter,
     selected_character_ids: set[str],
 ) -> list[MemoryBlock]:
-    if len(blocks) <= 300 and sum(nonspace_len(block.text) for block in blocks) <= 30_000:
+    ending = [block for block in blocks if block.memory_type == "previous_ending"]
+    ordinary = [block for block in blocks if block.memory_type != "previous_ending"]
+    if len(ordinary) <= 300 and sum(nonspace_len(block.text) for block in ordinary) <= 30_000:
         return blocks
     query = normalize_text(f"{chapter.title}\n{chapter.user_prompt}\n{chapter_author_note(chapter)}")
     keywords = _keywords(query)
@@ -140,7 +152,7 @@ def prefilter_memory_candidates(
         overlap = sum(1 for word in keywords if word and word in text)
         return (-selected, -overlap, -block.chapter_index, block.id)
 
-    ranked = sorted(blocks, key=score)
+    ranked = sorted(ordinary, key=score)
     chosen: list[MemoryBlock] = []
     chars = 0
     for block in ranked:
@@ -151,23 +163,32 @@ def prefilter_memory_candidates(
             continue
         chosen.append(block)
         chars += size
-    return chosen
+    return ending + chosen
 
 
 def memory_selector_user_message(chapter: Chapter, blocks: list[MemoryBlock], budget: int) -> str:
     selected = _selected_characters(chapter)
     cards = _character_cards(selected, include_ids=True)
-    candidates = "\n\n".join(f"[{block.id}]\n{block.text}" for block in blocks) or "（没有可用历史记忆）"
+    ending_blocks = [block for block in blocks if block.memory_type == "previous_ending"]
+    ordinary_blocks = [block for block in blocks if block.memory_type != "previous_ending"]
+    candidates = "\n\n".join(f"[{block.id}]\n{block.text}" for block in ordinary_blocks) or "（没有可用历史记忆）"
+    ending = "\n\n".join(f"[{block.id}]\n{block.text}" for block in ending_blocks) or "（没有可用的紧邻上一章结尾）"
     return "\n\n".join(
         [
             "# 本章剧情 Bible\n" + chapter.user_prompt.strip(),
             "# 作者对本章的备注\n" + (chapter_author_note(chapter).strip() or "（无）"),
             "# 本章允许人物及当前状态\n" + (cards or "（无已选人物）"),
-            f"# 记忆预算\n最多 {budget} 个中文去空白字符。章节梗概最多选 {MEMORY_SUMMARY_MAX_ITEMS} 条。"
-            "你只负责选择，不得改写历史。",
+            f"# 历史上下文总预算\n上一章结尾和其他历史记忆合计最多 {budget} 个中文去空白字符。"
+            f"上一章结尾最多 {PREVIOUS_ENDING_MAX_CHARS} 字，章节梗概最多选 {MEMORY_SUMMARY_MAX_ITEMS} 条。你只负责选择，不得改写历史。",
+            (
+                "# 紧邻上一章结尾候选（原文）\n" + ending + "\n\n"
+                "如有候选，请选择满足开场衔接所需的最短片段起点；只考虑时间、地点、动作、人物状态和最后落点，"
+                "不要为了背景完整而扩大范围。返回该段方括号中的 ID，后端会从该段原样截取至结尾。"
+            ),
             "# 候选记忆块\n" + candidates,
             (
-                '# 输出\n只返回 JSON object：{"memory_ids":["按重要性排序的候选ID"]}。允许空数组。'
+                '# 输出\n只返回 JSON object：{"memory_ids":["按重要性排序的候选ID"],'
+                '"previous_ending_start_id":"上一章结尾起点ID或null"}。memory_ids 允许空数组。'
                 "ID 必须从候选块的方括号中原样完整复制（chapter 类 ID 含 :headline 或 :summary 后缀），不得截断、改写或自造。"
             ),
         ]
@@ -191,7 +212,7 @@ def _resolve_selected_block(by_id: dict[str, MemoryBlock], memory_id: str) -> Me
 
 
 def pack_selected_memories(blocks: list[MemoryBlock], selected_ids: Iterable[str], budget: int) -> list[MemoryBlock]:
-    by_id = {block.id: block for block in blocks}
+    by_id = {block.id: block for block in blocks if block.memory_type != "previous_ending"}
     result: list[MemoryBlock] = []
     used = 0
     summary_count = 0
@@ -220,10 +241,38 @@ def pack_selected_memories(blocks: list[MemoryBlock], selected_ids: Iterable[str
     return result
 
 
-def writer_user_message(book: Book, chapter: Chapter, memories: list[MemoryBlock] | None = None) -> str:
+def pack_writer_context(
+    blocks: list[MemoryBlock],
+    selected_ids: Iterable[str],
+    previous_ending_start_id: str | None,
+    budget: int,
+) -> PackedWriterContext:
+    ending_blocks = [block for block in blocks if block.memory_type == "previous_ending"]
+    previous_ending = ""
+    if ending_blocks:
+        start = next(
+            (index for index, block in enumerate(ending_blocks) if block.id == previous_ending_start_id),
+            0,
+        )
+        previous_ending = "\n\n".join(block.text for block in ending_blocks[start:])
+        previous_ending = truncate_to_nonspace(previous_ending, min(budget, PREVIOUS_ENDING_MAX_CHARS))
+    remaining = max(0, budget - nonspace_len(previous_ending))
+    return PackedWriterContext(
+        memories=pack_selected_memories(blocks, selected_ids, remaining),
+        previous_ending=previous_ending,
+    )
+
+
+def writer_user_message(
+    book: Book,
+    chapter: Chapter,
+    memories: list[MemoryBlock] | None = None,
+    previous_ending: str = "",
+) -> str:
     characters = _selected_characters(chapter)
     allow = "、".join(character.name for character in characters) or "（没有已知人物卡；Bible 明写的临时角色仍可出现）"
-    memory_text = "\n\n".join(block.text for block in (memories or [])) or "（本章不需要历史记忆）"
+    memory_text = "\n\n".join(block.text for block in (memories or [])) or "（本章不需要其他历史记忆）"
+    ending_text = previous_ending.strip() or "（没有可用的紧邻上一章结尾）"
     low_bound, high_bound = word_count_bounds(chapter.target_word_count)
     return "\n\n".join(
         [
@@ -234,17 +283,71 @@ def writer_user_message(book: Book, chapter: Chapter, memories: list[MemoryBlock
                 "白名单表示允许出现或被提及，不要求全部使用。历史记忆中出现的人物不会因此获得本章出场权限。"
             ),
             "# 人物卡（固定设定与当前动态状态）\n" + (_character_cards(characters) or "（无）"),
-            "# 只读工作记忆\n" + memory_text,
+            (
+                "# 历史参考资料（只读，低于本章 Bible）\n"
+                "## 紧邻上一章结尾原文（仅用于开场衔接）\n"
+                "以下原文只用于承接时间、地点、动作、身体状态、情绪余韵和现场环境；"
+                "不得决定本章主要剧情、授权白名单外人物，或要求延续与 Bible 无关的情节。\n\n"
+                + ending_text
+                + "\n\n## 其他工作记忆\n"
+                + memory_text
+            ),
             "# 作者对本章的备注\n" + (chapter_author_note(chapter).strip() or "（无）"),
             f"# 本章剧情 Bible（情节最高权威）\n标题：{chapter.title}\n\n{chapter.user_prompt.strip()}",
             (
-                "# 字数和交稿契约\n"
+                "# 最终执行契约\n"
+                "本章剧情 Bible 是本次写作的最高情节权威，决定本章发生什么、事件顺序和结尾落点。"
+                "历史参考只能帮助处理衔接与已发生事实，不得据此增加 Bible 未要求的剧情、场景、冲突或人物。"
+                "历史参考与 Bible 冲突时必须忽略冲突内容并服从 Bible。写作前在内部确认 Bible 的必要事件和结尾落点，不得输出分析过程。\n"
                 f"目标 {chapter.target_word_count} 字，最终正文必须在 "
                 f"{low_bound}～{high_bound} 个去空白字符内。"
                 "只输出正文，不得解释、列提纲或擅自增加剧情、人物。"
             ),
         ]
     )
+
+
+def _previous_ending_blocks(chapter: Chapter) -> list[MemoryBlock]:
+    text = chapter.draft_text.strip()
+    paragraphs = [part.strip() for part in re.split(r"\n\s*", text) if part.strip()]
+    if not paragraphs:
+        return []
+    selected: list[str] = []
+    used = 0
+    for paragraph in reversed(paragraphs):
+        size = nonspace_len(paragraph)
+        remaining = PREVIOUS_ENDING_MAX_CHARS - used
+        if remaining <= 0:
+            break
+        if size > remaining:
+            paragraph = _truncate_from_end(paragraph, remaining)
+            size = nonspace_len(paragraph)
+        selected.append(paragraph)
+        used += size
+        if used >= PREVIOUS_ENDING_MAX_CHARS:
+            break
+    selected.reverse()
+    return [
+        MemoryBlock(
+            id=f"previous_ending:{chapter.id}:p{index}",
+            text=paragraph,
+            chapter_index=chapter.index,
+            memory_type="previous_ending",
+        )
+        for index, paragraph in enumerate(selected, start=1)
+    ]
+
+
+def _truncate_from_end(text: str, n: int) -> str:
+    count = 0
+    start = len(text)
+    for index in range(len(text) - 1, -1, -1):
+        if not text[index].isspace():
+            count += 1
+            if count > n:
+                break
+        start = index
+    return text[start:]
 
 
 def reviser_user_message(
