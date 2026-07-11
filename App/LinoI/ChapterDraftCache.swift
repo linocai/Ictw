@@ -85,12 +85,7 @@ struct LocalChapterDraft: Codable {
     }
 
     private static func parseRemoteDate(_ raw: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: raw) {
-            return date
-        }
-        return ISO8601DateFormatter().date(from: raw)
+        raw.linoBackendDate
     }
 }
 

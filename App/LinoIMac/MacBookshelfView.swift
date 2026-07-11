@@ -199,7 +199,7 @@ private struct MacBookCard: View {
 /// M月d日（更早）。与 iOS `String.linoShortDate`（`RelativeDateTimeFormatter`
 /// 短样式）故意不同——书架卡片上要的是"几点"而不是笼统的"几小时前"。
 private func macRelativeDate(_ raw: String) -> String {
-    guard let date = parseBackendTimestamp(raw) else { return "最近更新" }
+    guard let date = raw.linoBackendDate else { return "最近更新" }
 
     let calendar = Calendar.current
     let timeFormatter = DateFormatter()
@@ -220,27 +220,4 @@ private func macRelativeDate(_ raw: String) -> String {
     let dateFormatter = DateFormatter()
     dateFormatter.dateFormat = "M月d日"
     return dateFormatter.string(from: date)
-}
-
-/// 后端 `updated_at` 实际落地是 SQLite 经 SQLAlchemy `DateTime(timezone=True)`
-/// 存取后丢了时区标记的裸时间字符串（例如 `"2026-07-11T05:57:11.827494"`，
-/// 无 `Z`/偏移），不是标准 `ISO8601DateFormatter` 能直接吃的格式——照单纯
-/// `.withInternetDateTime` 解析会稳定返回 nil，卡片会永远显示"最近更新"退
-/// 化态。这里按后端 `utc_now()`（写库前就是 UTC）把裸字符串当 UTC 解释，
-/// 换算到 `Calendar.current` 的本地时区再做"今天/昨天"判断；同时保留标准
-/// ISO8601（含时区）分支，未来后端序列化换成带时区字符串也能直接命中。
-private func parseBackendTimestamp(_ raw: String) -> Date? {
-    let isoFractional = ISO8601DateFormatter()
-    isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = isoFractional.date(from: raw) { return date }
-    if let date = ISO8601DateFormatter().date(from: raw) { return date }
-
-    for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss"] {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.dateFormat = format
-        if let date = formatter.date(from: raw) { return date }
-    }
-    return nil
 }

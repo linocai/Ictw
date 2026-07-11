@@ -399,11 +399,28 @@ extension String {
         }
     }
 
-    var linoShortDate: String {
+    /// 后端时间戳统一解析入口。SQLite 经 SQLAlchemy 存取后返回的是丢了时区
+    /// 标记的裸时间字符串（如 `"2026-07-11T05:57:11.827494"`，无 `Z`/偏移），
+    /// 标准 `ISO8601DateFormatter` 解析它稳定返回 nil。后端 `utc_now()` 写库
+    /// 前就是 UTC，所以裸字符串按 UTC 解释；同时保留标准 ISO8601（含时区）
+    /// 分支，未来后端序列化换成带时区字符串也能直接命中。
+    var linoBackendDate: Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = fractional.date(from: self) ?? ISO8601DateFormatter().date(from: self)
-        guard let date else { return "最近更新" }
+        if let date = fractional.date(from: self) { return date }
+        if let date = ISO8601DateFormatter().date(from: self) { return date }
+        for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss"] {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(identifier: "UTC")
+            formatter.dateFormat = format
+            if let date = formatter.date(from: self) { return date }
+        }
+        return nil
+    }
+
+    var linoShortDate: String {
+        guard let date = linoBackendDate else { return "最近更新" }
         let rel = RelativeDateTimeFormatter()
         rel.locale = Locale(identifier: "zh_CN")
         rel.unitsStyle = .short
