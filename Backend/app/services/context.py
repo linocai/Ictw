@@ -308,21 +308,58 @@ def writer_user_message(
     )
 
 
-def writer_expansion_user_message(
+def writer_rewrite_user_message(
     original_message: str,
-    current_text: str,
     violations: list[dict[str, Any]],
 ) -> str:
     return "\n\n".join(
         [
             original_message,
+            "# 上一轮篇幅校验\n" + "\n".join(f"- {item['message']}" for item in violations),
+            (
+                "# Writer 重新生成任务\n"
+                "上一轮输出严重不足，不能作为可扩写初稿。本次必须从头生成完整章节，不得续写、"
+                "仿照或依赖上一轮短稿；完成全部 Bible 事件并达到前述最低字数后才能收束结尾。"
+            ),
+        ]
+    )
+
+
+def writer_expansion_user_message(
+    book: Book,
+    chapter: Chapter,
+    current_text: str,
+    violations: list[dict[str, Any]],
+) -> str:
+    characters = _selected_characters(chapter)
+    allow = "、".join(character.name for character in characters) or "（无已选人物）"
+    states: list[str] = []
+    for character in characters:
+        dynamic = _format_dynamic_fields(character.dynamic_fields)
+        if dynamic == "（暂无）":
+            states.append(f"- {character.name}：无特殊动态状态")
+        else:
+            states.append(f"- {character.name}：\n{dynamic}")
+    state_text = "\n".join(states) or "（无）"
+    low_bound, high_bound = word_count_bounds(chapter.target_word_count)
+    current_chars = nonspace_len(current_text)
+    return "\n\n".join(
+        [
+            "# 世界观（硬约束）\n" + (book.world_setting.strip() or "（无）"),
+            f"# 本章剧情 Bible（最高权威）\n标题：{chapter.title}\n\n{chapter.user_prompt.strip()}",
+            "# 作者对本章的备注\n" + (chapter_author_note(chapter).strip() or "（无）"),
+            "# 本章必要约束\n允许人物：" + allow + "\n人物当前状态：\n" + state_text,
+            (
+                f"# 篇幅校验\n目标 {chapter.target_word_count} 字，合格区间 {low_bound}～{high_bound} 个去空白字符。\n"
+                f"当前正文 {current_chars} 字，尚缺至少 {max(0, low_bound - current_chars)} 字。\n"
+                + "\n".join(f"- {item['message']}" for item in violations)
+            ),
             "# 当前正文\n" + current_text,
-            "# 本次篇幅校验\n" + "\n".join(f"- {item['message']}" for item in violations),
             (
                 "# Writer 扩写任务\n"
-                "保持当前正文已经完成的情节、顺序和结尾落点，在这些内容内部有机补足动作过程、"
-                "环境反馈、人物反应与心理变化。保留可用原文并返回完整正文，不得只输出新增段落；"
-                "达到前述最低字数前不得收束结尾。"
+                "保持当前正文的事件、顺序、视角和结尾落点，在现有事件内部补足动作过程、场景反馈、"
+                "人物反应、心理变化和段落间过渡。优先扩展过于概括、跳跃或一笔带过的段落，不要只在"
+                "结尾追加内容。保留可用原文并返回完整正文；达到最低字数前不得收束结尾。只输出正文。"
             ),
         ]
     )

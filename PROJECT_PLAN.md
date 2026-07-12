@@ -49,6 +49,7 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 
 ## 变更日志
 
+- 2026-07-12 v1.3.1 热修：Writer 字数修复分流——正文低于最低合格线 60% 时使用完整初稿 Prompt 从头重写且不携带失败短稿；达到 60% 后才使用以世界观、Bible、作者备注、人物精简动态状态和当前正文为核心的轻量扩写 Prompt，不再重复上一章结尾、工作记忆和完整人物卡。GLM `sensitive`/通用 safety finish reason 首次出现即映射内容拦截并终止，不再浪费两次扩写。后端 78 测试全绿。
 - 2026-07-12 v1.3.1 热修：GLM 5 系列旧绑定 `thinking_enabled=NULL` 过去在界面显示为关闭，但请求未发送 disabled、实际继承官方默认开启。现将 GLM 空值解释为有效开启，界面不再假报关闭；显式关闭后落库为 `0` 并真实发送 `thinking:{type:disabled}`，temperature 保持生效。后端 76 测试全绿；生产备份 `20260712-145649` 后部署，Writer 已通过设置 API 写为 `thinking_enabled=0`，有效 temperature 保持 `0.9`，公网健康正常。
 - 2026-07-12 v1.3.1 部署：字数不足/截断改由 Writer 最多两次有机扩写，Reviser 仅处理超长与其他程序违规；GLM 5/5.1/5.2 纳入 capability registry，可显式控制 thinking、high/max effort 与 temperature；双端阅读翻章回顶部，本地草稿只对真实变化标脏且恢复提示收为页内横幅。后端 75 测试、iOS/macOS Debug 构建全绿；生产备份 `20260712-134742` 后部署，健康检查 `1.3.1`、数据库检查正常；macOS universal Release 通过 hardened runtime 与签名校验，以 `ditto` 重装并真实启动 `1.3.1(10)`。本版不建 tag/GitHub Release。（施工全文见 `archive/v1.3.1施工plan.md`。）
 - 2026-07-12 v1.3.0 发版：Reviser 阶段双端展示最新程序校验原因，最终校验失败保留；Memory Selector 从紧邻已完成上一章最多 700 字原文结尾中选择最短衔接起点，结尾与既有记忆共用 1800 字预算；Writer Prompt 固定 Bible 最高权威与历史参考边界并去除重复世界观；双端同步 job 本地状态并接管 `write_running`；数字型上游 error.code 与带 Z 六位微秒时间串补兼容。后端 68 测试全绿，生产备份 `20260712-062035` 后部署，健康检查 `1.3.0`、数据库检查正常；macOS ICTW `1.3.0(9)` 已重装并真实启动，iOS 真机安装留给用户。（施工全文见 `archive/v1.3.0施工plan.md`。）

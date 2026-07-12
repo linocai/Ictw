@@ -17,16 +17,19 @@ from app.services.context import (
     MEMORY_BUDGET_CHARS,
     MemoryBlock,
     draft_violations,
+    nonspace_len,
     pack_writer_context,
     reviser_user_message,
     word_count_bounds,
     writer_expansion_user_message,
+    writer_rewrite_user_message,
     writer_user_message,
 )
 from app.services.extraction import apply_extractor_output
 
 
 TERMINAL_PHASES = {"done", "failed", "cancelled"}
+WRITER_REWRITE_THRESHOLD_RATIO = 0.60
 
 
 class WriteJobConflict(Exception):
@@ -274,6 +277,22 @@ def _run_reviser(job: WriteJob, session_factory: sessionmaker[Session], message:
     return result
 
 
+def _raise_for_blocked_finish_reason(job: WriteJob, agent_role: str, agent: Any) -> None:
+    finish_reason = getattr(getattr(agent, "llm", None), "last_finish_reason", None)
+    normalized = str(finish_reason or "").strip().lower()
+    if normalized not in {"sensitive", "content_filter", "safety"}:
+        return
+    error = LLMError(
+        "LLM blocked the request",
+        code="llm_content_blocked",
+        block_reason=str(finish_reason),
+        finish_reason=str(finish_reason),
+    )
+    error.agent_role = agent_role
+    error.model_name = getattr(getattr(agent, "llm", None), "model_name", None)
+    raise error
+
+
 # --- Workers -------------------------------------------------------------------
 
 
@@ -312,6 +331,7 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
             _restore_baseline(db, job)
             job.mark_terminal()
             return
+        _raise_for_blocked_finish_reason(job, "writer", job.writer)
 
         violations = draft_violations(db, chapter, current_text, job.writer.finish_reason)
         writer_attempts = 0
@@ -345,7 +365,16 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
                 current_text = _run_writer(
                     job,
                     session_factory,
-                    writer_expansion_user_message(message, current_text, expansion_violations),
+                    (
+                        writer_rewrite_user_message(message, expansion_violations)
+                        if nonspace_len(current_text) < int(low_bound * WRITER_REWRITE_THRESHOLD_RATIO)
+                        else writer_expansion_user_message(
+                            chapter.book,
+                            chapter,
+                            current_text,
+                            expansion_violations,
+                        )
+                    ),
                 )
                 finish_reason = job.writer.finish_reason
             else:
@@ -370,6 +399,11 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
                 _restore_baseline(db, job)
                 job.mark_terminal()
                 return
+            _raise_for_blocked_finish_reason(
+                job,
+                "writer" if expansion_violations else "reviser",
+                job.writer if expansion_violations else job.reviser,
+            )
             violations = draft_violations(db, chapter, current_text, finish_reason)
         if violations:
             _restore_baseline(db, job)

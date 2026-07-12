@@ -30,6 +30,7 @@ class SequenceTextLLM(TextLLM):
         super().__init__(texts[-1])
         self.texts = texts
         self.finish_reasons = finish_reasons or ["stop"] * len(texts)
+        self.users: list[str] = []
 
     def _next(self) -> str:
         index = min(self.calls, len(self.texts) - 1)
@@ -38,9 +39,11 @@ class SequenceTextLLM(TextLLM):
         return self.texts[index]
 
     def complete_stream(self, **kwargs):
+        self.users.append(kwargs["user"])
         yield from self._next()
 
     def complete(self, **kwargs):
+        self.users.append(kwargs["user"])
         return self._next()
 
 
@@ -207,6 +210,34 @@ def test_short_draft_is_expanded_by_writer_and_never_reviser(client, auth_header
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
     assert writer.calls == 2
     assert reviser.calls == 0
+    assert "# Writer 重新生成任务" in writer.users[1]
+    assert "# 当前正文" not in writer.users[1]
+
+
+def test_mild_shortage_uses_compact_expansion_prompt(client, auth_headers, wait_for_terminal):
+    book = client.post(
+        "/api/v1/books",
+        headers=auth_headers,
+        json={"title": "书", "world_setting": "第一人称"},
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "完成行动", "author_note": "保持克制", "target_word_count": 100},
+    ).json()
+    writer = SequenceTextLLM(["短" * 70, "扩" * 100])
+    reviser = TextLLM("修" * 100)
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    client.app.dependency_overrides[get_reviser_client] = lambda: reviser
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    compact = writer.users[1]
+    assert "# Writer 扩写任务" in compact
+    assert "# 当前正文\n" + "短" * 70 in compact
+    assert "# 历史参考资料" not in compact
+    assert "完成行动" in compact and "保持克制" in compact
+    assert "尚缺至少 10 字" in compact
+    assert reviser.calls == 0
 
 
 def test_writer_expansion_exhaustion_restores_baseline(client, auth_headers, wait_for_terminal):
@@ -268,6 +299,28 @@ def test_truncated_output_is_repaired_by_writer(client, auth_headers, wait_for_t
     assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
     assert writer.calls == 2
+    assert reviser.calls == 0
+
+
+def test_sensitive_finish_reason_stops_without_writer_retry(client, auth_headers, wait_for_terminal):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 100},
+    ).json()
+    writer = SequenceTextLLM(["截" * 30, "不应调用"], ["sensitive", "stop"])
+    reviser = TextLLM("修" * 100)
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    client.app.dependency_overrides[get_reviser_client] = lambda: reviser
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
+    status = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert status["phase"] == "failed"
+    assert status["error_code"] == "llm_content_blocked"
+    assert status["error_context"]["agent_role"] == "writer"
+    assert status["error_context"]["finish_reason"] == "sensitive"
+    assert status["error_context"]["block_reason"] == "sensitive"
+    assert writer.calls == 1
     assert reviser.calls == 0
 
 
