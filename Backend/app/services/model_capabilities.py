@@ -110,10 +110,11 @@ def effective_binding_settings(
     thinking, effort = sanitized_settings(binding.thinking_enabled, binding.reasoning_effort, capabilities)
     if capabilities.thinking_required:
         thinking = True
-    elif capabilities.family == "glm_5" and thinking is None:
-        # GLM 5.x defaults to thinking enabled upstream. Treat an unset legacy
-        # binding as effectively enabled so the UI never displays a false
-        # "off" state while the request silently inherits the provider default.
+    elif capabilities.thinking_toggle_supported and thinking is None:
+        # DeepSeek V4 and GLM 5.x both default to thinking enabled upstream.
+        # Treat an unset legacy binding as effectively enabled so the UI never
+        # displays a false "off" state while the request silently inherits the
+        # provider default. The effective value is also sent explicitly.
         thinking = True
     return thinking, effort
 

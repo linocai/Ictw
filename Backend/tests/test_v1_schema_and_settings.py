@@ -345,6 +345,21 @@ def test_glm_unset_binding_reports_and_sends_effective_default_on(tmp_path) -> N
         assert response["effective_thinking_enabled"] is False
         assert response["effective_temperature"] == 0.9
 
+
+def test_deepseek_unset_binding_reports_default_on_then_persists_explicit_off(tmp_path) -> None:
+    with _binding_db(tmp_path, "deepseek-v4-pro", temperature=0.3) as db:
+        response = patch_binding("writer", AgentModelBindingPatch(), db)
+        assert response["thinking_enabled"] is None
+        assert response["effective_thinking_enabled"] is True
+        assert response["effective_temperature"] is None
+        assert response["temperature_adjustable"] is False
+
+        response = patch_binding("writer", AgentModelBindingPatch(thinking_enabled=False), db)
+        assert response["thinking_enabled"] is False
+        assert response["effective_thinking_enabled"] is False
+        assert response["effective_temperature"] == 0.3
+        assert response["temperature_adjustable"] is True
+
     disabled = OpenAICompatibleClient(
         base_url="https://example.invalid/v1",
         api_key="secret",
