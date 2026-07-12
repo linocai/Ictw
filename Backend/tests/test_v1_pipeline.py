@@ -55,6 +55,7 @@ def test_thinking_request_snapshots_and_unknown_sends_nothing():
     assert payload["thinking"] == {"type": "enabled"}
     assert payload["reasoning_effort"] == "high"
     assert "temperature" not in payload
+    assert "top_p" not in payload
 
     gemini = OpenAICompatibleClient(
         base_url="https://example.invalid/v1",
@@ -67,6 +68,7 @@ def test_thinking_request_snapshots_and_unknown_sends_nothing():
     gemini_payload = gemini._payload(system="s", user="u", stream=False, temperature=0.7)
     assert gemini_payload["reasoning_effort"] == "minimal"
     assert "temperature" not in gemini_payload
+    assert "top_p" not in gemini_payload
 
     unknown = OpenAICompatibleClient(
         base_url="https://example.invalid/v1",
@@ -78,6 +80,7 @@ def test_thinking_request_snapshots_and_unknown_sends_nothing():
     )
     unknown_payload = unknown._payload(system="s", user="u", stream=False)
     assert "thinking" not in unknown_payload and "reasoning_effort" not in unknown_payload
+    assert unknown_payload["top_p"] == 0.95
 
 
 def test_gemini_200_block_and_empty_candidate_are_classified():

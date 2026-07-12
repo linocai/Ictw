@@ -275,6 +275,7 @@ def test_temperature_override_reaches_payload_only_when_sendable() -> None:
         capability_family="deepseek_v4",
     )
     assert deepseek_off._payload(system="s", user="u", stream=False, temperature=0.7)["temperature"] == 1.1
+    assert deepseek_off._payload(system="s", user="u", stream=False, temperature=0.7)["top_p"] == 0.95
 
     deepseek_on = OpenAICompatibleClient(
         base_url="https://example.invalid/v1",
@@ -285,6 +286,7 @@ def test_temperature_override_reaches_payload_only_when_sendable() -> None:
         capability_family="deepseek_v4",
     )
     assert "temperature" not in deepseek_on._payload(system="s", user="u", stream=False, temperature=0.7)
+    assert "top_p" not in deepseek_on._payload(system="s", user="u", stream=False, temperature=0.7)
 
     gemini = OpenAICompatibleClient(
         base_url="https://example.invalid/v1",
@@ -294,6 +296,7 @@ def test_temperature_override_reaches_payload_only_when_sendable() -> None:
         capability_family="gemini_3_5_flash",
     )
     assert "temperature" not in gemini._payload(system="s", user="u", stream=False, temperature=0.7)
+    assert "top_p" not in gemini._payload(system="s", user="u", stream=False, temperature=0.7)
 
     unknown = OpenAICompatibleClient(
         base_url="https://example.invalid/v1",
@@ -303,6 +306,7 @@ def test_temperature_override_reaches_payload_only_when_sendable() -> None:
         capability_family="unknown",
     )
     assert unknown._payload(system="s", user="u", stream=False, temperature=0.7)["temperature"] == 0.3
+    assert unknown._payload(system="s", user="u", stream=False, temperature=0.7)["top_p"] == 0.95
 
 
 def test_glm_thinking_effort_and_temperature_reach_payload(tmp_path) -> None:
@@ -331,6 +335,7 @@ def test_glm_thinking_effort_and_temperature_reach_payload(tmp_path) -> None:
     assert payload["thinking"] == {"type": "enabled"}
     assert payload["reasoning_effort"] == "high"
     assert payload["temperature"] == 0.9
+    assert "top_p" not in payload
 
 
 def test_glm_unset_binding_reports_and_sends_effective_default_on(tmp_path) -> None:
@@ -372,6 +377,7 @@ def test_deepseek_unset_binding_reports_default_on_then_persists_explicit_off(tm
     assert payload["thinking"] == {"type": "disabled"}
     assert "reasoning_effort" not in payload
     assert payload["temperature"] == 0.9
+    assert payload["top_p"] == 0.95
 
 
 def test_model_change_to_gemini_clears_temperature(tmp_path) -> None:

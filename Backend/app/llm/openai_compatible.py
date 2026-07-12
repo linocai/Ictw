@@ -10,6 +10,9 @@ import httpx
 from app.llm.base import LLMError
 
 
+NON_THINKING_TOP_P = 0.95
+
+
 class OpenAICompatibleClient:
     def __init__(
         self,
@@ -147,7 +150,7 @@ class OpenAICompatibleClient:
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "stream": stream,
         }
-        for key in ("temperature", "max_tokens", "response_format"):
+        for key in ("temperature", "top_p", "max_tokens", "response_format"):
             if kwargs.get(key) is not None:
                 payload[key] = kwargs[key]
         # A user-configured binding temperature beats the per-agent default; the
@@ -158,16 +161,25 @@ class OpenAICompatibleClient:
             payload["thinking"] = {"type": "enabled" if self.thinking_enabled else "disabled"}
             if self.thinking_enabled:
                 payload.pop("temperature", None)
+                payload.pop("top_p", None)
                 if self.reasoning_effort is not None:
                     payload["reasoning_effort"] = self.reasoning_effort
         elif self.capability_family == "glm_5" and self.thinking_enabled is not None:
             payload["thinking"] = {"type": "enabled" if self.thinking_enabled else "disabled"}
             if self.thinking_enabled and self.reasoning_effort is not None:
                 payload["reasoning_effort"] = self.reasoning_effort
+            if self.thinking_enabled:
+                payload.pop("top_p", None)
         elif self.capability_family == "gemini_3_5_flash":
             payload.pop("temperature", None)
+            payload.pop("top_p", None)
             if self.reasoning_effort is not None:
                 payload["reasoning_effort"] = self.reasoning_effort
+        thinking_active = self.capability_family == "gemini_3_5_flash" or (
+            self.capability_family in {"deepseek_v4", "glm_5"} and self.thinking_enabled is True
+        )
+        if not thinking_active:
+            payload["top_p"] = NON_THINKING_TOP_P
         return payload
 
     def _post(self, payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
