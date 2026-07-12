@@ -49,7 +49,7 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 
 ## 变更日志
 
-- 2026-07-12 v1.3.1 热修：所有实际非思考模式的模型请求统一强制发送 `top_p=0.95`；DeepSeek/GLM/Gemini 的思考模式请求主动删除 `top_p`，避免无效参数。保持各 Agent 既有 temperature 与思考开关配置不变，后端 79 测试全绿。
+- 2026-07-12 v1.3.1 热修：所有实际非思考模式的模型请求统一强制发送 `top_p=0.95`；DeepSeek/GLM/Gemini 的思考模式请求主动删除 `top_p`，避免无效参数。保持各 Agent 既有 temperature 与思考开关配置不变，后端 79 测试全绿；生产备份 `20260712-163009` 后部署，实际 payload 验证 Writer/Reviser/Extractor 均为 disabled+temperature+top_p 0.95，Memory Selector 为 enabled+high 且不含 top_p，健康与数据库检查正常。
 - 2026-07-12 v1.3.1 热修：思考开关对 DeepSeek V4 与 GLM 5 系列统一采用真实有效语义——支持开关的模型请求必须明确发送 enabled/disabled；旧 `NULL` 按供应商默认开启展示并显式发送开启，杜绝界面假关闭。后端 79 测试全绿；生产备份 `20260712-162422` 后部署，Writer/Reviser/Extractor 均实测发送 disabled 并携带各自 temperature，Memory Selector 实测发送 enabled+high 且不发送 temperature，健康与数据库检查正常。
 - 2026-07-12 v1.3.1 热修：Writer 字数修复分流——正文低于最低合格线 60% 时使用完整初稿 Prompt 从头重写且不携带失败短稿；达到 60% 后才使用以世界观、Bible、作者备注、人物精简动态状态和当前正文为核心的轻量扩写 Prompt，不再重复上一章结尾、工作记忆和完整人物卡。GLM `sensitive`/通用 safety finish reason 首次出现即映射内容拦截并终止，不再浪费两次扩写。后端 78 测试全绿；生产备份 `20260712-152943` 后热部署，Writer 保持显式关思考与 temperature `0.9`，健康和数据库检查正常。
 - 2026-07-12 v1.3.1 热修：GLM 5 系列旧绑定 `thinking_enabled=NULL` 过去在界面显示为关闭，但请求未发送 disabled、实际继承官方默认开启。现将 GLM 空值解释为有效开启，界面不再假报关闭；显式关闭后落库为 `0` 并真实发送 `thinking:{type:disabled}`，temperature 保持生效。后端 76 测试全绿；生产备份 `20260712-145649` 后部署，Writer 已通过设置 API 写为 `thinking_enabled=0`，有效 temperature 保持 `0.9`，公网健康正常。
