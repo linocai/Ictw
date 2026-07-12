@@ -332,6 +332,19 @@ def test_glm_thinking_effort_and_temperature_reach_payload(tmp_path) -> None:
     assert payload["reasoning_effort"] == "high"
     assert payload["temperature"] == 0.9
 
+
+def test_glm_unset_binding_reports_and_sends_effective_default_on(tmp_path) -> None:
+    with _binding_db(tmp_path, "glm-5.2", temperature=0.9) as db:
+        response = patch_binding("writer", AgentModelBindingPatch(), db)
+        assert response["thinking_enabled"] is None
+        assert response["effective_thinking_enabled"] is True
+        assert response["temperature"] == 0.9
+
+        response = patch_binding("writer", AgentModelBindingPatch(thinking_enabled=False), db)
+        assert response["thinking_enabled"] is False
+        assert response["effective_thinking_enabled"] is False
+        assert response["effective_temperature"] == 0.9
+
     disabled = OpenAICompatibleClient(
         base_url="https://example.invalid/v1",
         api_key="secret",
