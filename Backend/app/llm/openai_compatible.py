@@ -160,6 +160,10 @@ class OpenAICompatibleClient:
                 payload.pop("temperature", None)
                 if self.reasoning_effort is not None:
                     payload["reasoning_effort"] = self.reasoning_effort
+        elif self.capability_family == "glm_5" and self.thinking_enabled is not None:
+            payload["thinking"] = {"type": "enabled" if self.thinking_enabled else "disabled"}
+            if self.thinking_enabled and self.reasoning_effort is not None:
+                payload["reasoning_effort"] = self.reasoning_effort
         elif self.capability_family == "gemini_3_5_flash":
             payload.pop("temperature", None)
             if self.reasoning_effort is not None:

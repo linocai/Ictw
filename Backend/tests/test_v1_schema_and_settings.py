@@ -24,6 +24,13 @@ def test_registered_model_capabilities_are_explicit() -> None:
     assert deepseek.reasoning_effort_levels == ("high", "max")
     assert deepseek.thinking_can_disable is True
 
+    for model_name in ("glm-5", "GLM_5.0", "glm 5.1", "glm-5.2"):
+        glm = resolve_capabilities(model_name)
+        assert glm.family == "glm_5"
+        assert glm.thinking_can_disable is True
+        assert glm.reasoning_effort_levels == ("high", "max")
+        assert glm.temperature_effective_when_thinking is True
+
     gemini = resolve_capabilities("gemini-3.5-flash")
     assert gemini.family == "gemini_3_5_flash"
     assert gemini.thinking_required is True
@@ -296,6 +303,47 @@ def test_temperature_override_reaches_payload_only_when_sendable() -> None:
         capability_family="unknown",
     )
     assert unknown._payload(system="s", user="u", stream=False, temperature=0.7)["temperature"] == 0.3
+
+
+def test_glm_thinking_effort_and_temperature_reach_payload(tmp_path) -> None:
+    with _binding_db(
+        tmp_path,
+        "glm-5.2",
+        thinking_enabled=True,
+        reasoning_effort="high",
+        temperature=0.9,
+    ) as db:
+        response = patch_binding("writer", AgentModelBindingPatch(), db)
+        assert response["effective_thinking_enabled"] is True
+        assert response["effective_reasoning_effort"] == "high"
+        assert response["effective_temperature"] == 0.9
+
+    enabled = OpenAICompatibleClient(
+        base_url="https://example.invalid/v1",
+        api_key="secret",
+        model_name="glm-5.2",
+        thinking_enabled=True,
+        reasoning_effort="high",
+        temperature_override=0.9,
+        capability_family="glm_5",
+    )
+    payload = enabled._payload(system="s", user="u", stream=False)
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "high"
+    assert payload["temperature"] == 0.9
+
+    disabled = OpenAICompatibleClient(
+        base_url="https://example.invalid/v1",
+        api_key="secret",
+        model_name="glm-5.2",
+        thinking_enabled=False,
+        temperature_override=0.9,
+        capability_family="glm_5",
+    )
+    payload = disabled._payload(system="s", user="u", stream=False)
+    assert payload["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in payload
+    assert payload["temperature"] == 0.9
 
 
 def test_model_change_to_gemini_clears_temperature(tmp_path) -> None:

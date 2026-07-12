@@ -234,7 +234,7 @@ def patch_binding(agent_role: str, payload: AgentModelBindingPatch, db: Session 
         raise HTTPException(status_code=422, detail="此模型的思考模式不能关闭")
     if effort is not None and effort not in capabilities.reasoning_effort_levels:
         raise HTTPException(status_code=422, detail="该思考强度不受当前模型支持")
-    if capabilities.family == "deepseek_v4" and effort is not None and thinking is not True:
+    if capabilities.thinking_toggle_supported and effort is not None and thinking is not True:
         raise HTTPException(status_code=422, detail="启用思考后才能选择思考强度")
 
     # Required thinking is represented by the effective field, not a fabricated

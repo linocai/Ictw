@@ -20,7 +20,7 @@ enum LinoErrorPresenter {
 
     /// Presents a terminal (`phase == "failed"`) `WriteJobStatus`. Reads
     /// `errorCode` + `errorContext` for the environment/model/upstream
-    /// pieces, and — only for `revision_failed` — folds in the
+    /// pieces, and — for `revision_failed` — folds in the
     /// `unselected_character` violation's `names` so the message names the
     /// actual character(s) instead of a generic "validation failed".
     static func present(jobFailure status: WriteJobStatus) -> (message: String, critical: Bool) {
@@ -184,13 +184,15 @@ enum LinoErrorPresenter {
 
     // MARK: - Criticality
 
-    /// `llm_content_blocked` (content-policy block), `revision_failed` and
+    /// `llm_content_blocked` (content-policy block), validation exhaustion and
     /// `unauthorized` stay critical (manual dismiss, no auto-fade) — per the
     /// v1.2.3 hard constraint these must never blend into an ordinary,
     /// auto-dismissing failure toast. A `blockReason` implies a content
     /// block even if some future code path forgets to also set
     /// `llm_content_blocked`, so it is checked independently.
-    private static let criticalCodes: Set<String> = ["llm_content_blocked", "revision_failed", "unauthorized"]
+    private static let criticalCodes: Set<String> = [
+        "llm_content_blocked", "revision_failed", "writer_expansion_failed", "unauthorized",
+    ]
 
     private static func isCritical(code: String?, blockReason: String?) -> Bool {
         if let code, criticalCodes.contains(code) { return true }
@@ -230,6 +232,8 @@ enum LinoErrorPresenter {
             return Entry(reason: "上游请求处理失败", suggestion: "请重试；若持续出现，请检查模型配置")
 
         // 写作链 / 后端
+        case "writer_expansion_failed":
+            return Entry(reason: "Writer 扩写两次后仍未达到篇幅要求", suggestion: "请调整本章剧情或目标字数后重新生成")
         case "revision_failed":
             return Entry(reason: "修订两次后仍未通过程序校验", suggestion: "请调整本章剧情后重新生成，或豁免涉及人物后重试")
         case "write_failed":

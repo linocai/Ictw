@@ -302,7 +302,7 @@ private struct LinoIChapterEditor: View {
 
     private var handoffSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            stageHeader(index: "3", title: "正文与交稿", subtitle: "记忆选择后由 Writer 写作；仅在程序校验不通过时交给 Reviser，最多两次。")
+            stageHeader(index: "3", title: "正文与交稿", subtitle: "字数不足由 Writer 扩写；超长或其他程序违规交给 Reviser。")
             writingControlPanel
             Picker("正文模式", selection: $draftMode) {
                 ForEach(DraftMode.allCases) { mode in
@@ -377,7 +377,18 @@ private struct LinoIChapterEditor: View {
                 }
             }
 
-            if case .revising(let attempt) = editor.writingPhase {
+            if case .expanding(let attempt) = editor.writingPhase {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("程序校验发现篇幅不足，Writer 正在进行第 \(attempt)/2 次有机扩写。")
+                    if let reason = editor.currentValidationReason {
+                        Text("未通过验证：\(reason)")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(LinoTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if case .revising(let attempt) = editor.writingPhase {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("程序校验未通过，Reviser 正在进行第 \(attempt)/2 次修订。修订不会自行增加新剧情。")
                     if let reason = editor.currentValidationReason {

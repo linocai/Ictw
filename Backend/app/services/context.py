@@ -299,9 +299,30 @@ def writer_user_message(
                 "本章剧情 Bible 是本次写作的最高情节权威，决定本章发生什么、事件顺序和结尾落点。"
                 "历史参考只能帮助处理衔接与已发生事实，不得据此增加 Bible 未要求的剧情、场景、冲突或人物。"
                 "历史参考与 Bible 冲突时必须忽略冲突内容并服从 Bible。写作前在内部确认 Bible 的必要事件和结尾落点，不得输出分析过程。\n"
+                "在内部为 Bible 的必要事件分配足够篇幅；完成全部必要事件且达到最低字数前，不得提前进入本章结尾落点。\n"
                 f"目标 {chapter.target_word_count} 字，最终正文必须在 "
                 f"{low_bound}～{high_bound} 个去空白字符内。"
                 "只输出正文，不得解释、列提纲或擅自增加剧情、人物。"
+            ),
+        ]
+    )
+
+
+def writer_expansion_user_message(
+    original_message: str,
+    current_text: str,
+    violations: list[dict[str, Any]],
+) -> str:
+    return "\n\n".join(
+        [
+            original_message,
+            "# 当前正文\n" + current_text,
+            "# 本次篇幅校验\n" + "\n".join(f"- {item['message']}" for item in violations),
+            (
+                "# Writer 扩写任务\n"
+                "保持当前正文已经完成的情节、顺序和结尾落点，在这些内容内部有机补足动作过程、"
+                "环境反馈、人物反应与心理变化。保留可用原文并返回完整正文，不得只输出新增段落；"
+                "达到前述最低字数前不得收束结尾。"
             ),
         ]
     )

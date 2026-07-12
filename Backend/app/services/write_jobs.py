@@ -19,6 +19,8 @@ from app.services.context import (
     draft_violations,
     pack_writer_context,
     reviser_user_message,
+    word_count_bounds,
+    writer_expansion_user_message,
     writer_user_message,
 )
 from app.services.extraction import apply_extractor_output
@@ -312,33 +314,83 @@ def _run_job(job: WriteJob, session_factory: sessionmaker[Session]) -> None:
             return
 
         violations = draft_violations(db, chapter, current_text, job.writer.finish_reason)
-        for attempt in range(1, 3):
-            if not violations:
-                break
-            if job.reviser is None:
-                break
-            record_job_phase(session_factory, job.job_id, "revising", attempt=attempt, violations=violations)
-            current_text = _run_reviser(job, session_factory, reviser_user_message(chapter, current_text, violations))
+        writer_attempts = 0
+        reviser_attempts = 0
+        low_bound, _ = word_count_bounds(chapter.target_word_count)
+        failed_role = "reviser"
+        while violations:
+            expansion_violations = [
+                item
+                for item in violations
+                if item.get("code") == "length_truncated"
+                or (
+                    item.get("code") == "word_count"
+                    and isinstance(item.get("current_chars"), int)
+                    and item["current_chars"] < low_bound
+                )
+                or item.get("code") == "empty_body"
+            ]
+            if expansion_violations:
+                failed_role = "writer"
+                if job.writer is None or writer_attempts >= 2:
+                    break
+                writer_attempts += 1
+                record_job_phase(
+                    session_factory,
+                    job.job_id,
+                    "writing",
+                    attempt=writer_attempts,
+                    violations=expansion_violations,
+                )
+                current_text = _run_writer(
+                    job,
+                    session_factory,
+                    writer_expansion_user_message(message, current_text, expansion_violations),
+                )
+                finish_reason = job.writer.finish_reason
+            else:
+                failed_role = "reviser"
+                if job.reviser is None or reviser_attempts >= 2:
+                    break
+                reviser_attempts += 1
+                record_job_phase(
+                    session_factory,
+                    job.job_id,
+                    "revising",
+                    attempt=reviser_attempts,
+                    violations=violations,
+                )
+                current_text = _run_reviser(
+                    job,
+                    session_factory,
+                    reviser_user_message(chapter, current_text, violations),
+                )
+                finish_reason = getattr(getattr(job.reviser, "llm", None), "last_finish_reason", None)
             if _should_stop(job):
                 _restore_baseline(db, job)
                 job.mark_terminal()
                 return
-            finish_reason = getattr(getattr(job.reviser, "llm", None), "last_finish_reason", None)
             violations = draft_violations(db, chapter, current_text, finish_reason)
         if violations:
             _restore_baseline(db, job)
-            reviser_context: dict[str, Any] = {"agent_role": "reviser"}
-            reviser_model = getattr(getattr(job.reviser, "llm", None), "model_name", None)
-            if reviser_model:
-                reviser_context["model_name"] = reviser_model
+            failed_agent = job.writer if failed_role == "writer" else job.reviser
+            failure_context: dict[str, Any] = {"agent_role": failed_role}
+            failed_model = getattr(getattr(failed_agent, "llm", None), "model_name", None)
+            if failed_model:
+                failure_context["model_name"] = failed_model
+            expansion_failed = failed_role == "writer"
             record_job_phase(
                 session_factory,
                 job.job_id,
                 "failed",
-                error_code="revision_failed",
-                error_message="修订两次后仍未通过程序校验，请调整本章剧情后重新生成",
+                error_code="writer_expansion_failed" if expansion_failed else "revision_failed",
+                error_message=(
+                    "Writer 扩写两次后仍未达到篇幅要求，请调整本章剧情后重新生成"
+                    if expansion_failed
+                    else "修订两次后仍未通过程序校验，请调整本章剧情后重新生成"
+                ),
                 violations=violations,
-                error_context=reviser_context,
+                error_context=failure_context,
             )
             job.mark_terminal("failed")
             return

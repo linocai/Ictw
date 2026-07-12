@@ -4,23 +4,23 @@
 
 ## 概述
 
-LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。核心是四 Agent 写作链——Memory Selector（按本章 Bible 选择历史记忆与紧邻上一章结尾起点）→ Writer（白名单约束下写初稿）→ Reviser（仅程序校验不合格时修订，最多两次）→ 用户接受 → Extractor（只归档已选人物）。数据库负责记得全，Writer Prompt 只保留当前工作集。
+LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。核心是四 Agent 写作链——Memory Selector（按本章 Bible 选择历史记忆与紧邻上一章结尾起点）→ Writer（白名单约束下写初稿并负责所有扩写）→ Reviser（压缩与其他程序违规修订）→ 用户接受 → Extractor（只归档已选人物）。数据库负责记得全，Writer Prompt 只保留当前工作集。
 
 ## 技术选型
 
 - **App**：SwiftUI（iOS + macOS），无第三方依赖；Token 存 Keychain，本地草稿缓存在 Application Support。
-- **后端**：FastAPI + SQLAlchemy 2 + Alembic + SQLite，单 worker uvicorn；LLM 走 OpenAI-compatible 协议，capability registry 管推理参数（DeepSeek V4 Pro/Flash、Gemini 3.5 Flash、未知模型）。
+- **后端**：FastAPI + SQLAlchemy 2 + Alembic + SQLite，单 worker uvicorn；LLM 走 OpenAI-compatible 协议，capability registry 管推理参数（DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash、未知模型）。
 - **部署**：HK 云服务器，Nginx HTTPS 反代 → 127.0.0.1:8787，systemd `linoi-backend.service`。详情见 `~/Lino/hk_info.md`。
 
 ## 当前状态（2026-07-12）
 
-- v1.3.0 生产运行中：后端 Alembic head `20260711_0006`、健康版本 `1.3.0`，macOS ICTW `1.3.0(9)` 已重装；iOS 真机安装由用户管理。
-- 本版完成 Reviser 实时校验原因、紧邻上一章结尾衔接与 1800 字共享预算、Bible 权威 Prompt、双端任务状态/接管修复及两个防御修复；后端 68 测试全绿。
-- `chapter_style` 兼容窗口继续保留；v1.3.0 施工与验收全文见 `archive/v1.3.0施工plan.md`。
+- v1.3.1 本地实现与验证完成，待提交推送、生产后端部署和 macOS 换包；无数据库迁移。
+- Writer 负责全部扩写，Reviser 只负责压缩与其他违规；GLM 5 系列已纳入 capability registry。
+- 双端阅读翻章回顶部、本地草稿提示收口完成；后端 75 测试及 iOS/macOS Debug 构建全绿。
 
 ## 当前 Plan
 
-（暂无。v1.3.0 已发版，施工全文见 `archive/v1.3.0施工plan.md`。）
+部署 v1.3.1 生产后端并重装 macOS ICTW；不创建 tag 或 GitHub Release。
 
 ## Backlog
 

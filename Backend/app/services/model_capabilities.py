@@ -38,6 +38,15 @@ DEEPSEEK_V4_CAPABILITIES = ModelCapabilities(
     temperature_effective_when_thinking=False,
 )
 
+GLM_5_CAPABILITIES = ModelCapabilities(
+    family="glm_5",
+    thinking_toggle_supported=True,
+    thinking_can_disable=True,
+    thinking_required=False,
+    reasoning_effort_levels=("high", "max"),
+    temperature_effective_when_thinking=True,
+)
+
 GEMINI_3_5_FLASH_CAPABILITIES = ModelCapabilities(
     family="gemini_3_5_flash",
     thinking_toggle_supported=False,
@@ -58,6 +67,8 @@ def resolve_capabilities(model_name: str | None, base_url: str | None = None) ->
     host_hint = (base_url or "").lower()
     if "deepseek" in model and "v4" in model and ("pro" in model or "flash" in model):
         return DEEPSEEK_V4_CAPABILITIES
+    if model in {"glm-5", "glm-5.0", "glm-5.1", "glm-5.2"}:
+        return GLM_5_CAPABILITIES
     if "gemini" in model and ("3.5" in model or "3-5" in model) and "flash" in model:
         return GEMINI_3_5_FLASH_CAPABILITIES
 
@@ -84,7 +95,7 @@ def sanitized_settings(
         thinking_enabled = None
     if reasoning_effort not in capabilities.reasoning_effort_levels:
         reasoning_effort = None
-    if capabilities.family == "deepseek_v4" and thinking_enabled is not True:
+    if capabilities.thinking_toggle_supported and thinking_enabled is not True:
         reasoning_effort = None
     return thinking_enabled, reasoning_effort
 

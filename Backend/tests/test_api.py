@@ -25,6 +25,25 @@ class TextLLM:
         return {"memory_ids": []}
 
 
+class SequenceTextLLM(TextLLM):
+    def __init__(self, texts: list[str], finish_reasons: list[str] | None = None) -> None:
+        super().__init__(texts[-1])
+        self.texts = texts
+        self.finish_reasons = finish_reasons or ["stop"] * len(texts)
+
+    def _next(self) -> str:
+        index = min(self.calls, len(self.texts) - 1)
+        self.last_finish_reason = self.finish_reasons[min(index, len(self.finish_reasons) - 1)]
+        self.calls += 1
+        return self.texts[index]
+
+    def complete_stream(self, **kwargs):
+        yield from self._next()
+
+    def complete(self, **kwargs):
+        return self._next()
+
+
 def test_bearer_token_required(client):
     assert client.get("/api/v1/health").status_code == 401
 
@@ -173,36 +192,130 @@ def test_writer_preflight_uses_longest_name_and_rejects_unselected(client, auth_
     assert short["id"] != long["id"]
 
 
-def test_reviser_one_attempt_and_two_attempt_failure_restore_baseline(client, auth_headers, wait_for_terminal):
+def test_short_draft_is_expanded_by_writer_and_never_reviser(client, auth_headers, wait_for_terminal):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(
         f"/api/v1/books/{book['id']}/chapters",
         headers=auth_headers,
         json={"user_prompt": "行动", "target_word_count": 20},
     ).json()
-    writer = TextLLM("短")
+    writer = SequenceTextLLM(["短", "扩" * 20])
     reviser = TextLLM("修" * 20)
     client.app.dependency_overrides[get_writer_client] = lambda: writer
     client.app.dependency_overrides[get_reviser_client] = lambda: reviser
     assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
-    assert reviser.calls == 1
+    assert writer.calls == 2
+    assert reviser.calls == 0
+
+
+def test_writer_expansion_exhaustion_restores_baseline(client, auth_headers, wait_for_terminal):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
 
     client.post(f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "旧稿"})
-    always_bad = TextLLM("坏")
-    client.app.dependency_overrides[get_reviser_client] = lambda: always_bad
+    always_short = TextLLM("坏")
+    reviser = TextLLM("修" * 20)
+    client.app.dependency_overrides[get_writer_client] = lambda: always_short
+    client.app.dependency_overrides[get_reviser_client] = lambda: reviser
+    assert client.post(
+        f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers, json={"replace_draft": True}
+    ).status_code == 200
+    status = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert status["phase"] == "failed"
+    assert status["error_code"] == "writer_expansion_failed"
+    assert status["violations"]
+    assert status["error_context"]["agent_role"] == "writer"
+    assert always_short.calls == 3
+    assert reviser.calls == 0
+    latest = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert latest["draft_text"] == "旧稿"
+    assert latest["status"] == "draft_ready"
+
+
+def test_overlong_draft_and_reviser_overshoot_route_by_direction(client, auth_headers, wait_for_terminal):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
+    writer = SequenceTextLLM(["长" * 30, "补" * 20])
+    reviser = TextLLM("短")
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    client.app.dependency_overrides[get_reviser_client] = lambda: reviser
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    assert reviser.calls == 1
+    assert writer.calls == 2
+
+
+def test_truncated_output_is_repaired_by_writer(client, auth_headers, wait_for_terminal):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
+    writer = SequenceTextLLM(["截" * 20, "全" * 20], ["length", "stop"])
+    reviser = TextLLM("修" * 20)
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    client.app.dependency_overrides[get_reviser_client] = lambda: reviser
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    assert writer.calls == 2
+    assert reviser.calls == 0
+
+
+def test_mixed_short_and_character_violation_expands_then_revises(client, auth_headers, wait_for_terminal):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    client.post(
+        f"/api/v1/books/{book['id']}/characters",
+        headers=auth_headers,
+        json={"name": "赵云"},
+    ).raise_for_status()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
+    writer = SequenceTextLLM(["短", "赵云" + "扩" * 18])
+    reviser = TextLLM("净" * 20)
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    client.app.dependency_overrides[get_reviser_client] = lambda: reviser
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    assert writer.calls == 2
+    assert reviser.calls == 1
+
+
+def test_reviser_exhaustion_restores_baseline(client, auth_headers, wait_for_terminal):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
+    client.post(f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "旧稿"})
+    writer = TextLLM("长" * 30)
+    always_long = TextLLM("修" * 30)
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    client.app.dependency_overrides[get_reviser_client] = lambda: always_long
     assert client.post(
         f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers, json={"replace_draft": True}
     ).status_code == 200
     status = wait_for_terminal(client, chapter["id"], auth_headers)
     assert status["phase"] == "failed"
     assert status["error_code"] == "revision_failed"
-    assert status["violations"]
     assert status["error_context"]["agent_role"] == "reviser"
-    assert always_bad.calls == 2
+    assert writer.calls == 1
+    assert always_long.calls == 2
     latest = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert latest["draft_text"] == "旧稿"
-    assert latest["status"] == "draft_ready"
 
 
 def test_delete_middle_chapter_reindexes_and_is_idempotent(client, auth_headers):

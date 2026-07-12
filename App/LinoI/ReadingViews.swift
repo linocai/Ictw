@@ -81,6 +81,7 @@ struct LinoIReadingView: View {
         .safeAreaInset(edge: .bottom) {
             controlBar
         }
+        .id(chapter.id)
     }
 
     private var header: some View {

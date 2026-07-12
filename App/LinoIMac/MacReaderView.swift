@@ -238,6 +238,7 @@ struct MacReaderView: View {
             .padding(.bottom, 140)
         }
         .scrollIndicators(.hidden)
+        .id(chapter?.id)
     }
 
     private var chapterEndMark: some View {

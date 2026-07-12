@@ -10,6 +10,7 @@ from app.services.context import (
     memory_selector_user_message,
     pack_selected_memories,
     pack_writer_context,
+    writer_expansion_user_message,
     writer_user_message,
 )
 from app.services.personas import DEFAULT_PERSONAS
@@ -88,6 +89,20 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
     assert text.count("# 世界观") == 1
     assert "Bible 是本次写作的最高情节权威" in text
     assert "不得据此增加 Bible 未要求的剧情" in text
+    assert "达到最低字数前，不得提前进入本章结尾落点" in text
+
+
+def test_writer_expansion_prompt_preserves_original_contract_without_duplicate_plot_rule():
+    original = "# 本章剧情 Bible\n行动\n\n# 最终执行契约\n不得擅自增加剧情。"
+    expanded = writer_expansion_user_message(
+        original,
+        "当前短稿",
+        [{"code": "word_count", "message": "正文 4 字，不在目标区间 80～120 字"}],
+    )
+    assert expanded.count("不得擅自增加剧情") == 1
+    assert "当前短稿" in expanded
+    assert "不得只输出新增段落" in expanded
+    assert "达到前述最低字数前不得收束结尾" in expanded
 
 
 def test_memory_candidates_scope_and_budget_packing(client, auth_headers):

@@ -308,13 +308,14 @@ final class ChapterEditorStore: ObservableObject {
         case idle
         case selectingMemory
         case writing
+        case expanding(attempt: Int)
         case revising(attempt: Int)
         case extracting
         case failed(code: String?, message: String)
 
         var isActive: Bool {
             switch self {
-            case .selectingMemory, .writing, .revising, .extracting: return true
+            case .selectingMemory, .writing, .expanding, .revising, .extracting: return true
             case .idle, .failed: return false
             }
         }
@@ -324,7 +325,7 @@ final class ChapterEditorStore: ObservableObject {
         /// should be offered, since there is no cancel endpoint for extraction.
         var isGenerating: Bool {
             switch self {
-            case .selectingMemory, .writing, .revising: return true
+            case .selectingMemory, .writing, .expanding, .revising: return true
             default: return false
             }
         }
@@ -333,6 +334,7 @@ final class ChapterEditorStore: ObservableObject {
             switch self {
             case .selectingMemory: return "正在选择相关记忆"
             case .writing: return "正在生成正文"
+            case .expanding(let attempt): return "Writer 第 \(attempt)/2 次扩写"
             case .revising(let attempt): return "Reviser 第 \(attempt)/2 次修订"
             case .extracting: return "Extractor 正在整理本章记忆"
             case .failed(_, let message): return message
@@ -343,7 +345,7 @@ final class ChapterEditorStore: ObservableObject {
         var pillStatus: String {
             switch self {
             case .extracting: return "extracting"
-            case .selectingMemory, .writing, .revising: return "writing"
+            case .selectingMemory, .writing, .expanding, .revising: return "writing"
             case .failed: return "failed"
             case .idle: return "idle"
             }
@@ -392,7 +394,6 @@ final class ChapterEditorStore: ObservableObject {
             if let local, local.shouldRestore(over: remote) {
                 currentChapter = local.apply(to: remote)
                 restoredLocalDraft = true
-                session.notices.publish("已恢复本地草稿")
             } else {
                 currentChapter = remote
                 cache.saveClean(remote)
@@ -407,6 +408,7 @@ final class ChapterEditorStore: ObservableObject {
 
     func editString(_ keyPath: WritableKeyPath<Chapter, String>, value: String) {
         guard var chapter = currentChapter else { return }
+        guard chapter[keyPath: keyPath] != value else { return }
         chapter[keyPath: keyPath] = value
         currentChapter = chapter
         scheduleCacheSave()
@@ -414,13 +416,16 @@ final class ChapterEditorStore: ObservableObject {
 
     func editTargetWordCount(_ value: Int) {
         guard var chapter = currentChapter else { return }
-        chapter.targetWordCount = max(1, value)
+        let normalized = max(1, value)
+        guard chapter.targetWordCount != normalized else { return }
+        chapter.targetWordCount = normalized
         currentChapter = chapter
         scheduleCacheSave()
     }
 
     func setCharacterLinks(_ links: [ChapterLink]) {
         guard var chapter = currentChapter else { return }
+        guard chapter.characterLinks != links else { return }
         chapter.characterLinks = links
         currentChapter = chapter
         scheduleCacheSave()
@@ -708,7 +713,14 @@ final class ChapterEditorStore: ObservableObject {
             writingPhase = .selectingMemory
             setCurrentChapterStatus("writing", chapterId: chapterId)
         case "writing":
-            writingPhase = .writing
+            if let attempt = status.attempt {
+                writingPhase = .expanding(attempt: min(max(attempt, 1), 2))
+                if let reason = Self.validationReason(from: status.violations) {
+                    currentValidationReason = reason
+                }
+            } else {
+                writingPhase = .writing
+            }
             setCurrentChapterStatus("writing", chapterId: chapterId)
         case "revising":
             writingPhase = .revising(attempt: min(max(status.attempt ?? 1, 1), 2))
@@ -749,7 +761,7 @@ final class ChapterEditorStore: ObservableObject {
         writingPhase = .failed(code: status.errorCode, message: presented.message)
         if let reason = Self.validationReason(from: status.violations) {
             currentValidationReason = reason
-        } else if status.errorCode != "revision_failed" {
+        } else if status.errorCode != "revision_failed" && status.errorCode != "writer_expansion_failed" {
             // A Reviser transport/provider failure is not another programmatic
             // validation result; do not leave the previous attempt's reason on
             // screen as though it explained the model-service failure.
