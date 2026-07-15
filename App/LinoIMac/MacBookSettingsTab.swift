@@ -78,6 +78,23 @@ struct MacBookSettingsTab: View {
             .buttonStyle(LinoITintButtonStyle(compact: true))
             .disabled(isExporting || session.currentBook == nil)
             .onHover { pointer($0 && !isExporting && session.currentBook != nil) }
+            Text("把大事记、章节梗概、人物动态字段与故事线（Extractor 记忆）导出为纯文本。")
+                .font(.system(size: 12))
+                .foregroundStyle(LinoTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Task {
+                    guard let book = session.currentBook else { return }
+                    isExporting = true
+                    await MacExportSaver.exportMemories(book, session: session)
+                    isExporting = false
+                }
+            } label: {
+                Text(isExporting ? "正在导出" : "导出记忆")
+            }
+            .buttonStyle(LinoITintButtonStyle(compact: true))
+            .disabled(isExporting || session.currentBook == nil)
+            .onHover { pointer($0 && !isExporting && session.currentBook != nil) }
         }
         .padding(14)
         .linoPanelGlass(cornerRadius: LinoMacMetrics.cardRadius)

@@ -12,23 +12,34 @@ enum MacExportSaver {
     /// 拉取全书导出文本并弹出存盘面板。失败经 `NoticeBus` 弹 Toast。
     @MainActor
     static func exportBook(_ book: Book, session: AppSession) async {
+        await export(book, session: session, path: "export.txt", suffix: "", panelTitle: "导出全书")
+    }
+
+    /// 导出 Extractor 记忆（大事记/梗概/人物动态字段与故事线），同一存盘通道。
+    @MainActor
+    static func exportMemories(_ book: Book, session: AppSession) async {
+        await export(book, session: session, path: "memories/export.txt", suffix: "·记忆", panelTitle: "导出记忆")
+    }
+
+    @MainActor
+    private static func export(_ book: Book, session: AppSession, path: String, suffix: String, panelTitle: String) async {
         do {
-            let data = try await session.api.rawRequest("/books/\(book.id)/export.txt")
-            let suggested = "\(book.title.isEmpty ? "LinoI书稿" : book.title).txt"
-            save(data: data, suggestedName: suggested, session: session)
+            let data = try await session.api.rawRequest("/books/\(book.id)/\(path)")
+            let suggested = "\(book.title.isEmpty ? "LinoI书稿" : book.title)\(suffix).txt"
+            save(data: data, suggestedName: suggested, session: session, panelTitle: panelTitle)
         } catch {
             session.notices.publish(error)
         }
     }
 
     @MainActor
-    private static func save(data: Data, suggestedName: String, session: AppSession) {
+    private static func save(data: Data, suggestedName: String, session: AppSession, panelTitle: String) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
         panel.allowedContentTypes = [.plainText]
-        panel.title = "导出全书"
+        panel.title = panelTitle
         panel.prompt = "导出"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {

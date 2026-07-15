@@ -535,3 +535,74 @@ def test_delete_finalized_chapter_cascades_events_and_reverts_dynamic_state(clie
     assert "current_status" not in detail["dynamic_fields"]
     listed = client.get(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers).json()
     assert [(item["id"], item["index"]) for item in listed] == [(chapters[2]["id"], 1)]
+
+
+def test_memories_export_contains_headlines_summaries_and_character_memory(client, auth_headers):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "记忆书"}).json()
+    first = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"title": "开端", "user_prompt": "x"}
+    ).json()
+    second = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"title": "转折", "user_prompt": "y"}
+    ).json()
+    client.patch(
+        f"/api/v1/chapters/{first['id']}",
+        headers=auth_headers,
+        json={"headline": "主角出场", "summary": "主角在雨夜抵达小镇。"},
+    )
+    client.patch(f"/api/v1/chapters/{second['id']}", headers=auth_headers, json={"summary": "冲突爆发。"})
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林昭", "role": "主角"}
+    ).json()
+    client.patch(
+        f"/api/v1/characters/{character['id']}",
+        headers=auth_headers,
+        json={"dynamic_fields": {"最近状态": "受伤未愈", "随身物品": ["短刀", "地图"]}},
+    )
+
+    import app.db as db_module
+    from app.models import CharacterEvent
+
+    db = db_module.SessionLocal()
+    try:
+        db.add(
+            CharacterEvent(
+                book_id=book["id"],
+                chapter_id=first["id"],
+                character_id=character["id"],
+                event_type="story",
+                event_text="雨夜初登场",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(f"/api/v1/books/{book['id']}/memories/export.txt", headers=auth_headers)
+    assert response.status_code == 200
+    assert "text/plain" in response.headers["content-type"]
+    text = response.text
+    assert "记忆书——记忆导出" in text
+    assert "【大事记】" in text
+    assert "第 1 章 开端：主角出场" in text
+    assert "【章节梗概】" in text
+    assert "主角在雨夜抵达小镇。" in text
+    assert "冲突爆发。" in text
+    assert "【人物记忆】" in text
+    assert "林昭（主角）" in text
+    assert "最近状态：受伤未愈" in text
+    assert "随身物品：[\"短刀\", \"地图\"]" in text
+    assert "第 1 章 [story] 雨夜初登场" in text
+    # 记忆导出不含正文
+    assert "draft" not in text
+
+    assert client.get(f"/api/v1/books/{book['id']}/memories/export.txt").status_code == 401
+    assert client.get("/api/v1/books/nope/memories/export.txt", headers=auth_headers).status_code == 404
+
+
+def test_memories_export_empty_book_uses_placeholders(client, auth_headers):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "空书"}).json()
+    text = client.get(f"/api/v1/books/{book['id']}/memories/export.txt", headers=auth_headers).text
+    assert "【大事记】" in text
+    assert "（暂无）" in text
+    assert "（暂无人物）" in text

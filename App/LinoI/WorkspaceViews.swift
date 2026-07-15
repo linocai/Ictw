@@ -249,6 +249,16 @@ struct LinoIBookSettingsPane: View {
                 }
                 .buttonStyle(LinoITintButtonStyle())
                 .disabled(isExporting || session.currentBook == nil)
+                Text("把大事记、章节梗概、人物动态字段与故事线（Extractor 记忆）导出为纯文本。")
+                    .font(.footnote)
+                    .foregroundStyle(LinoTheme.muted)
+                Button {
+                    Task { await exportMemories() }
+                } label: {
+                    Text(isExporting ? "正在导出" : "导出记忆")
+                }
+                .buttonStyle(LinoITintButtonStyle())
+                .disabled(isExporting || session.currentBook == nil)
             }
             .padding(14)
             .linoGlass(cornerRadius: 20)
@@ -271,12 +281,20 @@ struct LinoIBookSettingsPane: View {
     }
 
     private func exportBook() async {
+        await export(path: "export.txt", suffix: "")
+    }
+
+    private func exportMemories() async {
+        await export(path: "memories/export.txt", suffix: "·记忆")
+    }
+
+    private func export(path: String, suffix: String) async {
         guard let book = session.currentBook else { return }
         isExporting = true
         defer { isExporting = false }
         do {
-            let data = try await session.api.rawRequest("/books/\(book.id)/export.txt")
-            let filename = "\(book.title.isEmpty ? "LinoI书稿" : book.title).txt"
+            let data = try await session.api.rawRequest("/books/\(book.id)/\(path)")
+            let filename = "\(book.title.isEmpty ? "LinoI书稿" : book.title)\(suffix).txt"
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
             try data.write(to: url, options: [.atomic])
             exportURL = url
