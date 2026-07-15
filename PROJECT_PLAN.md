@@ -12,9 +12,9 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - **后端**：FastAPI + SQLAlchemy 2 + Alembic + SQLite，单 worker uvicorn；LLM 走 OpenAI-compatible 协议，capability registry 管推理参数（DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash、未知模型）。
 - **部署**：HK 云服务器，Nginx HTTPS 反代 → 127.0.0.1:8787，systemd `linoi-backend.service`。详情见 `~/Lino/hk_info.md`。
 
-## 当前状态（2026-07-12）
+## 当前状态（2026-07-15）
 
-- v1.3.1 已提交推送并部署生产：后端 Alembic head `20260711_0006`、健康版本 `1.3.1`，macOS ICTW `1.3.1(10)` 已重装；无数据库迁移，iOS 真机安装由用户管理。
+- v1.3.2 已发版部署生产（记忆导出）：后端 Alembic head `20260711_0006`（本版无迁移）、健康版本 `1.3.2`，macOS ICTW `1.3.2(11)` 已换装，GitHub Release v1.3.2 已发；iOS 真机安装由用户管理。
 - Writer 负责全部扩写，Reviser 只负责压缩与其他违规；GLM 5 系列已纳入 capability registry。
 - 双端阅读翻章回顶部、本地草稿提示收口完成；后端 75 测试及 iOS/macOS Debug 构建全绿。
 
