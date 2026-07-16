@@ -25,6 +25,7 @@ struct LinoIApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .preferredColorScheme(.light)
                 .environmentObject(notices)
                 .environmentObject(session)
                 .environmentObject(bookshelfStore)

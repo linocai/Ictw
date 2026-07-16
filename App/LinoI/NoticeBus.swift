@@ -67,7 +67,7 @@ struct LinoIToast: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
-        .animation(.smooth(duration: 0.24), value: bus.current?.id)
+        .animation(LinoMotion.content, value: bus.current?.id)
     }
 
     private func scheduleDismiss(_ notice: NoticeBus.Notice) {

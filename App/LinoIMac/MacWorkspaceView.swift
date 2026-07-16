@@ -75,7 +75,7 @@ struct MacWorkspaceView: View {
 
             if !showSidebarInline {
                 LinoMacIconButton(systemName: "sidebar.left", size: 28, fontSize: 13, help: "章节") {
-                    withAnimation(.easeOut(duration: 0.18)) { sidebarOpen.toggle() }
+                    withAnimation(LinoMotion.drawer) { sidebarOpen.toggle() }
                 }
             }
 
@@ -94,7 +94,7 @@ struct MacWorkspaceView: View {
             }
             if !showRightInline {
                 LinoMacIconButton(systemName: "sidebar.right", size: 28, fontSize: 13, help: "辅助面板") {
-                    withAnimation(.easeOut(duration: 0.18)) { rightPanelOpen.toggle() }
+                    withAnimation(LinoMotion.drawer) { rightPanelOpen.toggle() }
                 }
             }
         }
@@ -139,7 +139,7 @@ struct MacWorkspaceView: View {
             ZStack(alignment: .topLeading) {
                 MacChapterEditor(
                     selectedChapterId: $selectedChapterId,
-                    onOpenReader: { withAnimation(.smooth(duration: 0.22)) { isReaderOpen = true } }
+                    onOpenReader: { withAnimation(LinoMotion.reader) { isReaderOpen = true } }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 

@@ -33,5 +33,8 @@ struct MacShell: View {
         .sheet(isPresented: $commandBus.showSettings) {
             MacSettingsSheet()
         }
+        // 锁浅色双保险之二：SwiftUI 层锁定，配合 `LinoIMacApp.AppDelegate` 的
+        // `NSApp.appearance = .aqua`（锁住 AppKit 系统面板）。
+        .preferredColorScheme(.light)
     }
 }

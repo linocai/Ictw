@@ -26,7 +26,9 @@ struct LinoIStatusPill: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(palette.background, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .animation(.smooth(duration: 0.25), value: status)
+            .animation(LinoMotion.status, value: status)
+            // 双 key：status 不变但 label 变化时（如「写作中」→「修订中」）也要 morph，对齐老项目 StatusBadge。
+            .animation(LinoMotion.status, value: text)
     }
 
     private var palette: (text: Color, background: Color) {
@@ -309,6 +311,68 @@ struct LinoIDashedButtonStyle: ButtonStyle {
                     .strokeBorder(style: StrokeStyle(lineWidth: 0.7, dash: [4]))
                     .foregroundStyle(LinoTheme.accent.opacity(0.36))
             )
+    }
+}
+
+// MARK: - LinoISegmented（自绘玻璃分段，matchedGeometryEffect 滑动选中底）
+
+/// iOS 自绘分段控件：`matchedGeometryEffect` 移动一个白色选中底（廉价，只动
+/// `opacity`/位置），视觉与 macOS `LinoMacSegmented` 同构。块③ 起用它替换
+/// iOS 侧系统 `Picker(.segmented)`。
+struct LinoISegmented<Option: Hashable>: View {
+    let options: [Option]
+    let label: (Option) -> String
+    @Binding var selection: Option
+
+    @Namespace private var namespace
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { option in
+                let isSelected = option == selection
+                Button {
+                    withAnimation(LinoMotion.selection) { selection = option }
+                } label: {
+                    Text(label(option))
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(isSelected ? LinoTheme.ink : LinoTheme.muted)
+                        .padding(.horizontal, 14)
+                        .frame(height: 26)
+                        .background {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(Color.white)
+                                    .shadow(color: LinoTheme.hex(0x143052, opacity: 0.14), radius: 6, y: 2)
+                                    .matchedGeometryEffect(id: "selection", in: namespace)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(LinoTheme.hairline, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(LinoTheme.hairline, lineWidth: 0.5)
+        )
+    }
+}
+
+// MARK: - LinoICardButtonStyle（书卡/章节行/人物 chip 按压反馈）
+
+/// 按下时 `scale 0.97` + 阴影收敛，动画 `LinoMotion.press`。iOS 书卡/章节行/
+/// 人物 chip 复用（块③ 起接入，补齐 press 态）。
+struct LinoICardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .shadow(
+                color: LinoTheme.hex(0x143052, opacity: configuration.isPressed ? 0.06 : 0.10),
+                radius: configuration.isPressed ? 10 : 18,
+                y: configuration.isPressed ? 5 : 10
+            )
+            .animation(LinoMotion.press, value: configuration.isPressed)
     }
 }
 

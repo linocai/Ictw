@@ -171,7 +171,7 @@ private struct MacBookCard: View {
             .offset(y: hovered ? -3 : 0)
         }
         .buttonStyle(.plain)
-        .animation(.smooth(duration: 0.18), value: hovered)
+        .animation(LinoMotion.hover, value: hovered)
         .onHover { inside in
             hovered = inside
             pointer(inside)

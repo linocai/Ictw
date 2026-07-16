@@ -12,15 +12,223 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - **后端**：FastAPI + SQLAlchemy 2 + Alembic + SQLite，单 worker uvicorn；LLM 走 OpenAI-compatible 协议，capability registry 管推理参数（DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash、未知模型）。
 - **部署**：HK 云服务器，Nginx HTTPS 反代 → 127.0.0.1:8787，systemd `linoi-backend.service`。详情见 `~/Lino/hk_info.md`。
 
-## 当前状态（2026-07-15）
+## 当前状态（2026-07-16）
 
 - v1.3.2 已发版部署生产（记忆导出）：后端 Alembic head `20260711_0006`（本版无迁移）、健康版本 `1.3.2`，macOS ICTW `1.3.2(11)` 已换装，GitHub Release v1.3.2 已发；iOS 真机安装由用户管理。
 - Writer 负责全部扩写，Reviser 只负责压缩与其他违规；GLM 5 系列已纳入 capability registry。
 - 双端阅读翻章回顶部、本地草稿提示收口完成；后端 75 测试及 iOS/macOS Debug 构建全绿。
+- **v1.4.0「前端视觉升级」施工中**（纯前端，Backend/ 零改动、无迁移、无部署；后端健康仍报 `1.3.2` 属预期）。五块：Motion/视觉 token 基建 + 锁浅色 → macOS 动画平滑 → iOS 动画平滑 + 阅读三主题 + 字族/控件一致性 → 视觉 bug 扫尾 → 验收发版。双 target 抬 `1.4.0(12)`。**块① 已完成**（token 基建 + 双端锁浅色，见变更日志）；块②-⑤ 待做。详见「当前 Plan」。
 
 ## 当前 Plan
 
-（暂无。v1.3.1 已部署并完成 macOS 换包；本版按约定不创建 tag 或 GitHub Release。）
+### v1.4.0 前端视觉升级
+
+**目标**：把「13 处零散动画、无 motion 常量、圆角/透明度/字号全是字面量、双端字族与控件不一致、系统深色模式下阴阳脸」的现状，收敛成一套可复用的视觉/动效 token + 两端一致的平滑体验。四层推进：Motion 基建 → 动画平滑 → 视觉 bug 修复 → 两端一致性。
+
+**边界（硬约束）**
+- **纯前端**：`Backend/` 一行不改，无 Alembic 迁移、无生产部署。后端健康仍报 `1.3.2`，属预期。
+- 不做原生深色模式——本版是**强制锁浅色**（决策 1），根治系统弹层/玻璃 chrome 阴阳脸。
+- 阅读页正文/标题「宋体」是阅读排版，**不进字族统一**（决策 3 只收 chrome）。书卡封面单字 monogram、头像也是装饰字，保持宋体（两端本已一致）。
+- 双 target 版本 `1.4.0`、build `12`（pbxproj `MARKETING_VERSION` 1.3.2→1.4.0 共 4 处、`CURRENT_PROJECT_VERSION` 11→12 共 4 处）。
+
+**性能与克制原则（每处动画都必须满足）**
+- 只动廉价属性：`opacity` / `scale` / `offset` / 颜色 cross-fade。**禁止**在列表/热路径里动 `shadow(radius:)`、`blur`、`.frame` 高度突变；书卡 hover 的阴影 morph 是一次性 hover，允许。
+- 列表动画只 key 在数据 id（`.animation(token, value: items.map(\.id))`），绝不 key 索引或整对象。
+- 一律 value-based（`.animation(_, value:)` 或 `withAnimation` 包状态变更）→ **可被打断**；不用 `.repeatForever`、不做视差、不做花哨转场。
+- 分段控件滑动用 `matchedGeometryEffect`（移动一个背景矩形，廉价）。
+
+---
+
+### 技术选型（在此定死，不留给 build）
+
+所有 token 追加进**已共享**的 `App/LinoI/LinoTheme.swift`（已挂两 target，零 pbxproj 改动）。新共享控件/样式追加进已共享的 `App/LinoI/LinoComponents.swift`。**除非 build 选择拆分独立文件并自行接 pbxproj，否则默认就地追加，避免 pbxproj 手术。**
+
+**① `enum LinoMotion`（时长阶梯 + 语义动画，全部 value-based 可打断）**
+
+| 语义 token | 定义 | 用途 |
+|---|---|---|
+| `press` | `.easeOut(duration: 0.14)` | 触摸按压反馈（iOS 书卡/行/chip 缩放） |
+| `hover` | `.easeOut(duration: 0.18)` | macOS hover 上浮/亮度（书卡 lift、玻璃钮 brightness） |
+| `drawer` | `.easeOut(duration: 0.18)` | 侧栏/右栏抽屉滑入滑出、reflow |
+| `content` | `.smooth(duration: 0.22)` | 内容区切换（状态机、tab 内容、编辑器阶段块/模式、banner、toast） |
+| `selection` | `.smooth(duration: 0.22)` | 分段 pill 滑动、tab 选中、人物 chip 选中、行选中 |
+| `reader` | `.smooth(duration: 0.22)` | 阅读页开合、主题变色、翻章 crossfade、字号 |
+| `listItem` | `.smooth(duration: 0.22)` | 列表增删 |
+| `status` | `.smooth(duration: 0.30)` | 状态徽标双 key morph |
+
+时长常量：`micro 0.14 / fast 0.18 / standard 0.22 / emphasized 0.30`（参数来源：老项目 BookCard `easeOut 0.18`、StatusBadge `smooth 0.30`、小控件 `0.14`，与现存 `smooth 0.22/0.24/0.25` 对齐取整）。
+
+**② `enum LinoRadius`（pt）**：`chip 8 / control 10 / pill 11 / field 12 / card 14 / panel 18 / glass 20 / bar 22`。
+迁移规则：字面量就近映射到 token，**仅当 |Δ|≤1pt**（视觉无感）时替换；命名例外保留：`linoGlass` 默认 24、装饰条 1.5。目标是新代码 + 主力表面走 token，不追每个一次性 one-off。
+
+**③ `enum LinoSurface`（白卡不透明度）**：`well 0.54 / card 0.68 / input 0.72 / glassTint 0.66 / panelTint 0.18`。就近映射，残留 one-off 允许。
+
+**④ `enum LinoType`（字族统一 = SF Rounded）**
+```
+static func rounded(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font
+    = .system(size: size, weight: weight, design: .rounded)
+static let display   = rounded(30, .bold)      // 书架大标题
+static let heading   = rounded(20, .bold)      // 分区标题（原 .title3.bold）
+static let cardTitle = rounded(17, .semibold)  // 书卡 / 列表行标题（原 .headline / Songti16）
+static let rowTitle  = rounded(15, .semibold)  // 侧栏章节行（原 Songti14.5）
+```
+阅读/封面/手稿的 `.custom("Songti SC", …)` 一律不动。
+
+**⑤ `enum LinoReadingTheme`（day/sepia/night，两端共用）**
+把现 `MacReadingTheme`（`MacReaderView.swift:307-386`）的三主题色板**整体上移**到共享 `LinoTheme.swift` 更名 `LinoReadingTheme`（纯 SwiftUI `Color`，可移植）；Mac 端改引用它、删除本地 `MacReadingTheme`；iOS 阅读页新增消费。色板一字不改（决策 2 要求 port 自 Mac）。
+
+**⑥ 新共享控件（`LinoComponents.swift`）**
+- `LinoISegmented<Option>`：自绘玻璃分段，`matchedGeometryEffect` 滑动白色选中底，动画 `LinoMotion.selection`；iOS 用它替换系统 `Picker(.segmented)`，视觉与 Mac `LinoMacSegmented` 同构。
+- `LinoICardButtonStyle`：`configuration.isPressed` 时 `scale 0.97` + 阴影收敛，动画 `LinoMotion.press`；iOS 书卡/章节行/人物 chip 复用（补 press 态）。
+
+---
+
+### 块① Motion/视觉 token 基建 + 锁浅色
+
+**改动文件**：`LinoTheme.swift`（追加 5 组 token + `LinoReadingTheme`）、`LinoComponents.swift`（追加 `LinoISegmented`/`LinoICardButtonStyle`；`LinoIStatusPill` 改双 key）、`LinoIApp.swift`（iOS 锁浅色）、`LinoIMacApp.swift` + `MacShell.swift`（macOS 锁浅色）、`MacReaderView.swift`（`MacReadingTheme`→引用共享）。存量 13 处动画就地换 token（见下）。
+
+**锁浅色（决策 1）规格**
+- **iOS**：`LinoIApp` 的 `WindowGroup` 内给 `RootView()` 加 `.preferredColorScheme(.light)`。作用于整个 scene，`sheet`/`confirmationDialog`/`Menu`/分享面板一并跟随。
+- **macOS**：双保险——
+  1. 加 `AppDelegate: NSObject, NSApplicationDelegate`，在 `applicationDidFinishLaunching` 设 `NSApp.appearance = NSAppearance(named: .aqua)`；`LinoIMacApp` 用 `@NSApplicationDelegateAdaptor(AppDelegate.self)` 挂上。这一步锁住 AppKit 系统面板（`NSSavePanel`、右键 `contextMenu`、`confirmationDialog`）。
+  2. `MacShell` 顶层加 `.preferredColorScheme(.light)`，锁住 SwiftUI 层。
+
+**存量 13 处动画 → token 收敛**
+
+| 文件:行 | 现状 | 换成 |
+|---|---|---|
+| `NoticeBus.swift:70` | `smooth 0.24` | `LinoMotion.content`（transition :64 保留） |
+| `LinoComponents.swift:29` | `smooth 0.25` value:status | `LinoMotion.status` + **加第二 key** `value: text`（双 key morph，对齐老 StatusBadge，解决 pillStatus 相同、label 变时不 morph） |
+| `MacReaderView.swift:79` | `smooth 0.22` | `LinoMotion.reader` |
+| `MacWorkspaceView.swift:78,97` | `easeOut 0.18` | `LinoMotion.drawer` |
+| `MacWorkspaceView.swift:142` | `smooth 0.22` | `LinoMotion.reader` |
+| `MacWorkspaceView.swift:50,158,169` | `.transition(opacity/move)` | 保留 transition；由块② 统一驱动 token |
+| `MacBookshelfView.swift:174` | `smooth 0.18` | `LinoMotion.hover`（=easeOut 0.18） |
+| `LinoMacControls.swift:90` | `smooth 0.2` | `LinoMotion.selection` |
+| `LinoMacControls.swift:176` | `smooth 0.2` value:state | `LinoMotion.content` |
+
+**验收**：双 target Debug 构建绿；系统切到深色模式后，iOS 与 macOS 的 `confirmationDialog`/右键菜单/`NSSavePanel`/分享面板均为浅色（无阴阳脸）——截图为准（块⑤正式验收，此处先冒烟）。token 文件编译通过、`LinoIStatusPill` 双 key 生效（写作阶段 label 变化时数字 morph）。
+
+---
+
+### 块② macOS 动画平滑
+
+**改动文件**：`MacShell.swift`、`MacWorkspaceView.swift`、`MacRightPanel.swift`、`LinoMacControls.swift`、`MacChapterEditor.swift`、`MacReaderView.swift`、`MacChapterSidebar.swift`、`MacBookshelfView.swift`。
+
+**每个切换点的动效规格**
+
+| 切换点 | 位置 | 机制 | token |
+|---|---|---|---|
+| 状态机 连接↔书架↔工作台 | `MacShell.swift:17-25` | `Group` 分支加 `.transition(.opacity)`，`.animation(_, value:)` 挂在 `session.token.isEmpty`/`currentBook?.id` | `content` |
+| reflow 跨断点 | `MacWorkspaceView.swift:44-45` | `onChange` 里 `withAnimation(LinoMotion.drawer)` 包 `rightPanelOpen/sidebarOpen=true`；三栏 if/else 列用 `.transition(.opacity)` 收敛 pop | `drawer` |
+| 左抽屉 | `:164-171` | 已 `.move(.leading)`+`zIndex(2)`，驱动改 `drawer` | `drawer` |
+| 右抽屉 | `:155-158` | 保留 `.move(.trailing)`，**补 `.zIndex(2)`**（块④ 修遮挡），驱动 `drawer` | `drawer` |
+| reader 开合 | `:142`/`MacReaderView.swift:79` | 已 token 化（块①） | `reader` |
+| 右栏 tab 内容 | `MacRightPanel.swift:13-19` | `Group` 加 `.transition(.opacity)`，`.animation(_, value: tab)` | `content` |
+| 分段 pill（右栏 tab / 预览-编辑） | `LinoMacControls.swift:80-116` | 加 `matchedGeometryEffect` 滑动白色选中底（一个 `@Namespace`） | `selection` |
+| 编辑器阶段块（expanding/revising/failed/finalized 提示） | `MacChapterEditor.swift:305-337` | 各分支 `.transition(.opacity)`，`.animation(_, value: writingPhase)` | `content` |
+| 预览↔编辑 | `:242-252` | `.transition(.opacity)`，`.animation(_, value: draftMode)` | `content` |
+| Extractor 结果段出现 | `:130-132` | `.transition(.opacity.combined(with:.offset(y:6)))`，animate `showExtraction` | `content` |
+| 草稿恢复 banner | `:126` | `.transition(.opacity)`，animate `restoredLocalDraft` | `content` |
+| 阅读主题整窗变色 | `MacReaderView.swift:69` | 背景/文字色加 `.animation(LinoMotion.reader, value: theme)` | `reader` |
+| 阅读字号 | `:111-116` | `.animation(_, value: fontSize)` | `reader`/`content` |
+| 翻章 | `:241` `.id()` | 保留 `.id`，正文列加 `.transition(.opacity)` + animate `chapter?.id` 做 crossfade（不要滑动） | `reader` |
+| 主题 swatch 选中环 | `:127-155` | 选中环 `.animation(_, value: theme)` | `selection` |
+| 书卡 hover | `MacBookshelfView.swift:174` | 已 token（块①） | `hover` |
+| 侧栏行选中 | `MacChapterSidebar.swift:115-122` | 底/描边 `.animation(LinoMotion.selection, value: selected)` | `selection` |
+| 章节列表增删 | `:59-67` | `.animation(LinoMotion.listItem, value: workspace.chapters.map(\.id))` | `listItem` |
+| 玻璃图标钮 hover | `LinoMacControls.swift:65` | `.animation(LinoMotion.hover, value: hovered)` | `hover` |
+
+**验收**：录屏或连续截图证明——状态机切换淡入淡出、reflow 拉宽/收窄不再瞬间 pop、右栏 tab 与预览-编辑 pill 平滑滑动、编辑器阶段块渐显、阅读三主题整窗渐变、翻章 crossfade、章节列表增删有过渡。双 target 构建绿。
+
+---
+
+### 块③ iOS 动画平滑 + 阅读三主题 + 字族/控件一致性
+
+**改动文件**：`LinoIApp.swift`、`WorkspaceViews.swift`、`ChapterEditorViews.swift`、`ReadingViews.swift`、`ShelfViews.swift`、`CharactersViews.swift`、`SettingsViews.swift`、`LinoComponents.swift`。
+
+**A. iOS 动画平滑（对齐块②）**
+
+| 切换点 | 位置 | 机制 | token |
+|---|---|---|---|
+| RootView 状态机 书架↔工作台 | `LinoIApp.swift:55-59` | `.transition(.opacity)` + animate `currentBook?.id` | `content` |
+| 工作台四 tab 内容 | `WorkspaceViews.swift:21-32` | `Group` `.transition(.opacity)` + animate `selectedTab` | `content` |
+| 工作台分段 pill | `WorkspaceViews.swift:85-112` | 换 `LinoISegmented`（matchedGeometry 滑动） | `selection` |
+| 章节列表增删 | `WorkspaceViews.swift:148-155` | animate `value: chapters.map(\.id)` | `listItem` |
+| 编辑器阶段块 | `ChapterEditorViews.swift:380-412` | 各分支 `.transition(.opacity)` + animate `writingPhase` | `content` |
+| 预览↔编辑（**替换系统 Picker**） | `:307-324` | 删 `Picker(.segmented)`，换 `LinoISegmented`；内容 `.transition(.opacity)` | `selection`+`content` |
+| Extractor 结果段 / 草稿 banner 出现 | `:175-177 / :168-170` | `.transition(.opacity(+offset))` + animate | `content` |
+| 人物 chip 选中 | `:274-295` | 每 chip `.animation(LinoMotion.selection, value: isSelected)` | `selection` |
+| 书卡 press 态 | `ShelfViews.swift:115-175` | 套 `LinoICardButtonStyle`（scale 0.97） | `press` |
+| 章节行 press 态 | `WorkspaceViews.swift:149-154` | `LinoICardButtonStyle` | `press` |
+| 人物 chip 横列增删 | `CharactersViews.swift:41-48` | animate `value: characters.map(\.id)` | `listItem` |
+| 故事线行 编辑态切换 | `CharactersViews.swift:254-286` | `.transition(.opacity)` + animate `isEditing` | `content` |
+
+**B. iOS 阅读页补三主题（决策 2）**——本块最重的一块
+- `ReadingViews.swift` 消费共享 `LinoReadingTheme`；新增 `@AppStorage("linoi.reader.theme")`（String，day/sepia/night），沿用现有 `linoi.reader.fontScale`（small/medium/large 不动）。
+- 整窗变色：阅读视图自绘 `.background(theme.background).ignoresSafeArea()`；正文/标题/分隔线颜色全部取 `theme.*`。
+- **顶栏对齐 Mac**：阅读模式 `.toolbar(.hidden, for: .navigationBar)` 隐藏系统 nav 栏，自绘主题化顶栏（返回 + 「书名·第N章」+ 三主题 swatch + A−/A+），解决「锁浅色下 night 阅读页 nav 栏仍是亮的」冲突，并与 Mac `MacReaderView` topBar 同构。
+- 主题切换 `.animation(LinoMotion.reader, value: theme)`；字号 pill 换 `matchedGeometry`；翻章 `.id(chapter.id)` 保留 + crossfade。
+
+**C. 字族统一（决策 3）+ 控件一致性**——按下表把 chrome 换 `LinoType`，宋体（阅读/封面/手稿）不动：
+
+| 站点 | 现状 | → |
+|---|---|---|
+| `ShelfViews.swift:70` iOS 书架大标题 | `.system(30,rounded)` | `LinoType.display`（纯 token 化，无变化） |
+| `MacBookshelfView.swift:45` 「我的作品」 | `Songti 30` | `LinoType.display`（宋体→圆体） |
+| `ShelfViews.swift:137` iOS 书卡名 | `.headline` | `LinoType.cardTitle` |
+| `MacBookshelfView.swift:151` Mac 书卡名 | `Songti 16` | `LinoType.cardTitle` |
+| `WorkspaceViews.swift:177` iOS 章节行 | `.headline` | `LinoType.cardTitle` |
+| `MacChapterSidebar.swift:105` Mac 侧栏行 | `Songti 14.5` | `LinoType.rowTitle` |
+| `ChapterEditorViews.swift:189` iOS 编辑器标题 | `.system(25,rounded)` | `LinoType.rounded(25,.bold)` |
+| `MacChapterEditor.swift:76` Mac 工具栏标题 | `Songti 18` | `LinoType.rounded(18,.bold)` |
+| `WorkspaceViews.swift:73` iOS 书名 header | `.system(20,rounded)` | `LinoType.heading` |
+| `ChapterEditorViews.swift:516`/`MacChapterEditor.swift:447` stageHeader 标题 | `.headline`/`.system(14)` | 两端 `LinoType.rowTitle` |
+| stageHeader 圆标 | iOS 26×26 / Mac 24×24 | 两端 **26×26** + 数字 `LinoType.rounded(13,.bold)` |
+| `.title3.bold()` 分区标题（`SettingsViews:13`/`CharactersViews:13`/`WorkspaceViews:123,207`） | SF 默认 | `LinoType.heading` |
+| `MacConnectionView.swift:81` | `Songti 24` | `LinoType.rounded(24,.bold)` |
+| 导入按钮 | iOS 仅图标(`ChapterEditorViews:363`) / Mac 带文字(`MacChapterEditor:288`) | 统一带文字「导入正文」 |
+
+**验收**：iOS 三主题整窗变色 + 持久化（连续截图/录屏）；iOS 分段控件为自绘（无系统 Picker）；双端书架大标题/书卡名/章节行/编辑器标题/stageHeader 字族一致（圆体）、阅读正文仍宋体；书卡/行有 press 缩放反馈。iOS `xcodebuild` App target 构建绿（不能只跑 SwiftPM）。
+
+---
+
+### 块④ 视觉 bug 修复扫尾
+
+**改动文件**：`MacWorkspaceView.swift`、`MacChapterEditor.swift`、`ChapterEditorViews.swift`、`MacReaderView.swift`、`MacChapterSidebar.swift`、`MacCharacterTab.swift`/`MacAgentTab.swift`（空态核查）、`ReadingViews.swift`。
+
+| bug | 位置 | 修法 |
+|---|---|---|
+| 窄窗 <800 左右抽屉同开互相遮挡 | `MacWorkspaceView.swift` | <800 时两抽屉**互斥**（开一个自动关另一个）+ 右抽屉补 `.zIndex(2)` + 抽屉后加半透明 scrim（点击关闭） |
+| 人物 chip 长名撑爆胶囊 | `MacChapterEditor.swift:213`、`ChapterEditorViews.swift:279` | 加 `.lineLimit(1)` + `.truncationMode(.tail)`，两端一致 |
+| 阅读 night：ProgressView 系统蓝 | `MacReaderView.swift:223`（+ iOS 阅读 loading） | `.tint(theme.accent)` |
+| 阅读 night：NSTextView 选中高亮系统蓝 | `MacReaderView.swift:454-465` | `makeNSView` 设 `selectedTextAttributes = [.backgroundColor: NSColor(theme.accent).withAlphaComponent(0.22)]`（随主题） |
+| Mac 章节列表空态缺失 | `MacChapterSidebar.swift:57-74` | 0 章时渲染占位（图标+「还没有章节，点上方＋新建」），对齐 iOS |
+| 右栏 人物/Agent 列表空态 | `MacCharacterTab`/`MacAgentTab` | 核查，缺则补（iOS 对应 pane 已有空态可参照） |
+| Toast day 阅读页黑底突兀 | `NoticeBus.swift:61` | **可选 P2**：阅读页开启时 toast 背景随主题（暖色深底）；默认不做，仅当顺手。 |
+
+**验收**：窄窗拖动 <800 两抽屉不再叠压（截图）；长人物名截断不撑破；night 主题 ProgressView 与文本选中均为暖色（截图）；Mac 空章节书有空态。双 target 构建绿。
+
+---
+
+### 块⑤ 验收发版
+
+- **构建**：iOS `LinoI`（iphonesimulator，App target）+ macOS `LinoIMac`（platform=macOS）`xcodebuild build` 双绿、`error:` 计数 0。后端不动，`pytest -q` 复跑仍 81 绿（回归确认无误伤）。
+- **截图验收范式**（本机 115 手势工具挡鼠标点击，用既有工作法）：键盘驱动（Tab/Return/⌘ 快捷键）+ 必要处临时 `#if DEBUG` 钩子（验收后 grep+git diff 确认零残留）+ 截图/录屏。三项重点：
+  1. **锁浅色**：系统切深色模式，对 iOS/macOS 的 `confirmationDialog`、右键菜单、`NSSavePanel`、分享面板各截一张，证明不阴阳脸。
+  2. **三主题过渡**：iOS + Mac 阅读页 day→sepia→night 连续截图或录屏，证明整窗渐变、持久化生效。
+  3. **两端一致 + 动画**：书架/书卡/编辑器标题/stageHeader 双端并排截图证字族一致；分段 pill 滑动、列表增删、阶段块渐显各录一小段。
+- **版本**：pbxproj 抬 `1.4.0(12)`（4+4 处）。
+- **换装与发布**：macOS Release 构建（自动签名 + hardened runtime）→ `codesign --verify --deep --strict` → `ditto` 覆盖 `/Applications/ICTW.app` → 复核签名 → `open` 确认 `1.4.0(12)`；GitHub Release `v1.4.0` + `ICTW-1.4.0.zip`（`ditto` 保签名压包）挂 https://github.com/linocai/Ictw/releases 。**iOS 真机安装留用户**。
+- 完成后补发版记录、施工全文移入 `archive/v1.4.0施工plan.md`。
+
+**用户网页操作清单**：无（本版无付费能力/云端变更；GitHub Release 由 build 用 `gh` 自理）。
+
+---
+
+### 附录：Explore 扫描已抽查核实
+
+立 plan 前已读 13 个视图文件 + 两 theme 文件核对：全项目 13 处动画（iOS 3 / Mac 10）、0 处 `preferredColorScheme`、圆角 16 种字面量、白卡不透明度 11 种、字族站点如上表——与扫描结论一致。老项目参数（`/Users/linotsai/Lino/Archive/LinoWritingV2`）：BookCard `easeOut 0.18`+offset −3、StatusBadge 双 key `smooth 0.30`、控件 hover `brightness 0.04`，已并入 token 定义。
 
 ## Backlog
 
@@ -82,3 +290,5 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - 2026-07-11 v1.2.3 发版：全链路报错「一眼定位」上线。后端失败 job 落结构化 error_context（agent_role/model_name/http_status/upstream_reason 白名单摘要 ≤200 字）+ 审计表 upstream_reason 列（迁移 20260711_0006）+ 测按钮 502 透传上游原因；客户端共享 LinoErrorPresenter 全 code 中文映射五段式文案，双端 1.2.3(8)。生产部署完成：备份 20260711-200551 → rsync → alembic 0006 → 重启，健康检查 {"status":"ok","version":"1.2.3"}，integrity ok；/Applications/ICTW.app 已为最终包（1.2.3(8) 签名核验）；iOS 真机安装留用户。独立 review 无 P0/P1（P2-1/P2-2 已修）。施工全文移入 archive/v1.2.3施工plan.md。
 - 2026-07-11 GitHub Release v1.2.3 发布：tag v1.2.3 + ICTW-1.2.3.zip（ditto 保签名压包，2.6MB）挂上 https://github.com/linocai/Ictw/releases/tag/v1.2.3 ；注明 Development 签名未公证、外机需右键打开放行。
 - 2026-07-15 v1.3.2 发版：记忆导出。后端新增 GET /books/{id}/memories/export.txt（【大事记】【章节梗概】【人物记忆】三节：headline/summary/动态字段+故事线，事件按章序+created_at 排，含空态占位与已删章兜底，不含正文）；iOS 书设定页与 macOS 书设定 tab 各加「导出记忆」按钮（复用既有分享/存盘通道，MacExportSaver 通用化）。后端 81 测试全绿（新增 2 条：内容完备性+401/404、空书占位）；双 target 构建绿，版本 1.3.2(11)、后端版本串 1.3.2。生产部署：备份 20260715-182007 → rsync → 重启（无迁移，head 仍 0006），健康检查 1.3.2，真实书验证端点 200/三节/260 行。/Applications/ICTW.app 换装 1.3.2；GitHub Release v1.3.2 已发（ICTW-1.3.2.zip）；iOS 真机留用户。
+- 2026-07-16 v1.4.0 立项：前端视觉升级（纯前端，`Backend/` 零改动、无迁移、无部署）。四层：Motion 基建 → 动画平滑 → 视觉 bug 修复 → 两端一致性。五块——①在共享 `LinoTheme.swift` 建 `LinoMotion`（8 语义动画/4 时长阶梯，全 value-based 可打断）+ `LinoRadius`/`LinoSurface`/`LinoType`(SF Rounded)/`LinoReadingTheme` token，13 处存量动画收敛，iOS `.preferredColorScheme(.light)` + macOS `NSApp.appearance=.aqua`+`.preferredColorScheme(.light)` 锁浅色 ②macOS 全站切换点按动效表加 transition/matchedGeometry ③iOS 同步 + 阅读页补 day/sepia/night 三主题（port 自 Mac、自绘主题化顶栏、@AppStorage 持久化）+ 系统 Picker 换自绘 `LinoISegmented` + 字族统一圆体（宋体仅留阅读/封面）④视觉 bug：窄窗双抽屉遮挡、人物 chip 长名截断、night 主题 ProgressView/文本选中蓝、Mac 空态 ⑤双 target 构建 + 截图验收（锁浅色抗深色系统弹层 / 三主题过渡录屏 / 两端一致）+ ICTW 换装 + GitHub Release v1.4.0，iOS 留用户。动效规格与逐切换点 token 分配已在「当前 Plan」定死。双 target 1.4.0(12)。
+- 2026-07-16 v1.4.0 块① 完成：`LinoTheme.swift` 追加 5 组 token——`LinoMotion`（`micro/fast/standard/emphasized` 时长阶梯 0.14/0.18/0.22/0.30 + `press/hover/drawer/content/selection/reader/listItem/status` 8 个语义 `Animation`，全部 value-based）、`LinoRadius`（chip8/control10/pill11/field12/card14/panel18/glass20/bar22）、`LinoSurface`（well0.54/card0.68/input0.72/glassTint0.66/panelTint0.18）、`LinoType`（`rounded()` + display30/heading20/cardTitle17/rowTitle15，SF Rounded）、`LinoReadingTheme`（原 `MacReaderView.MacReadingTheme` 整体上移改名，色值一字未改）；本块只建常量，不做全仓字面量替换扫地（圆角/表面/字号站点收敛按 plan 排在块③等后续块，未越块）。`LinoComponents.swift` 追加 `LinoISegmented<Option>`（matchedGeometryEffect 滑动选中底，视觉同构 Mac `LinoMacSegmented`，块③起接入替换系统 Picker）与 `LinoICardButtonStyle`（press 时 scale 0.97 + 阴影收敛，块③起接入书卡/章节行/人物 chip），二者本块只新增定义、未接入任何调用点；`LinoIStatusPill` 改双 key（`LinoMotion.status` 同时 key `status` 与 `text`，对齐老项目 StatusBadge，解决 label 变化不 morph）。存量 13 处动画逐一处理：9 处 `.animation`/`withAnimation` 换 token（`NoticeBus.swift:70`→`content`，`LinoComponents.swift:29`→`status`双 key，`MacReaderView.swift`→`reader`，`MacWorkspaceView.swift` 抽屉×2→`drawer`+ reader×1→`reader`，`MacBookshelfView.swift`→`hover`，`LinoMacControls.swift`×2→`selection`/`content`）；4 处纯 `.transition`（`NoticeBus.swift:64`、`MacWorkspaceView.swift:50/158/169`）按 plan 保留不动，留给块②统一驱动。锁浅色双端落地：iOS `LinoIApp.swift` 的 `RootView()` 加 `.preferredColorScheme(.light)`；macOS 双保险——新增 `AppDelegate`（`NSApplicationDelegate`）在 `applicationDidFinishLaunching` 设 `NSApp.appearance = .aqua`，`LinoIMacApp` 用 `@NSApplicationDelegateAdaptor` 挂载（锁 AppKit 系统面板），`MacShell` 顶层加 `.preferredColorScheme(.light)`（锁 SwiftUI 层）。`MacReaderView.swift` 引用改用共享 `LinoReadingTheme`，本地 `MacReadingTheme` 定义已删除（5 处引用点同步改名）。验收：iOS `LinoI`（iphonesimulator）+ macOS `LinoIMac`（platform=macOS）`xcodebuild build` 双绿、`error:` 计数均为 0。深色系统下的 GUI 冒烟截图**未能完成**，如实记录：系统切至 `AppleInterfaceStyle Dark` 后用 `open -n` 单独拉起本次新编译的 Debug `ICTW.app`（`lsappinfo` 核实其 PID 与 bundle path 均非 `/Applications/ICTW.app`，生产实例全程未被触碰），尝试用 ⌘, 唤出 Settings sheet 截图验证时，computer-use 连续两次报 `user interrupt` 中止；核对 `ioreg` `HIDIdleTime` 实测约 0 秒，确认用户当时正在真实使用本机，判定为工具正确的安全拦截而非环境故障，未强行绕过。已第一时间将系统外观改回浅色（`defaults read -g AppleInterfaceStyle` 确认已还原为未设置/浅色）、`kill` 掉本次自建的两个 Debug 测试进程（生产 PID 全程存活未受影响），未产生任何数据变更。代码层双锁均已用 `grep` 核对确认写入正确位置；深色下系统弹层的像素级验收按 plan 本属块⑤正式验收范围，留待彼时（或用户不繁忙时）补齐。下一步：块②（macOS 动画平滑）。

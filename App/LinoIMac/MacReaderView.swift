@@ -9,9 +9,10 @@ import AppKit
 /// 「原地翻页」语义一致。退出把 `isPresented` 置 false，交还给工作台。
 ///
 /// 正文排版 port 自 `Archive/LinoWritingV2` 的 `ReaderView.ReaderBodyText`
-/// （macOS 已验证稳定的 `NSTextView` 两端对齐方案）；三主题色值 port 自同项目
-/// `Theme/ReadingTheme.swift`，与 App 品牌色 `LinoTheme` 无关——阅读页要的是
-/// 纸感暖色调，不是工作台玻璃的蓝调。
+/// （macOS 已验证稳定的 `NSTextView` 两端对齐方案）；三主题消费共享
+/// `LinoReadingTheme`（`LinoTheme.swift`，v1.4.0 块① 从本文件上移，色值一字
+/// 未改），与 App 品牌色 `LinoTheme` 无关——阅读页要的是纸感暖色调，不是
+/// 工作台玻璃的蓝调。
 struct MacReaderView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var workspace: WorkspaceStore
@@ -22,12 +23,12 @@ struct MacReaderView: View {
     @Binding var selectedChapterId: String?
     @Binding var isPresented: Bool
 
-    @AppStorage("linoi.mac.reader.theme") private var themeRaw: String = MacReadingTheme.day.rawValue
+    @AppStorage("linoi.mac.reader.theme") private var themeRaw: String = LinoReadingTheme.day.rawValue
     @AppStorage("linoi.mac.reader.fontSizeIndex") private var fontSizeIndex: Int = 2
 
     private static let fontLadder: [CGFloat] = [18, 19, 20, 21, 23]
 
-    private var theme: MacReadingTheme { MacReadingTheme(rawValue: themeRaw) ?? .day }
+    private var theme: LinoReadingTheme { LinoReadingTheme(rawValue: themeRaw) ?? .day }
 
     private var fontSize: CGFloat {
         let i = min(max(fontSizeIndex, 0), Self.fontLadder.count - 1)
@@ -76,7 +77,7 @@ struct MacReaderView: View {
             Color.clear.frame(width: 70, height: 1) // 交通灯挡位，同 MacWorkspaceView 标题栏
 
             Button {
-                withAnimation(.smooth(duration: 0.22)) { isPresented = false }
+                withAnimation(LinoMotion.reader) { isPresented = false }
             } label: {
                 Text("‹ 返回工作台")
                     .font(.system(size: 13, weight: .medium))
@@ -99,7 +100,7 @@ struct MacReaderView: View {
             Spacer(minLength: 8)
 
             HStack(spacing: 6) {
-                ForEach(MacReadingTheme.allCases) { t in
+                ForEach(LinoReadingTheme.allCases) { t in
                     themeSwatch(t)
                 }
 
@@ -124,7 +125,7 @@ struct MacReaderView: View {
         }
     }
 
-    private func themeSwatch(_ t: MacReadingTheme) -> some View {
+    private func themeSwatch(_ t: LinoReadingTheme) -> some View {
         let selected = t == theme
         return Button {
             themeRaw = t.rawValue
@@ -297,91 +298,6 @@ struct MacReaderView: View {
     /// 铁律口径：去空白字符数。
     private func wordCount(_ chapter: Chapter) -> Int {
         chapter.draftText.filter { !$0.isWhitespace }.count
-    }
-}
-
-// MARK: - 阅读页三主题（日间 / 护眼 / 夜间，整窗变色）
-
-/// 与 `LinoTheme` 无关的独立色板——阅读页要纸感暖色调，port 自
-/// `Archive/LinoWritingV2` 的 `Theme/ReadingTheme.swift`。
-enum MacReadingTheme: String, CaseIterable, Identifiable {
-    case day
-    case sepia
-    case night
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .day: return "日间"
-        case .sepia: return "护眼"
-        case .night: return "夜间"
-        }
-    }
-
-    var background: Color {
-        switch self {
-        case .day: return LinoTheme.hex(0xFBFAF7)
-        case .sepia: return LinoTheme.hex(0xF1E3C8)
-        case .night: return LinoTheme.hex(0x1A1B1F)
-        }
-    }
-
-    var text: Color {
-        switch self {
-        case .day: return LinoTheme.hex(0x26262B)
-        case .sepia: return LinoTheme.hex(0x4A3B27)
-        case .night: return LinoTheme.hex(0xCDCDD2)
-        }
-    }
-
-    var secondary: Color {
-        switch self {
-        case .day: return LinoTheme.hex(0x7C7D86)
-        case .sepia: return LinoTheme.hex(0x9A8568)
-        case .night: return LinoTheme.hex(0x7E7F88)
-        }
-    }
-
-    var accent: Color {
-        switch self {
-        case .day: return LinoTheme.hex(0x9A6A3A)
-        case .sepia: return LinoTheme.hex(0xA8742E)
-        case .night: return LinoTheme.hex(0xC0A06A)
-        }
-    }
-
-    var hairline: Color {
-        switch self {
-        case .day: return Color(.sRGB, red: 60 / 255, green: 55 / 255, blue: 45 / 255, opacity: 0.14)
-        case .sepia: return Color(.sRGB, red: 120 / 255, green: 90 / 255, blue: 50 / 255, opacity: 0.22)
-        case .night: return Color(.sRGB, white: 1, opacity: 0.12)
-        }
-    }
-
-    var chipBackground: Color {
-        switch self {
-        case .day: return Color(.sRGB, red: 120 / 255, green: 110 / 255, blue: 90 / 255, opacity: 0.08)
-        case .sepia: return Color(.sRGB, red: 120 / 255, green: 90 / 255, blue: 50 / 255, opacity: 0.10)
-        case .night: return Color(.sRGB, white: 1, opacity: 0.06)
-        }
-    }
-
-    var barBackground: Color {
-        switch self {
-        case .day: return Color(.sRGB, red: 251 / 255, green: 250 / 255, blue: 247 / 255, opacity: 0.80)
-        case .sepia: return Color(.sRGB, red: 241 / 255, green: 227 / 255, blue: 200 / 255, opacity: 0.82)
-        case .night: return Color(.sRGB, red: 26 / 255, green: 27 / 255, blue: 31 / 255, opacity: 0.82)
-        }
-    }
-
-    /// 主题挑选按钮自身的色块（night 比整窗背景略深一点，与 handoff 对齐）。
-    var swatchFill: Color {
-        switch self {
-        case .day: return LinoTheme.hex(0xFBFAF7)
-        case .sepia: return LinoTheme.hex(0xF1E3C8)
-        case .night: return LinoTheme.hex(0x1C1D22)
-        }
     }
 }
 

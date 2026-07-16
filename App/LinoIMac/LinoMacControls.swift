@@ -87,7 +87,7 @@ struct LinoMacSegmented<Option: Hashable>: View {
             ForEach(options, id: \.self) { option in
                 let isSelected = option == selection
                 Button {
-                    withAnimation(.smooth(duration: 0.2)) { selection = option }
+                    withAnimation(LinoMotion.selection) { selection = option }
                 } label: {
                     Text(label(option))
                         .font(.system(size: 12.5, weight: .semibold))
@@ -173,7 +173,7 @@ struct LinoMacConnectionChip: View {
         .padding(.vertical, 5)
         .background(Color.white.opacity(0.55), in: Capsule())
         .overlay(Capsule().stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth))
-        .animation(.smooth(duration: 0.2), value: state)
+        .animation(LinoMotion.content, value: state)
         .task(id: session.baseURL + "\u{0}" + session.token) {
             await probe()
         }
