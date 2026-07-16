@@ -11,6 +11,11 @@ struct LinoIChapterEditorScreen: View {
     @State private var viewMode: ChapterViewMode = .editing
     @State private var activeChapterId: String
     @State private var activeIndex: Int
+    // 只用来给「读取章节」spinner 定色：这个 loading 态在阅读模式内翻章时也会
+    // 短暂出现（`switchChapter` 先切 `activeChapterId` 再 await 加载），若还用
+    // 默认蓝色系统色，会在 night 阅读主题下显得突兀（同 Mac `MacReaderView`
+    // 的 ProgressView 是同一类 bug）。编辑态下沿用原有 `LinoTheme.accent`。
+    @AppStorage("linoi.reader.theme") private var storedReaderTheme = LinoReadingTheme.day.rawValue
 
     let summary: ChapterSummary
 
@@ -20,12 +25,17 @@ struct LinoIChapterEditorScreen: View {
         _activeIndex = State(initialValue: summary.index)
     }
 
+    private var readerTheme: LinoReadingTheme {
+        LinoReadingTheme(rawValue: storedReaderTheme) ?? .day
+    }
+
     var body: some View {
         ZStack {
             LinoTheme.background.ignoresSafeArea()
             if editor.isLoading && editor.currentChapter?.id != activeChapterId {
                 ProgressView("读取章节")
                     .foregroundStyle(LinoTheme.muted)
+                    .tint(viewMode == .reading ? readerTheme.accent : LinoTheme.accent)
             } else if editor.currentChapter?.id == activeChapterId {
                 LinoIChapterEditor(viewMode: $viewMode, onSwitchChapter: switchChapter)
             } else {
@@ -286,6 +296,9 @@ private struct LinoIChapterEditor: View {
                             Text(characterChipTitle(character))
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(isSelected(character) ? .white : LinoTheme.accentDeep)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: 200, alignment: .leading)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 7)
                                 .background {

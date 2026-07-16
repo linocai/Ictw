@@ -56,22 +56,44 @@ struct MacChapterSidebar: View {
 
     private var list: some View {
         ScrollView {
-            LazyVStack(spacing: 4) {
-                ForEach(workspace.chapters) { chapter in
-                    MacChapterRow(
-                        chapter: chapter,
-                        selected: selectedChapterId == chapter.id
-                    ) {
-                        selectedChapterId = chapter.id
+            if workspace.chapters.isEmpty && !workspace.isLoading {
+                emptyState
+            } else {
+                LazyVStack(spacing: 4) {
+                    ForEach(workspace.chapters) { chapter in
+                        MacChapterRow(
+                            chapter: chapter,
+                            selected: selectedChapterId == chapter.id
+                        ) {
+                            selectedChapterId = chapter.id
+                        }
                     }
                 }
+                .animation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
+                .padding(.horizontal, 10)
+                .padding(.top, 4)
+                .padding(.bottom, 12)
             }
-            .animation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
-            .padding(.horizontal, 10)
-            .padding(.top, 4)
-            .padding(.bottom, 12)
         }
         .frame(maxHeight: .infinity)
+    }
+
+    /// 对齐 iOS `LinoIChaptersPane` 的空态语气（同样是「还没有章节」+ 引导下一
+    /// 步动作），只是侧栏窄（258pt），用图标+短句而非完整 `LinoIEmptyCard`。
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "text.book.closed")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(LinoTheme.faint)
+            Text("还没有章节，点上方＋新建")
+                .font(.system(size: 12.5))
+                .foregroundStyle(LinoTheme.muted)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+        .padding(.top, 56)
     }
 
     private func createChapter() {

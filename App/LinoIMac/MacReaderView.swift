@@ -211,7 +211,8 @@ struct MacReaderView: View {
                     MacReaderBodyText(
                         paragraphs: paragraphs(chapter.draftText),
                         fontSize: fontSize,
-                        textColor: theme.text
+                        textColor: theme.text,
+                        accentColor: theme.accent
                     )
 
                     chapterEndMark
@@ -224,6 +225,7 @@ struct MacReaderView: View {
                     .padding(.top, 40)
                 } else if editor.isLoading {
                     ProgressView()
+                        .tint(theme.accent)
                         .padding(.top, 60)
                         .frame(maxWidth: .infinity)
                 } else {
@@ -316,6 +318,9 @@ private struct MacReaderBodyText: View {
     let paragraphs: [String]
     let fontSize: CGFloat
     let textColor: Color
+    /// 选中高亮色的来源——`night` 主题下系统默认蓝色选区背景会显得突兀，改用
+    /// 主题自己的暖色 accent（block④ 修复）。
+    let accentColor: Color
 
     @State private var measuredHeight: CGFloat = 1
 
@@ -357,7 +362,8 @@ private struct MacReaderBodyText: View {
                 MacJustifiedTextRepresentable(
                     attributed: text,
                     width: proxy.size.width,
-                    height: $measuredHeight
+                    height: $measuredHeight,
+                    accentColor: accentColor
                 )
             }
             .frame(height: measuredHeight)
@@ -371,6 +377,7 @@ private struct MacJustifiedTextRepresentable: NSViewRepresentable {
     let attributed: NSAttributedString
     let width: CGFloat
     @Binding var height: CGFloat
+    let accentColor: Color
 
     func makeNSView(context: Context) -> NSTextView {
         let textView = NSTextView()
@@ -382,10 +389,15 @@ private struct MacJustifiedTextRepresentable: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
+        textView.selectedTextAttributes = [.backgroundColor: NSColor(accentColor).withAlphaComponent(0.22)]
         return textView
     }
 
     func updateNSView(_ textView: NSTextView, context: Context) {
+        // 主题切换时（accentColor 变化）即使 chapter 没变，也要跟着重设选中高亮
+        // 色——否则已创建的 NSTextView 会一直沿用 makeNSView 那次的旧主题色。
+        textView.selectedTextAttributes = [.backgroundColor: NSColor(accentColor).withAlphaComponent(0.22)]
+
         guard width > 0 else { return }
         textView.textStorage?.setAttributedString(attributed)
         textView.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)

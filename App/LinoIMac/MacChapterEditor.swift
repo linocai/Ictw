@@ -219,6 +219,9 @@ struct MacChapterEditor: View {
             Text(characterChipTitle(character))
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(selected ? .white : LinoTheme.accentDeep)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 200, alignment: .leading)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
                 .background {

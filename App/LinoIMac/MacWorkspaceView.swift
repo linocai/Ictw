@@ -75,7 +75,7 @@ struct MacWorkspaceView: View {
 
             if !showSidebarInline {
                 LinoMacIconButton(systemName: "sidebar.left", size: 28, fontSize: 13, help: "章节") {
-                    withAnimation(LinoMotion.drawer) { sidebarOpen.toggle() }
+                    toggleSidebarDrawer()
                 }
             }
 
@@ -94,7 +94,7 @@ struct MacWorkspaceView: View {
             }
             if !showRightInline {
                 LinoMacIconButton(systemName: "sidebar.right", size: 28, fontSize: 13, help: "辅助面板") {
-                    withAnimation(LinoMotion.drawer) { rightPanelOpen.toggle() }
+                    toggleRightDrawer(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
                 }
             }
         }
@@ -145,6 +145,8 @@ struct MacWorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if !showSidebarInline && sidebarOpen {
+                    drawerScrim { closeSidebarDrawer() }
+                        .zIndex(1)
                     sidebarDrawer
                 }
             }
@@ -154,16 +156,41 @@ struct MacWorkspaceView: View {
                 MacRightPanel(tab: $rightTab)
                     .frame(width: LinoMacMetrics.rightPanelWidth)
                     .transition(.opacity)
-            } else if rightPanelOpen {
-                MacRightPanel(tab: $rightTab)
-                    .frame(width: LinoMacMetrics.rightPanelWidth)
-                    .transition(.move(edge: .trailing))
-                    .zIndex(2)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .trailing) {
+            // 右抽屉走独立的 overlay（而非 HStack 里的并列子项）：这样它才能像
+            // 左抽屉一样「浮在」正文之上而不是把正文再挤窄一次，scrim 也才能
+            // 铺满整块内容区，而不是只盖住右抽屉自己那一小条。<800 时与左抽屉
+            // 互斥——左抽屉正在显示时右抽屉让位（block④ 修复：窄窗两侧抽屉同开
+            // 会互相咬合遮挡）。
+            if isRightDrawerVisible(showRightInline: showRightInline, showSidebarInline: showSidebarInline) {
+                ZStack(alignment: .trailing) {
+                    drawerScrim { closeRightDrawer() }
+                    rightDrawer
+                }
+            }
+        }
         .animation(LinoMotion.drawer, value: showSidebarInline)
         .animation(LinoMotion.drawer, value: showRightInline)
+    }
+
+    /// 右抽屉当前是否应该可见：窄窗（<800）时与左抽屉互斥，左抽屉优先（章节
+    /// 导航是更基础的默认态）；中宽窗（800–1100）时不受左栏影响，因为左栏
+    /// 此时已内嵌显示，不再是抽屉，不存在互斥问题。
+    private func isRightDrawerVisible(showRightInline: Bool, showSidebarInline: Bool) -> Bool {
+        guard !showRightInline else { return false }
+        return rightPanelOpen && !(!showSidebarInline && sidebarOpen)
+    }
+
+    /// 抽屉后的半透明遮罩：铺满整块内容区、点击可关闭当前抽屉，让抽屉读作
+    /// 「浮在正文之上的临时面板」而非与正文拼接的一列，避免窄窗下视觉咬合。
+    private func drawerScrim(onTap: @escaping () -> Void) -> some View {
+        Color.black.opacity(0.16)
+            .contentShape(Rectangle())
+            .transition(.opacity)
+            .onTapGesture(perform: onTap)
     }
 
     private var sidebarDrawer: some View {
@@ -173,6 +200,49 @@ struct MacWorkspaceView: View {
             .shadow(color: LinoTheme.hex(0x141C3C, opacity: 0.18), radius: 18, x: 6)
             .transition(.move(edge: .leading))
             .zIndex(2)
+    }
+
+    private var rightDrawer: some View {
+        MacRightPanel(tab: $rightTab)
+            .frame(width: LinoMacMetrics.rightPanelWidth)
+            .background(.regularMaterial)
+            .shadow(color: LinoTheme.hex(0x141C3C, opacity: 0.18), radius: 18, x: -6)
+            .transition(.move(edge: .trailing))
+            .zIndex(2)
+    }
+
+    // MARK: - Drawer toggling（<800 互斥：开一个自动关另一个）
+
+    private func toggleSidebarDrawer() {
+        withAnimation(LinoMotion.drawer) {
+            sidebarOpen.toggle()
+            // 这个按钮只在 !showSidebarInline（即 <800）时才会出现，此时打开
+            // 左抽屉必须同时收起右抽屉，否则两者会同时争用同一块窄窗空间。
+            if sidebarOpen { rightPanelOpen = false }
+        }
+    }
+
+    private func toggleRightDrawer(showRightInline: Bool, showSidebarInline: Bool) {
+        // 用「当前是否真的可见」而非裸 flag 判断——<800 时右抽屉可能因为左
+        // 抽屉正在显示而被互斥隐藏，此时 rightPanelOpen 仍是 true，直接
+        // `.toggle()` 会把它误关成 false，导致按钮看起来毫无反应。
+        let currentlyVisible = isRightDrawerVisible(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
+        withAnimation(LinoMotion.drawer) {
+            if currentlyVisible {
+                rightPanelOpen = false
+            } else {
+                rightPanelOpen = true
+                if !showSidebarInline { sidebarOpen = false }
+            }
+        }
+    }
+
+    private func closeSidebarDrawer() {
+        withAnimation(LinoMotion.drawer) { sidebarOpen = false }
+    }
+
+    private func closeRightDrawer() {
+        withAnimation(LinoMotion.drawer) { rightPanelOpen = false }
     }
 
     // MARK: - Coordination
