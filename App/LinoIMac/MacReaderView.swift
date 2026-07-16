@@ -214,6 +214,10 @@ struct MacReaderView: View {
                         textColor: theme.text,
                         accentColor: theme.accent
                     )
+                    // 正文排除出一切隐式动画：NSTextView 换主题/字号是整章同步
+                    // 重排，跟着动画走会在切主题瞬间掉帧（v1.4.1 性能修复），
+                    // 主题渐变只留给背景与 chrome。
+                    .transaction { $0.animation = nil }
 
                     chapterEndMark
                         .padding(.top, 64)
@@ -246,7 +250,6 @@ struct MacReaderView: View {
         .id(chapter?.id)
         .transition(.opacity)
         .animation(LinoMotion.reader, value: chapter?.id)
-        .animation(LinoMotion.reader, value: fontSize)
     }
 
     private var chapterEndMark: some View {

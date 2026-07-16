@@ -361,17 +361,15 @@ struct LinoISegmented<Option: Hashable>: View {
 
 // MARK: - LinoICardButtonStyle（书卡/章节行/人物 chip 按压反馈）
 
-/// 按下时 `scale 0.97` + 阴影收敛，动画 `LinoMotion.press`。iOS 书卡/章节行/
-/// 人物 chip 复用（块③ 起接入，补齐 press 态）。
+/// 按下时 `scale 0.97`，动画 `LinoMotion.press`。iOS 书卡/章节行/人物 chip
+/// 复用（块③ 起接入，补齐 press 态）。阴影恒定且置于 `scaleEffect` 之前——
+/// 阴影随内容一次光栅化后只做 GPU 变换；按压期间逐帧重算阴影是 v1.4.0
+/// 卡顿的主因之一（v1.4.1 性能修复），不要改回按压联动阴影。
 struct LinoICardButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .shadow(color: LinoTheme.hex(0x143052, opacity: 0.10), radius: 18, y: 10)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .shadow(
-                color: LinoTheme.hex(0x143052, opacity: configuration.isPressed ? 0.06 : 0.10),
-                radius: configuration.isPressed ? 10 : 18,
-                y: configuration.isPressed ? 5 : 10
-            )
             .animation(LinoMotion.press, value: configuration.isPressed)
     }
 }

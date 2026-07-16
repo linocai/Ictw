@@ -91,6 +91,9 @@ enum LinoMotion {
     static let listItem = Animation.smooth(duration: standard)
     /// 状态徽标双 key morph。
     static let status = Animation.smooth(duration: emphasized)
+    /// 整页/大容器换面（书架↔工作台等）。新旧两棵树交叉淡化期间玻璃层数翻倍，
+    /// 合成开销大，必须用最短时长压缩重叠窗口（v1.4.1 性能修复）。
+    static let containerSwap = Animation.easeOut(duration: micro)
 }
 
 // MARK: - LinoRadius（pt）

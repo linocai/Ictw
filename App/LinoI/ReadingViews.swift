@@ -96,6 +96,9 @@ struct LinoIReadingView: View {
                         .frame(height: 0.5)
                         .padding(.bottom, 22)
                     paragraphsView
+                        // 正文排除出隐式动画（同 Mac，v1.4.1 性能修复）：整章
+                        // 段落逐帧插值文字颜色/重排代价高，主题渐变只留 chrome。
+                        .transaction { $0.animation = nil }
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 18)
@@ -107,7 +110,6 @@ struct LinoIReadingView: View {
             .id(chapter.id)
             .transition(.opacity)
             .animation(LinoMotion.reader, value: chapter.id)
-            .animation(LinoMotion.reader, value: fontScale)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.background.ignoresSafeArea())

@@ -167,7 +167,12 @@ private struct MacBookCard: View {
                 RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius, style: .continuous)
                     .stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth)
             )
+            // 阴影瞬切不参与动画（.animation(nil) 截断作用域）：hover 进出各重绘
+            // 一帧即可；若让阴影半径逐帧插值，鼠标扫过一排卡会同时重算多张卡的
+            // 阴影模糊，是 v1.4.0 实测卡顿源（v1.4.1 性能修复）。位移在阴影之后
+            // 做 GPU 变换，动画期间阴影随内容整体平移、不重算。
             .shadow(color: LinoTheme.hex(0x143052, opacity: hovered ? 0.20 : 0.10), radius: hovered ? 22 : 14, y: hovered ? 12 : 8)
+            .animation(nil, value: hovered)
             .offset(y: hovered ? -3 : 0)
         }
         .buttonStyle(.plain)

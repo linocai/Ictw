@@ -10,14 +10,16 @@ struct MacRightPanel: View {
         VStack(spacing: 0) {
             tabBar
             ScrollView {
+                // tab 内容瞬时切换：三个 tab 都是整栏玻璃卡堆，交叉淡化会让两个
+                // tab 的玻璃层短暂并存导致掉帧（v1.4.1 性能修复）；切换的动效
+                // 由分段控件的滑动 pill 承担。
                 Group {
                     switch tab {
-                    case .characters: MacCharacterTab().transition(.opacity)
-                    case .book: MacBookSettingsTab().transition(.opacity)
-                    case .agent: MacAgentTab().transition(.opacity)
+                    case .characters: MacCharacterTab()
+                    case .book: MacBookSettingsTab()
+                    case .agent: MacAgentTab()
                     }
                 }
-                .animation(LinoMotion.content, value: tab)
                 .padding(.horizontal, 14)
                 .padding(.top, 6)
                 .padding(.bottom, 22)

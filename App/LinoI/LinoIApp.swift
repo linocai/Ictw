@@ -62,7 +62,7 @@ struct RootView: View {
                             .transition(.opacity)
                     }
                 }
-                .animation(LinoMotion.content, value: session.currentBook?.id)
+                .animation(LinoMotion.containerSwap, value: session.currentBook?.id)
             }
             .navigationDestination(for: ChapterSummary.self) { summary in
                 LinoIChapterEditorScreen(summary: summary)

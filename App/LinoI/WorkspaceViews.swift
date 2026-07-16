@@ -18,19 +18,20 @@ struct LinoIWorkspaceView: View {
                 .padding(.bottom, 8)
 
             ScrollView {
+                // tab 内容瞬时切换（同 MacRightPanel，v1.4.1 性能修复）：交叉淡化
+                // 期间两个 tab 的玻璃卡并存掉帧，动效由分段 pill 滑动承担。
                 Group {
                     switch session.selectedTab {
                     case .chapters:
-                        LinoIChaptersPane().transition(.opacity)
+                        LinoIChaptersPane()
                     case .characters:
-                        LinoICharactersPane().transition(.opacity)
+                        LinoICharactersPane()
                     case .settings:
-                        LinoIBookSettingsPane().transition(.opacity)
+                        LinoIBookSettingsPane()
                     case .agents:
-                        LinoIAgentSettingsPane().transition(.opacity)
+                        LinoIAgentSettingsPane()
                     }
                 }
-                .animation(LinoMotion.content, value: session.selectedTab)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 34)
             }
