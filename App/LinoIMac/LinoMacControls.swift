@@ -63,6 +63,7 @@ struct LinoMacIconButton: View {
                         .stroke(style.stroke, lineWidth: LinoMacMetrics.hairlineWidth)
                 )
                 .brightness(hovered && !isDisabled ? 0.05 : 0)
+                .animation(LinoMotion.hover, value: hovered)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -82,6 +83,8 @@ struct LinoMacSegmented<Option: Hashable>: View {
     let label: (Option) -> String
     @Binding var selection: Option
 
+    @Namespace private var namespace
+
     var body: some View {
         HStack(spacing: 2) {
             ForEach(options, id: \.self) { option in
@@ -99,6 +102,7 @@ struct LinoMacSegmented<Option: Hashable>: View {
                                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                                     .fill(Color.white)
                                     .shadow(color: LinoTheme.hex(0x143052, opacity: 0.14), radius: 6, y: 2)
+                                    .matchedGeometryEffect(id: "selection", in: namespace)
                             }
                         }
                 }

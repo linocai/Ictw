@@ -68,6 +68,7 @@ struct MacReaderView: View {
         // 整窗壳层背景——night 主题让整个覆盖层变暗，不只是文字列变暗。
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.background)
+        .animation(LinoMotion.reader, value: theme)
     }
 
     // MARK: - Top bar (52 高细玻璃条)
@@ -153,6 +154,7 @@ struct MacReaderView: View {
         .buttonStyle(.plain)
         .help(t.label)
         .onHover { pointer($0) }
+        .animation(LinoMotion.selection, value: theme)
     }
 
     private func fontStepButton(label: String, size: CGFloat, action: @escaping () -> Void) -> some View {
@@ -240,6 +242,9 @@ struct MacReaderView: View {
         }
         .scrollIndicators(.hidden)
         .id(chapter?.id)
+        .transition(.opacity)
+        .animation(LinoMotion.reader, value: chapter?.id)
+        .animation(LinoMotion.reader, value: fontSize)
     }
 
     private var chapterEndMark: some View {

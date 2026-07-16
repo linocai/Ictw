@@ -41,8 +41,8 @@ struct MacWorkspaceView: View {
                     titleBar(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
                     bodyRow(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
                 }
-                .onChange(of: showRightInline) { _, inline in if inline { rightPanelOpen = true } }
-                .onChange(of: showSidebarInline) { _, inline in if inline { sidebarOpen = true } }
+                .onChange(of: showRightInline) { _, inline in if inline { withAnimation(LinoMotion.drawer) { rightPanelOpen = true } } }
+                .onChange(of: showSidebarInline) { _, inline in if inline { withAnimation(LinoMotion.drawer) { sidebarOpen = true } } }
             }
 
             if isReaderOpen {
@@ -135,6 +135,7 @@ struct MacWorkspaceView: View {
             if showSidebarInline {
                 MacChapterSidebar(selectedChapterId: $selectedChapterId)
                     .frame(width: LinoMacMetrics.sidebarWidth)
+                    .transition(.opacity)
             }
             ZStack(alignment: .topLeading) {
                 MacChapterEditor(
@@ -152,13 +153,17 @@ struct MacWorkspaceView: View {
             if showRightInline {
                 MacRightPanel(tab: $rightTab)
                     .frame(width: LinoMacMetrics.rightPanelWidth)
+                    .transition(.opacity)
             } else if rightPanelOpen {
                 MacRightPanel(tab: $rightTab)
                     .frame(width: LinoMacMetrics.rightPanelWidth)
                     .transition(.move(edge: .trailing))
+                    .zIndex(2)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(LinoMotion.drawer, value: showSidebarInline)
+        .animation(LinoMotion.drawer, value: showRightInline)
     }
 
     private var sidebarDrawer: some View {

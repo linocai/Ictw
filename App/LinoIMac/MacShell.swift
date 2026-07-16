@@ -17,12 +17,17 @@ struct MacShell: View {
             Group {
                 if session.token.isEmpty {
                     MacConnectionView(firstRun: true)
+                        .transition(.opacity)
                 } else if session.currentBook == nil {
                     MacBookshelfView()
+                        .transition(.opacity)
                 } else {
                     MacWorkspaceView()
+                        .transition(.opacity)
                 }
             }
+            .animation(LinoMotion.content, value: session.token.isEmpty)
+            .animation(LinoMotion.content, value: session.currentBook?.id)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {

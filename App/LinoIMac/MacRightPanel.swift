@@ -12,11 +12,12 @@ struct MacRightPanel: View {
             ScrollView {
                 Group {
                     switch tab {
-                    case .characters: MacCharacterTab()
-                    case .book: MacBookSettingsTab()
-                    case .agent: MacAgentTab()
+                    case .characters: MacCharacterTab().transition(.opacity)
+                    case .book: MacBookSettingsTab().transition(.opacity)
+                    case .agent: MacAgentTab().transition(.opacity)
                     }
                 }
+                .animation(LinoMotion.content, value: tab)
                 .padding(.horizontal, 14)
                 .padding(.top, 6)
                 .padding(.bottom, 22)

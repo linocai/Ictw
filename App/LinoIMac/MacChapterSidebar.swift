@@ -66,6 +66,7 @@ struct MacChapterSidebar: View {
                     }
                 }
             }
+            .animation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
             .padding(.horizontal, 10)
             .padding(.top, 4)
             .padding(.bottom, 12)
@@ -120,6 +121,7 @@ private struct MacChapterRow: View {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .stroke(selected ? LinoTheme.accent.opacity(0.32) : Color.clear, lineWidth: 0.6)
             )
+            .animation(LinoMotion.selection, value: selected)
         }
         .buttonStyle(.plain)
         .onHover { pointer($0) }
