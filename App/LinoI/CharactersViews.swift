@@ -10,7 +10,7 @@ struct LinoICharactersPane: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("人物")
-                        .font(.title3.bold())
+                        .font(LinoType.heading)
                         .foregroundStyle(LinoTheme.ink)
                     Text("固定设定由你维护，动态字段和故事线由 Extractor 更新。")
                         .font(.caption)
@@ -47,6 +47,7 @@ struct LinoICharactersPane: View {
                             }
                         }
                     }
+                    .animation(LinoMotion.listItem, value: characters.characters.map(\.id))
                     .padding(.vertical, 2)
                 }
 
@@ -278,11 +279,13 @@ private struct LinoICharacterEventRow: View {
                         .buttonStyle(LinoIPrimaryButtonStyle(compact: true))
                     }
                 }
+                .transition(.opacity)
             } else {
                 Text(event.eventText)
                     .font(.footnote)
                     .foregroundStyle(LinoTheme.body)
                     .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
             }
 
             Spacer(minLength: 0)
@@ -303,8 +306,10 @@ private struct LinoICharacterEventRow: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(LinoTheme.muted)
+                .transition(.opacity)
             }
         }
+        .animation(LinoMotion.content, value: isEditing)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(11)
         .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))

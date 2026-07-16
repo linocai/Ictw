@@ -73,7 +73,7 @@ struct MacChapterEditor: View {
                     .foregroundStyle(LinoTheme.muted)
                 HStack(spacing: 8) {
                     Text(chapterTitle)
-                        .font(.custom("Songti SC", size: 18).weight(.bold))
+                        .font(LinoType.rounded(18, .bold))
                         .foregroundStyle(LinoTheme.ink)
                         .lineLimit(1)
                     if let chapter = editor.currentChapter {
@@ -456,13 +456,13 @@ struct MacChapterEditor: View {
     private func stageHeader(index: String, title: String, subtitle: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text(index)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(LinoType.rounded(13, .bold))
                 .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
+                .frame(width: 26, height: 26)
                 .background(LinoTheme.accentGradient, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(LinoType.rowTitle)
                     .foregroundStyle(LinoTheme.ink)
                 Text(subtitle)
                     .font(.system(size: 11))

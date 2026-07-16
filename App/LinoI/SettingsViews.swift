@@ -10,7 +10,7 @@ struct LinoIAgentSettingsPane: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Agent / 模型")
-                    .font(.title3.bold())
+                    .font(LinoType.heading)
                     .foregroundStyle(LinoTheme.ink)
                 Text("四个 Agent 可分别绑定模型、人格与推理参数。")
                     .font(.caption)

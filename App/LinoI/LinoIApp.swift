@@ -53,11 +53,16 @@ struct RootView: View {
         NavigationStack(path: $workspace.chapterPath) {
             ZStack {
                 LinoTheme.background.ignoresSafeArea()
-                if session.currentBook == nil {
-                    LinoIShelfView()
-                } else {
-                    LinoIWorkspaceView()
+                Group {
+                    if session.currentBook == nil {
+                        LinoIShelfView()
+                            .transition(.opacity)
+                    } else {
+                        LinoIWorkspaceView()
+                            .transition(.opacity)
+                    }
                 }
+                .animation(LinoMotion.content, value: session.currentBook?.id)
             }
             .navigationDestination(for: ChapterSummary.self) { summary in
                 LinoIChapterEditorScreen(summary: summary)

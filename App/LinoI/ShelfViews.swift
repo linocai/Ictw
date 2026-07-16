@@ -67,7 +67,7 @@ struct LinoIShelfView: View {
             LinoIAvatar(name: "LinoI", size: 52, rounded: true)
             VStack(alignment: .leading, spacing: 4) {
                 Text("LinoI")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .font(LinoType.display)
                     .foregroundStyle(LinoTheme.ink)
                 Text("单人小说写作工作台")
                     .font(.subheadline)
@@ -134,7 +134,7 @@ private struct LinoIBookCard: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text(book.title.isEmpty ? "未命名书籍" : book.title)
-                        .font(.headline)
+                        .font(LinoType.cardTitle)
                         .foregroundStyle(LinoTheme.ink)
                         .lineLimit(2)
                     HStack(spacing: 8) {
@@ -153,7 +153,7 @@ private struct LinoIBookCard: View {
             .frame(maxWidth: .infinity, minHeight: 178, alignment: .topLeading)
             .linoCard(cornerRadius: 18)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(LinoICardButtonStyle())
         .contextMenu {
             Button("删除这本书", systemImage: "trash", role: .destructive) {
                 confirmingDelete = true

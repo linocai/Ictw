@@ -42,7 +42,7 @@ struct MacBookshelfView: View {
             VStack(alignment: .leading, spacing: 6) {
                 LinoISectionLabel("书架")
                 Text("我的作品")
-                    .font(.custom("Songti SC", size: 30).weight(.bold))
+                    .font(LinoType.display)
                     .foregroundStyle(LinoTheme.ink)
             }
             Spacer()
@@ -148,7 +148,7 @@ private struct MacBookCard: View {
 
                 VStack(alignment: .leading, spacing: 7) {
                     Text(book.title.isEmpty ? "未命名书籍" : book.title)
-                        .font(.custom("Songti SC", size: 16).weight(.semibold))
+                        .font(LinoType.cardTitle)
                         .foregroundStyle(LinoTheme.ink)
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -78,7 +78,7 @@ struct MacConnectionView: View {
                 .frame(width: 52, height: 52)
                 .overlay(
                     Text("L")
-                        .font(.custom("Songti SC", size: 24).weight(.bold))
+                        .font(LinoType.rounded(24, .bold))
                         .foregroundStyle(.white)
                 )
                 .shadow(color: LinoTheme.accent.opacity(0.35), radius: 14, y: 8)

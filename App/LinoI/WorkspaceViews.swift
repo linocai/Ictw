@@ -21,15 +21,16 @@ struct LinoIWorkspaceView: View {
                 Group {
                     switch session.selectedTab {
                     case .chapters:
-                        LinoIChaptersPane()
+                        LinoIChaptersPane().transition(.opacity)
                     case .characters:
-                        LinoICharactersPane()
+                        LinoICharactersPane().transition(.opacity)
                     case .settings:
-                        LinoIBookSettingsPane()
+                        LinoIBookSettingsPane().transition(.opacity)
                     case .agents:
-                        LinoIAgentSettingsPane()
+                        LinoIAgentSettingsPane().transition(.opacity)
                     }
                 }
+                .animation(LinoMotion.content, value: session.selectedTab)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 34)
             }
@@ -70,7 +71,7 @@ private struct LinoIWorkspaceHeader: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.currentBook?.title.isEmpty == false ? session.currentBook?.title ?? "未命名书籍" : "未命名书籍")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(LinoType.heading)
                     .foregroundStyle(LinoTheme.ink)
                     .lineLimit(1)
                 Text("Memory Selector / Writer / Reviser / Extractor")
@@ -86,29 +87,11 @@ private struct LinoIWorkspaceSegment: View {
     @EnvironmentObject private var session: AppSession
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(WorkspaceTab.allCases) { tab in
-                Button {
-                    session.selectedTab = tab
-                } label: {
-                    Text(tab.rawValue)
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 34)
-                        .foregroundStyle(session.selectedTab == tab ? .white : LinoTheme.accentDeep)
-                        .background {
-                            if session.selectedTab == tab {
-                                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .fill(LinoTheme.accentGradient)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background(Color.white.opacity(0.68), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(LinoTheme.hairline, lineWidth: 0.5))
+        LinoISegmented(
+            options: WorkspaceTab.allCases,
+            label: { $0.rawValue },
+            selection: $session.selectedTab
+        )
     }
 }
 
@@ -120,7 +103,7 @@ struct LinoIChaptersPane: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("章节")
-                        .font(.title3.bold())
+                        .font(LinoType.heading)
                         .foregroundStyle(LinoTheme.ink)
                     Text("按顺序推进正文、接受后自动提取本章结果。")
                         .font(.caption)
@@ -150,9 +133,10 @@ struct LinoIChaptersPane: View {
                         NavigationLink(value: chapter) {
                             LinoIChapterRow(chapter: chapter)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(LinoICardButtonStyle())
                     }
                 }
+                .animation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
             }
         }
         .padding(.top, 8)
@@ -174,7 +158,7 @@ private struct LinoIChapterRow: View {
 
             HStack(spacing: 8) {
                 Text(chapter.title.isEmpty ? "第 \(chapter.index) 章" : chapter.title)
-                    .font(.headline)
+                    .font(LinoType.cardTitle)
                     .foregroundStyle(LinoTheme.ink)
                     .lineLimit(1)
                 LinoIStatusPill(text: chapter.status.linoStatusLabel, status: chapter.status)
@@ -204,7 +188,7 @@ struct LinoIBookSettingsPane: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("设定")
-                    .font(.title3.bold())
+                    .font(LinoType.heading)
                     .foregroundStyle(LinoTheme.ink)
                 Text("世界观设定会进入 Writer 的硬约束区。")
                     .font(.caption)

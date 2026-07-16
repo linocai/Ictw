@@ -35,6 +35,9 @@ struct LinoIChapterEditorScreen: View {
         }
         .navigationTitle("第 \(activeIndex) 章")
         .navigationBarTitleDisplayMode(.inline)
+        // 阅读模式自绘主题化顶栏（`LinoIReadingView.topBar`），隐藏系统 nav 栏，
+        // 避免锁浅色下 night 主题阅读页顶部仍是亮色系统条。
+        .toolbar(viewMode == .reading ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -167,6 +170,7 @@ private struct LinoIChapterEditor: View {
             VStack(alignment: .leading, spacing: 14) {
                 if editor.restoredLocalDraft {
                     restoredBanner
+                        .transition(.opacity)
                 }
                 header
                 inputSection
@@ -174,8 +178,11 @@ private struct LinoIChapterEditor: View {
                 handoffSection
                 if let chapter = editor.currentChapter, showExtraction(chapter) {
                     extractionSection(chapter)
+                        .transition(.opacity.combined(with: .offset(y: 6)))
                 }
             }
+            .animation(LinoMotion.content, value: editor.restoredLocalDraft)
+            .animation(LinoMotion.content, value: editor.currentChapter.map(showExtraction) ?? false)
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 34)
@@ -186,7 +193,7 @@ private struct LinoIChapterEditor: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(chapterTitle)
-                    .font(.system(size: 25, weight: .bold, design: .rounded))
+                    .font(LinoType.rounded(25, .bold))
                     .foregroundStyle(LinoTheme.ink)
                     .lineLimit(2)
                 HStack(spacing: 8) {
@@ -291,6 +298,7 @@ private struct LinoIChapterEditor: View {
                                 .overlay(Capsule().stroke(LinoTheme.accent.opacity(isSelected(character) ? 0 : 0.22), lineWidth: 0.6))
                         }
                         .buttonStyle(.plain)
+                        .animation(LinoMotion.selection, value: isSelected(character))
                     }
                 }
             }
@@ -304,24 +312,28 @@ private struct LinoIChapterEditor: View {
         VStack(alignment: .leading, spacing: 14) {
             stageHeader(index: "3", title: "正文与交稿", subtitle: "字数不足由 Writer 扩写；超长或其他程序违规交给 Reviser。")
             writingControlPanel
-            Picker("正文模式", selection: $draftMode) {
-                ForEach(DraftMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
+            LinoISegmented(
+                options: DraftMode.allCases,
+                label: { $0.rawValue },
+                selection: $draftMode
+            )
+
+            Group {
+                if draftMode == .preview {
+                    draftPreview
+                        .transition(.opacity)
+                } else {
+                    LinoIEditor(
+                        title: "正文编辑",
+                        text: chapterBinding(\.draftText),
+                        minHeight: 480,
+                        placeholder: "可以在这里直接修订正文。"
+                    )
+                    .disabled(editor.writingPhase.isActive)
+                    .transition(.opacity)
                 }
             }
-            .pickerStyle(.segmented)
-
-            if draftMode == .preview {
-                draftPreview
-            } else {
-                LinoIEditor(
-                    title: "正文编辑",
-                    text: chapterBinding(\.draftText),
-                    minHeight: 480,
-                    placeholder: "可以在这里直接修订正文。"
-                )
-                .disabled(editor.writingPhase.isActive)
-            }
+            .animation(LinoMotion.content, value: draftMode)
 
             actionBar
         }
@@ -360,8 +372,7 @@ private struct LinoIChapterEditor: View {
                 Button {
                     showingImport = true
                 } label: {
-                    Label("导入", systemImage: "square.and.arrow.down")
-                        .labelStyle(.iconOnly)
+                    Label("导入正文", systemImage: "square.and.arrow.down")
                 }
                 .buttonStyle(LinoITintButtonStyle())
                 .disabled(editor.writingPhase.isActive)
@@ -377,39 +388,46 @@ private struct LinoIChapterEditor: View {
                 }
             }
 
-            if case .expanding(let attempt) = editor.writingPhase {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("程序校验发现篇幅不足，Writer 正在进行第 \(attempt)/2 次有机扩写。")
-                    if let reason = editor.currentValidationReason {
-                        Text("未通过验证：\(reason)")
+            Group {
+                if case .expanding(let attempt) = editor.writingPhase {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("程序校验发现篇幅不足，Writer 正在进行第 \(attempt)/2 次有机扩写。")
+                        if let reason = editor.currentValidationReason {
+                            Text("未通过验证：\(reason)")
+                        }
                     }
-                }
-                .font(.caption)
-                .foregroundStyle(LinoTheme.warning)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if case .revising(let attempt) = editor.writingPhase {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("程序校验未通过，Reviser 正在进行第 \(attempt)/2 次修订。修订不会自行增加新剧情。")
-                    if let reason = editor.currentValidationReason {
-                        Text("未通过验证：\(reason)")
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(LinoTheme.warning)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if editor.writingPhase.isFailed, let reason = editor.currentValidationReason {
-                Text("未通过验证：\(reason)")
                     .font(.caption)
                     .foregroundStyle(LinoTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            } else if editor.currentChapter?.status == "finalized" {
-                Text("已完成章节必须先“重新编辑本章”，才能重新生成。")
+                    .transition(.opacity)
+                } else if case .revising(let attempt) = editor.writingPhase {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("程序校验未通过，Reviser 正在进行第 \(attempt)/2 次修订。修订不会自行增加新剧情。")
+                        if let reason = editor.currentValidationReason {
+                            Text("未通过验证：\(reason)")
+                        }
+                    }
                     .font(.caption)
-                    .foregroundStyle(LinoTheme.muted)
+                    .foregroundStyle(LinoTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+                } else if editor.writingPhase.isFailed, let reason = editor.currentValidationReason {
+                    Text("未通过验证：\(reason)")
+                        .font(.caption)
+                        .foregroundStyle(LinoTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.opacity)
+                } else if editor.currentChapter?.status == "finalized" {
+                    Text("已完成章节必须先“重新编辑本章”，才能重新生成。")
+                        .font(.caption)
+                        .foregroundStyle(LinoTheme.muted)
+                        .transition(.opacity)
+                }
             }
+            .animation(LinoMotion.content, value: editor.writingPhase)
 
             if editor.writingPhase.isFailed, !editor.pendingExemptionNames.isEmpty {
                 exemptionPrompt
@@ -507,13 +525,13 @@ private struct LinoIChapterEditor: View {
     private func stageHeader(index: String, title: String, subtitle: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text(index)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(LinoType.rounded(13, .bold))
                 .foregroundStyle(.white)
                 .frame(width: 26, height: 26)
                 .background(LinoTheme.accentGradient, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.headline)
+                    .font(LinoType.rowTitle)
                     .foregroundStyle(LinoTheme.ink)
                 Text(subtitle)
                     .font(.caption)

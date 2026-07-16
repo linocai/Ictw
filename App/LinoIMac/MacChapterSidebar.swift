@@ -103,7 +103,7 @@ private struct MacChapterRow: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(chapter.title.isEmpty ? "第 \(chapter.index) 章" : chapter.title)
-                        .font(.custom("Songti SC", size: 14.5).weight(.semibold))
+                        .font(LinoType.rowTitle)
                         .foregroundStyle(selected ? LinoTheme.accentDeep : LinoTheme.ink)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
