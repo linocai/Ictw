@@ -12,14 +12,14 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - **后端**：FastAPI + SQLAlchemy 2 + Alembic + SQLite，单 worker uvicorn；LLM 走 OpenAI-compatible 协议，capability registry 管推理参数（DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash、未知模型）。
 - **部署**：HK 云服务器，Nginx HTTPS 反代 → 127.0.0.1:8787，systemd `linoi-backend.service`。详情见 `~/Lino/hk_info.md`。
 
-## 当前状态（2026-07-28，v1.5.0(14) 发版收尾）
+## 当前状态（2026-07-28，v1.5.0(14) 已发布）
 
 - **当前版本**：生产 Backend 已部署 `v1.5.0`，macOS `/Applications/ICTW.app` 已换装 `v1.5.0(14)`；iOS 安装由用户处理。Alembic head 仍为 `20260711_0006`，无数据库迁移。
 - **本版契约**：后端只增加 `WriteJobStatus.job_id/outcome_current` 和终态时序修正。客户端先读权威 Chapter，再静默对账 `/job`，只恢复仍属于当前章节输入的失败/取消结果。
 - **现有前端事实**：iOS 由 `LinoIChapterEditorScreen` 在编辑/阅读间切换；macOS 由 `MacWorkspaceView` 顶层 `MacReaderView` overlay 切换。`ChapterEditorStore` 已从 `GET /chapters/{id}/job` 恢复轮询；接口已有 `kind`、`phase`、`attempt`、`error_code`、`error_message`、`error_context` 与 `violations`，`LinoErrorPresenter` 已被双端共用。`ChapterDraftCache` 已有本机 dirty/clean 基线，但尚未向界面完整表达保存状态。
 - **审计基线**：2026-07-28 初始独立审计无 P0/P1；v1.5 候选复审随后发现 2 个 P1（冷启动/跨设备失败丢失、旧本地失败覆盖新权威状态）与 1 个 P2（重启后丢失校验详情和豁免动作），现均已修复并有客户端/后端回归测试。既有 `chapter_style` 兼容窗口、`LinoI/ChapterDrafts` 路径、target/Bundle ID 与已有 wire 字段保持兼容。
 - **运维调整**：HK 服务器确认于 **2026-08-09** 到期，宁波迁移继续暂停。本次只在 HK 原机原地部署 v1.5 Backend，未迁移数据库、未改 DNS；完整迁移方案保留在下方「暂停／待恢复」段落。
-- **本版状态**：`v1.5.0(14)` Block 1–6、复审修复、自动验收、生产 Backend 部署与 macOS 换装均已完成；正在按用户授权创建 tag/Release。iOS 安装由用户处理。
+- **本版状态**：`v1.5.0(14)` Block 1–6、复审修复、自动验收、生产 Backend 部署、macOS 换装、tag 与 GitHub Release 均已完成。Release：[v1.5.0](https://github.com/linocai/Ictw/releases/tag/v1.5.0)；iOS 安装由用户处理。
 - **既知不修项**：iOS night 阅读页状态栏灰缝是灵动岛安全区域固定系统合成层，两组像素采样均证明 App 层无解；本版不重复试验。
 
 ## 当前 Plan
@@ -89,7 +89,7 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - **构建与签名**：按 AGENTS.md 完整执行 iOS `LinoI` 与 macOS `LinoIMac` Debug build；共享层改动双端都必须绿。发版候选再构建 macOS Release，执行 `codesign --verify --deep --strict`，用 `ditto` 打包/换装而非 `cp`；不得用测试产物写入生产 ICTW 的 Keychain/UserDefaults。
 - **截图与人工验收**：iOS 只用隔离模拟器、隔离 Backend/Token/SQLite；macOS 必须在隔离用户配置或用户明确允许的测试态运行，不能因与生产同 Bundle ID 共享状态而点击真实数据。按 Block 5 矩阵保存关键截图/录屏证据；若本机的 115 手势工具或用户活动阻止 GUI 自动化，记录为 release blocker，不能用代码审查代替交互验收。
 - **Release 门禁与回滚**：构建、状态/错误测试、Reduce Motion、可访问性、截图矩阵、版本号、签名与干净 diff 全绿后，先由用户确认体验和发版授权，才可 tag `v1.5.0`、发布 `ICTW-1.5.0.zip`。用户网页操作（仅到此门禁后）：在 [GitHub 新建 Release](https://github.com/linocai/Ictw/releases/new?tag=v1.5.0) 审核 tag、zip、签名说明和 release notes；iOS 真机安装仍由用户完成。回滚只恢复已发布的 v1.4.1 客户端包，不触碰服务器或数据库。
-- **2026-07-28 候选完成记录**：双 target 版本均为 `1.5.0(14)`，Backend 版本为 `1.5.0`；iOS/macOS Debug 构建通过，macOS Release 以 Apple Development 身份签名并通过 `codesign --verify --deep --strict`，hardened runtime 保留，应用类别为 Productivity。Backend 82 测试全绿，客户端状态测试全绿，Alembic 唯一 head `20260711_0006`，`git diff --check` 通过。生产部署前备份为 `20260728-183901`，本机/公网 health 均为 1.5.0，数据库三检和 `/job` additive 契约烟测通过；macOS 已原子换装并启动，旧版 App 备份在 `/tmp/ictw-app-backup.POaqfx`。tag/Release 待下一步完成，iOS 留用户。
+- **2026-07-28 发布完成记录**：双 target 版本均为 `1.5.0(14)`，Backend 版本为 `1.5.0`；iOS/macOS Debug 构建通过，macOS Release 以 Apple Development 身份签名并通过 `codesign --verify --deep --strict`，hardened runtime 保留，应用类别为 Productivity。Backend 82 测试全绿，客户端状态测试全绿，Alembic 唯一 head `20260711_0006`，`git diff --check` 通过。生产部署前备份为 `20260728-183901`，本机/公网 health、数据库三检和 `/job` additive 契约烟测通过；macOS 已原子换装并启动，旧版 App 备份在 `/tmp/ictw-app-backup.POaqfx`。发布提交 `fd99a85`、tag `v1.5.0` 与 `ICTW-1.5.0.zip` 已推送，安装包 SHA-256 为 `f8314817d955fb415327b7f8e3264f0c0290cf562c4387281de04c7b7c393e21`；iOS 留用户。
 
 ### 后续：宁波云生产迁移（暂停／待恢复；完整执行计划保留）
 
@@ -209,3 +209,4 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - 2026-07-28 v1.5.0(14) 立项：用户确认 HK 现网网络已恢复、服务器 2026-08-09 到期，决定暂停宁波迁移；完整迁移 Block 0–3 改标「暂停／待恢复」并原文保留。当前 Plan 切换为双端前端优化：编辑/阅读分离、持久生成状态与失败解释、动画性能与 Reduce Motion、双端 bug/accessibility sweep、版本/截图/签名/Release 门禁。默认客户端优先、无数据库迁移/无后端发布；仅在现有 job 契约无法安全说明可复现失败时，才允许经独立门禁立项 additive 后端字段。
 - 2026-07-28 v1.5.0 复审立即修复：修复 2 个 P1（冷启动/跨设备失败未恢复；本地旧失败可能覆盖新服务端状态）与 1 个 P2（校验原因/豁免动作重启后丢失）。Backend additive 增加 `job_id/outcome_current` 并修正取消、服务重启恢复和人物关联编辑的时间戳顺序；客户端每次加载章节静默对账最新任务，v2 缓存以完整任务输入指纹失效且不保存正文/Prompt。新增客户端纯 Swift 回归驱动和后端终态时序测试；82 个后端测试、客户端测试、双端 Debug、macOS Release 验签、Alembic head 与 diff check 全绿。尚未部署、换装、tag 或发布。
 - 2026-07-28 v1.5.0 生产部署与 macOS 换装：确认无运行任务后创建全量回滚备份 `20260728-183901`，rsync 排除 `.env`/数据库/venv，原地部署 HK Backend 1.5.0；本机与公网 health、Alembic、SQLite integrity/foreign keys、实体计数及 `/job` 新字段烟测全绿。随后将签名 Release 候选原子换装到 `/Applications/ICTW.app` 并启动，版本确认为 1.5.0(14)，旧 App 备份在 `/tmp/ictw-app-backup.POaqfx`。iOS 安装由用户处理。
+- 2026-07-28 v1.5.0 发版完成：发布提交 `fd99a85` 已推送 `main`，annotated tag `v1.5.0` 已推送；GitHub Release [ICTW / LinoI v1.5.0](https://github.com/linocai/Ictw/releases/tag/v1.5.0) 已发布，附件 `ICTW-1.5.0.zip`（2,985,157 bytes）上传成功，GitHub digest 与本地 SHA-256 同为 `f8314817d955fb415327b7f8e3264f0c0290cf562c4387281de04c7b7c393e21`。macOS 包为 Apple Development 签名、未公证；iOS 安装由用户处理。

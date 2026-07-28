@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。生产 Backend 与已换装的 macOS App 均为 `1.5.0`（App build 14）；iOS 安装由用户处理，GitHub tag/Release 正在收尾。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前已发布版本为 `1.5.0`：生产 Backend 已部署，macOS App build 14 已换装并发布，iOS 安装由用户处理。写作流程为：
 
 ```text
 Memory Selector → Writer（初稿/扩写）→ Reviser（压缩与其他违规修订）→ 用户接受 → Extractor
