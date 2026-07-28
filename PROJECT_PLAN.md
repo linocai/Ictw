@@ -12,17 +12,42 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - **后端**：FastAPI + SQLAlchemy 2 + Alembic + SQLite，单 worker uvicorn；LLM 走 OpenAI-compatible 协议，capability registry 管推理参数（DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash、未知模型）。
 - **部署**：HK 云服务器，Nginx HTTPS 反代 → 127.0.0.1:8787，systemd `linoi-backend.service`。详情见 `~/Lino/hk_info.md`。
 
-## 当前状态（2026-07-16）
+## 当前状态（2026-07-28，交接快照）
 
-- **v1.4.0 已发版部署生产（前端视觉升级）**：纯前端，`Backend/` 全版本零改动、无迁移、无部署，后端健康仍报 `1.3.2` 属预期；双 target `1.4.0(12)`，macOS ICTW 已 `ditto` 换装并复核签名、真实运行中，GitHub Release v1.4.0 已发；iOS 真机安装由用户管理。Motion/视觉 token 体系（`LinoMotion`/`LinoRadius`/`LinoSurface`/`LinoType`/`LinoReadingTheme`）+ 双端锁浅色根治系统弹层阴阳脸 + 约 30 处切换动画/transition + 分段控件 `matchedGeometryEffect` 滑动 pill + iOS 阅读页新增日间/护眼/夜间三主题（port 自 Mac）+ 字族统一 SF Rounded（阅读正文/封面/手稿宋体不动）+ 窄窗抽屉互斥/长人物名截断/night 主题控件配色等视觉 bug 扫尾，全部完成，详见变更日志。
-- iOS GUI 验收（隔离模拟器 + scratch 后端 + 临时 DEBUG 钩子范式）全项完成：书架/工作台/编辑器/阅读三主题/空态/长名截断均截图确认，钩子已清理零残留。macOS 侧因本机 GUI 自动化环境限制（详见变更日志），仅主窗口锁浅色单张截图确认，系统弹层（confirmationDialog/右键菜单/NSSavePanel）深色模式截图连续第三个 block 未能完成——已如实记录，不影响代码正确性（锁浅色的双重代码保险已逐处 grep 核对）。iOS night 阅读页顶部状态栏灰缝仍是系统级限制、无 app 层解法。
-- 发现一处历史遗留、超出本版范围的小视觉 bug（CharactersViews 人物 tab 顶部横滚动 chip 对长名无截断，与本版已修的章节编辑器人物选择 chip 是两个不同元素）：已登记为独立后续任务，未在本版修改。
-- Writer 负责全部扩写，Reviser 只负责压缩与其他违规；GLM 5 系列已纳入 capability registry。双端阅读翻章回顶部、本地草稿提示收口完成；后端 81 测试全绿。
-- 当前无施工中的 Plan；下一步待用户提出新需求。
+- **版本**：双端 App `1.4.1(13)`（v1.4.0 视觉升级 + v1.4.1 动画性能快修，用户实测流畅确认，tag/Release 已发）；生产后端 = 仓库 Backend HEAD = **v1.3.2**（v1.4.x 纯客户端，Alembic head `20260711_0006`，健康检查 `{"status":"ok","version":"1.3.2"}`）；后端 81 测试全绿。macOS `/Applications/ICTW.app` 为 1.4.1(13)；iOS 真机由用户自行安装。
+- **2026-07-28 独立代码审计完成**（主会话亲自执行，未经 agent）：范围 = v1.2.3 review 后全部 28 提交（v1.3.0/1/2 + v1.4.0/1）+ 地基复查。**结论无 P0/P1，3 条 P2 归入 Backlog。** 已核：全路由鉴权、迁移链单 head、零 create_all、防泄漏白名单（数字 code 防 bool）、内容过滤分类保留并强化、`writer_expansion_failed` 新码双端契约同步无漂移、扩写/修订循环终止性、上一章结尾与记忆共享 1800 预算无双花、`GET /job` write_running 竞态处理、v1.4.x 动画作用域与 Namespace 私有性。
+- **HK 云服务器即将到期 → 下一件大事：整体迁移宁波云**，交接概要见「当前 Plan」（待立项）。
+- 已决议不修：iOS night 阅读页状态栏灰缝（系统对灵动岛区域的固定渲染，两组像素采样实验证实 App 层无解）。
 
 ## 当前 Plan
 
-（暂无。v1.4.0 已发版部署生产并完成 macOS 换装；施工全文见 `archive/v1.4.0施工plan.md`。）
+### 交接：宁波云迁移（待立项——新会话请先召唤 planner 正式立项再施工）
+
+**背景**：HK 服务器（`45.192.104.232` / `linoi.neluvee.top`，详见仓库外 `~/Lino/hk_info.md`）即将到期，全部服务端组件迁往用户的宁波云新机。**数据迁移 = 高危区**：发版/迁移前必须备份 `linoi.db`（铁律），建议施工完成后叫一次 review。
+
+**迁移组件清单**：后端代码 + venv（rsync 部署，见下「惯例」）、`.env` 三秘密（`APP_TOKEN`/`KEK_SECRET`/`DATABASE_URL`）、`linoi.db`、systemd `linoi-backend.service`、Nginx + TLS（certbot）、DNS A 记录、`/opt/linoi/backups`。客户端与 GitHub 不在服务器上，域名与 Token 不变则双端 App 零改动。
+
+**四段流程骨架**（立项时由 planner 细化成施工块）：
+1. **准备**（老机在线，无影响）：新机基础处置 + 顺手做掉安全整改欠账（UFW/禁 root 密码/Fail2ban/低权服务用户）；SSH 授权本机 `.deploy` 公钥并核验新机主机键；rsync 代码重建 venv；`.env` 原样迁移；数据库预迁移（`.backup` → 完整性/外键/alembic 三检）；systemd + Nginx 照抄；新机 IP 内部健康检查跑通。
+2. **切换**（分钟级停机窗）：提前 1 天 DNS TTL 降到 300s；老机**先停服务**（防双写分叉）→ 终备份 → 拷终版 DB → 新机起服务 → 用户网页改 DNS A 记录 → certbot 重签证书 → 健康检查 + App 真机全链验证。
+3. **收尾**：老机停服只读保留一周作回滚，销毁前拉最后快照；`hk_info.md` 退役 → 新建宁波信息文件（项目 CLAUDE.md 指路同步改）；PROJECT_PLAN 记变更。
+4. **迁移后立即做**：每日自动备份 + 异地副本（Backlog 老项，新机落地）。
+
+**关键风险（立项 plan 必须逐条覆盖）**：
+- `KEK_SECRET` 丢失 = 库内全部 LLM Profile 加密 API Key 作废，最高优先级带走项；`APP_TOKEN` 保持不变则双端 Keychain 零改动。
+- 双写分叉：切换期两机同时活着且用户写作会裂库——必须先停老机再切 DNS。
+- **备案（未决，用户拍板）**：宁波云为境内节点，未备案域名 80/443 会被拦。选项 a) ICP 备案（周级工期，老机需撑住）b) HTTPS 走非标端口（双端需重填带端口 baseURL）c) 换已备案域名。此决定影响整个时间表。
+- 新机主机键/known_hosts 更新，`.deploy` 不进 Git。
+
+**用户网页操作清单（预览，立项时细化带 URL）**：购机/实名认证、（可能）ICP 备案、域名商改 DNS A 记录与 TTL。
+
+### 交接：施工惯例与环境事实（CLAUDE.md 之外新 agent 必知）
+
+- **部署方式是本机 rsync 上服务器（不是服务器 git pull）**，排除 `.env`/`linoi.db`/`.venv`；备份/迁移/健康检查命令见 `hk_info.md` §13。
+- 发版惯例：双 target 版本号同步抬（MARKETING_VERSION + CURRENT_PROJECT_VERSION，pbxproj 4 处）；后端版本串在 `main.py`（含测试断言）；每版 `git tag vX.Y.Z` + GitHub Release 附 `ICTW-x.y.z.zip`（`ditto -c -k --keepParent` 保签名压包）；ICTW 换装流程 = osascript quit → rm → `ditto`（禁 cp）→ codesign 深度校验 → open。
+- 本机 GUI 自动化环境坑：「115 浏览器手势增强工具」全局拦截 computer-use 鼠标点击与部分按键（Esc/Cmd+W），Mac 端 GUI 实拍需用户让出键鼠或退掉该工具；**iOS 侧不受影响**——隔离模拟器 + scratchpad 隔离后端 + 临时 `#if DEBUG` 环境变量钩子（用完删净）+ `simctl` 截图是已验证多轮的完整验收范式。
+- Debug/Release 构建产物与生产 ICTW 同 Bundle ID，共享 Keychain/UserDefaults——验证时只读浏览，勿改连接配置、勿删数据、勿动 `/Applications/ICTW.app`（除正式换装）。
+- 工作区 `LinoIMac.xcscheme` 长期有一处 Xcode 自动触碰的脏改动，历届施工均不提交不还原，维持现状即可。
 
 ## Backlog
 
@@ -35,19 +60,22 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - 每本书单独配置记忆预算公式
 - PostgreSQL 迁移、多 worker 分布式写作任务
 
-**技术债**（含 2026-07-11 v1.1.0 review 的 P2 遗留）
-- `chapter_style` 兼容字段收口（新 App 验证后）
+**技术债**（含历次 review/审计遗留，最近一次为 2026-07-28 独立审计）
+- `chapter_style` 兼容字段收口（新 App 验证后；收口时同步删 `_AuthorNoteCompat` 与 ChapterRead 镜像字段）
 - capability registry 扩充（Qwen、Claude、Kimi 等）
 - 短名整词匹配的可选轻量分词方案（提升 2 字名精度；1 字名左边界启发式对 CJK 扩展区/々等罕用前字有漏判，一并解决）
 - LLM 审计表的查询/统计入口（当前仅落库，靠直连 DB 查看）
-- job_runs「最新一行」并列打破用随机 uuid，可换单调次键（review P2#6）
-- write_registry 为进程内单例，未来多 worker 前必须换 DB 层 job 锁（review P2#7，前瞻）
+- job_runs「最新一行」并列打破用随机 uuid，可换单调次键（v1.1.0 review P2#6）
+- write_registry 为进程内单例，未来多 worker 前必须换 DB 层 job 锁（v1.1.0 review P2#7，前瞻）
 - 阅读模式增强（书签、朗读、翻页动画等）
-- `CharactersViews.swift` 人物 tab 顶部横向滚动 chip（`LinoICharacterChip`）对超长人物名无截断处理，长名会被屏幕边缘裁切而非省略号收尾（v1.4.0 块⑤验收时发现，已 spawn_task 登记，未修）
+- `CharactersViews.swift` 人物 tab 顶部横向滚动 chip 对超长人物名无截断，长名被屏幕边缘裁切（v1.4.0 块⑤发现，与已修的编辑器人物选择 chip 是不同控件）
+- 【2026-07-28 审计 P2】CLAUDE.md 铁律「未知模型一律不发额外参数」与 v1.3.1 起「非思考请求统一强制 `top_p=0.95`（含未知模型）」的实现不一致——改铁律措辞或把 top_p 收进 capability 门控，二选一
+- 【2026-07-28 审计 P2】记忆导出中嵌套动态字段值以 `json.dumps` 单行渲染，人读 TXT 观感生硬（books.py `_dynamic_value_text`）
+- 【2026-07-28 审计 P2】`LinoISegmented`（共享）与 `LinoMacSegmented`（Mac）两套视觉同构分段控件并行维护，长期漂移风险，下个大版本可合并
 
-**运维/安全（hk_info.md §12 有排序清单）**
-- 云端安全整改：关 root 密码登录、UFW、Fail2ban、服务降权、systemd 加固
-- 每日自动备份 + 异地副本（当前仅一份人工备份且同盘）
+**运维/安全（hk_info.md §12 有排序清单；宁波云迁移是当前最优先项，见「当前 Plan」）**
+- 云端安全整改：关 root 密码登录、UFW、Fail2ban、服务降权、systemd 加固——**建议随迁移在新机一次做掉**
+- 每日自动备份 + 异地副本（当前仅人工备份且同盘）——**迁移收尾项**
 - 安全更新 + 重启、NTP 修复、加 swap、Nginx 限流与 /docs 收口
 
 ## 变更日志
@@ -94,3 +122,4 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - 2026-07-16 GitHub Release v1.4.0 发布：块①-⑤共 6 个提交（`91fa7f4`/`1a1ea96`/`3c2e1d6`/`504b562`/`0fa35c4`/`ee29fba`）已 push 到 `origin main`；tag `v1.4.0` 已 push；`ICTW-1.4.0.zip`（`ditto -c -k --keepParent` 保签名压包，SHA-256 `70c1b4bfef2d5171bec82ebf6e21e7f12ab943c2bdaa2a37d455e4ab438bcc09`，解压后重新 `codesign --verify --deep --strict` 复核通过）已上传至 https://github.com/linocai/Ictw/releases/tag/v1.4.0 ，Release notes 涵盖 motion token 体系、双端锁浅色、约 30 处切换动画、matchedGeometryEffect 分段 pill、iOS 阅读三主题、字族统一、视觉 bug 扫尾；签名说明沿用此前版本「Development 签名未公证」措辞。
 - 2026-07-16 v1.4.1 性能快修：v1.4.0 实测卡顿（书卡 hover/页面 tab 切换/阅读主题切换）。根因=动画加在昂贵图层：①阴影模糊半径逐帧插值（书卡 hover 与 LinoICardButtonStyle 按压）→ 改阴影瞬切/恒定 + 只动 offset/scale（GPU 变换，阴影先于变换光栅化）；②整页/tab 交叉淡化期间新旧玻璃树并存合成翻倍 → 工作台 tab（双端）改瞬时切换、书架↔工作台改 containerSwap（micro 0.14）新 token；③阅读页正文 NSTextView/段落随主题动画整章重排 → .transaction 排除正文，主题渐变只留 chrome，字号变更取消动画。双 target 构建绿，版本 1.4.1(13)，ICTW 已换装；tag/Release 待用户确认手感后补。
 - 2026-07-16 v1.4.1 发版收尾：用户实测确认流畅，tag v1.4.1 + ICTW-1.4.1.zip 已发 https://github.com/linocai/Ictw/releases/tag/v1.4.1 ；iOS 真机安装留用户。
+- 2026-07-28 独立代码审计完成（主会话亲自执行）：范围 v1.2.3 review 后全部 28 提交 + 地基复查，无 P0/P1，3 条 P2 归 Backlog（top_p 铁律措辞偏差 / 记忆导出嵌套 JSON 渲染 / 双分段控件并行）。同日写入交接文档：HK 服务器到期，宁波云迁移交接概要（组件清单/四段流程/KEK-双写-备案三风险/用户网页操作清单预览）入「当前 Plan」待立项，施工惯例与环境事实（rsync 部署、发版流程、GUI 验证范式、Bundle 共享注意）单列交接段，Backlog 全量整合。
