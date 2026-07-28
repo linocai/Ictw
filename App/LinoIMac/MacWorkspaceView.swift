@@ -26,31 +26,24 @@ struct MacWorkspaceView: View {
     @State private var rightPanelOpen = true
     @State private var sidebarOpen = true
     @State private var isReaderOpen = false
+    @State private var editorScrollPosition = ScrollPosition(edge: .top)
 
     private static let wideBreakpoint: CGFloat = 1100
     private static let mediumBreakpoint: CGFloat = 800
 
     var body: some View {
         ZStack {
-            GeometryReader { proxy in
-                let width = proxy.size.width > 0 ? proxy.size.width : Self.wideBreakpoint
-                let showRightInline = width >= Self.wideBreakpoint
-                let showSidebarInline = width >= Self.mediumBreakpoint
-
-                VStack(spacing: 0) {
-                    titleBar(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
-                    bodyRow(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
-                }
-                .onChange(of: showRightInline) { _, inline in if inline { withAnimation(LinoMotion.drawer) { rightPanelOpen = true } } }
-                .onChange(of: showSidebarInline) { _, inline in if inline { withAnimation(LinoMotion.drawer) { sidebarOpen = true } } }
-            }
-
             if isReaderOpen {
                 MacReaderView(selectedChapterId: $selectedChapterId, isPresented: $isReaderOpen)
                     .transition(.opacity)
-                    .zIndex(3)
+            } else {
+                workspaceLayout
+                    .transition(.opacity)
             }
         }
+        .linoAnimation(LinoMotion.reader, value: isReaderOpen)
+        .linoAnimation(LinoMotion.drawer, value: rightPanelOpen)
+        .linoAnimation(LinoMotion.drawer, value: sidebarOpen)
         .ignoresSafeArea(.container, edges: .top)
         .task(id: session.currentBook?.id) { await reload() }
         .onChange(of: selectedChapterId) { _, id in loadSelected(id) }
@@ -64,6 +57,21 @@ struct MacWorkspaceView: View {
             guard trigger else { return }
             commandBus.showNewChapter = false
             createChapterViaCommand()
+        }
+    }
+
+    private var workspaceLayout: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width > 0 ? proxy.size.width : Self.wideBreakpoint
+            let showRightInline = width >= Self.wideBreakpoint
+            let showSidebarInline = width >= Self.mediumBreakpoint
+
+            VStack(spacing: 0) {
+                titleBar(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
+                bodyRow(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
+            }
+            .onChange(of: showRightInline) { _, inline in if inline { rightPanelOpen = true } }
+            .onChange(of: showSidebarInline) { _, inline in if inline { sidebarOpen = true } }
         }
     }
 
@@ -140,7 +148,8 @@ struct MacWorkspaceView: View {
             ZStack(alignment: .topLeading) {
                 MacChapterEditor(
                     selectedChapterId: $selectedChapterId,
-                    onOpenReader: { withAnimation(LinoMotion.reader) { isReaderOpen = true } }
+                    scrollPosition: $editorScrollPosition,
+                    onOpenReader: { isReaderOpen = true }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -172,8 +181,8 @@ struct MacWorkspaceView: View {
                 }
             }
         }
-        .animation(LinoMotion.drawer, value: showSidebarInline)
-        .animation(LinoMotion.drawer, value: showRightInline)
+        .linoAnimation(LinoMotion.drawer, value: showSidebarInline)
+        .linoAnimation(LinoMotion.drawer, value: showRightInline)
     }
 
     /// 右抽屉当前是否应该可见：窄窗（<800）时与左抽屉互斥，左抽屉优先（章节
@@ -214,12 +223,10 @@ struct MacWorkspaceView: View {
     // MARK: - Drawer toggling（<800 互斥：开一个自动关另一个）
 
     private func toggleSidebarDrawer() {
-        withAnimation(LinoMotion.drawer) {
-            sidebarOpen.toggle()
-            // 这个按钮只在 !showSidebarInline（即 <800）时才会出现，此时打开
-            // 左抽屉必须同时收起右抽屉，否则两者会同时争用同一块窄窗空间。
-            if sidebarOpen { rightPanelOpen = false }
-        }
+        sidebarOpen.toggle()
+        // 这个按钮只在 !showSidebarInline（即 <800）时才会出现，此时打开
+        // 左抽屉必须同时收起右抽屉，否则两者会同时争用同一块窄窗空间。
+        if sidebarOpen { rightPanelOpen = false }
     }
 
     private func toggleRightDrawer(showRightInline: Bool, showSidebarInline: Bool) {
@@ -227,22 +234,20 @@ struct MacWorkspaceView: View {
         // 抽屉正在显示而被互斥隐藏，此时 rightPanelOpen 仍是 true，直接
         // `.toggle()` 会把它误关成 false，导致按钮看起来毫无反应。
         let currentlyVisible = isRightDrawerVisible(showRightInline: showRightInline, showSidebarInline: showSidebarInline)
-        withAnimation(LinoMotion.drawer) {
-            if currentlyVisible {
-                rightPanelOpen = false
-            } else {
-                rightPanelOpen = true
-                if !showSidebarInline { sidebarOpen = false }
-            }
+        if currentlyVisible {
+            rightPanelOpen = false
+        } else {
+            rightPanelOpen = true
+            if !showSidebarInline { sidebarOpen = false }
         }
     }
 
     private func closeSidebarDrawer() {
-        withAnimation(LinoMotion.drawer) { sidebarOpen = false }
+        sidebarOpen = false
     }
 
     private func closeRightDrawer() {
-        withAnimation(LinoMotion.drawer) { rightPanelOpen = false }
+        rightPanelOpen = false
     }
 
     // MARK: - Coordination
@@ -259,6 +264,7 @@ struct MacWorkspaceView: View {
 
     private func loadSelected(_ id: String?) {
         guard let id, let summary = workspace.chapters.first(where: { $0.id == id }) else { return }
+        editorScrollPosition.scrollTo(edge: .top)
         Task { await editor.load(summary) }
     }
 

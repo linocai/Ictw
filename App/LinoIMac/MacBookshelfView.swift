@@ -120,6 +120,7 @@ struct MacBookshelfView: View {
         }
         .buttonStyle(LinoIDashedButtonStyle())
         .onHover { pointer($0) }
+        .accessibilityLabel("新建作品")
     }
 }
 
@@ -176,7 +177,11 @@ private struct MacBookCard: View {
             .offset(y: hovered ? -3 : 0)
         }
         .buttonStyle(.plain)
-        .animation(LinoMotion.hover, value: hovered)
+        .accessibilityLabel(
+            "\(book.title.isEmpty ? "未命名书籍" : book.title)，\(book.chapterCount) 章，\(book.characterCount) 人物"
+        )
+        .accessibilityHint("打开作品")
+        .linoAnimation(LinoMotion.hover, value: hovered)
         .onHover { inside in
             hovered = inside
             pointer(inside)

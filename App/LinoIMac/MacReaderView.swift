@@ -1,6 +1,22 @@
 import SwiftUI
 import AppKit
 
+private struct MacReaderScrollMetrics: Equatable {
+    let offset: CGFloat
+    let maximumOffset: CGFloat
+
+    var relativeOffset: Double {
+        guard maximumOffset > 0 else { return 0 }
+        return Double(min(max(offset / maximumOffset, 0), 1))
+    }
+}
+
+private struct MacReaderPositionContext {
+    let bookID: String
+    let chapterID: String
+    let text: String
+}
+
 /// 全窗 overlay 阅读页。挂在 `MacWorkspaceView` 内部——工作台本身已经
 /// 铺满整窗，阅读页作为它的顶层 ZStack 分支盖住标题栏+三栏内容，效果等同于
 /// 「全窗 overlay」，同时不必新建共享状态：章节切换直接改写外部传入的
@@ -25,6 +41,12 @@ struct MacReaderView: View {
 
     @AppStorage("linoi.mac.reader.theme") private var themeRaw: String = LinoReadingTheme.day.rawValue
     @AppStorage("linoi.mac.reader.fontSizeIndex") private var fontSizeIndex: Int = 2
+    @State private var scrollPosition = ScrollPosition(edge: .top)
+    @State private var pendingRestoreOffset: Double?
+    @State private var latestMetrics = MacReaderScrollMetrics(offset: 0, maximumOffset: 0)
+    @State private var positionSaveTask: Task<Void, Never>?
+    @State private var positionContext: MacReaderPositionContext?
+    @State private var escapeKeyMonitor: Any?
 
     private static let fontLadder: [CGFloat] = [18, 19, 20, 21, 23]
 
@@ -68,7 +90,37 @@ struct MacReaderView: View {
         // 整窗壳层背景——night 主题让整个覆盖层变暗，不只是文字列变暗。
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.background)
-        .animation(LinoMotion.reader, value: theme)
+        .linoAnimation(LinoMotion.reader, value: theme)
+        .onAppear {
+            preparePositionRestore()
+            installEscapeKeyMonitor()
+        }
+        .onChange(of: chapter?.id) { _, _ in
+            preparePositionRestore()
+        }
+        .onDisappear {
+            positionSaveTask?.cancel()
+            savePosition(latestMetrics.relativeOffset)
+            removeEscapeKeyMonitor()
+        }
+        .onExitCommand {
+            isPresented = false
+        }
+    }
+
+    private func installEscapeKeyMonitor() {
+        guard escapeKeyMonitor == nil else { return }
+        escapeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }
+            isPresented = false
+            return nil
+        }
+    }
+
+    private func removeEscapeKeyMonitor() {
+        guard let escapeKeyMonitor else { return }
+        NSEvent.removeMonitor(escapeKeyMonitor)
+        self.escapeKeyMonitor = nil
     }
 
     // MARK: - Top bar (52 高细玻璃条)
@@ -78,7 +130,7 @@ struct MacReaderView: View {
             Color.clear.frame(width: 70, height: 1) // 交通灯挡位，同 MacWorkspaceView 标题栏
 
             Button {
-                withAnimation(LinoMotion.reader) { isPresented = false }
+                isPresented = false
             } label: {
                 Text("‹ 返回工作台")
                     .font(.system(size: 13, weight: .medium))
@@ -88,6 +140,8 @@ struct MacReaderView: View {
                     .background(theme.chipBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel("返回工作台")
             .onHover { pointer($0) }
 
             Spacer(minLength: 8)
@@ -153,8 +207,10 @@ struct MacReaderView: View {
         }
         .buttonStyle(.plain)
         .help(t.label)
+        .accessibilityLabel("\(t.label)主题")
+        .accessibilityValue(selected ? "已选择" : "未选择")
         .onHover { pointer($0) }
-        .animation(LinoMotion.selection, value: theme)
+        .linoAnimation(LinoMotion.selection, value: theme)
     }
 
     private func fontStepButton(label: String, size: CGFloat, action: @escaping () -> Void) -> some View {
@@ -248,8 +304,23 @@ struct MacReaderView: View {
         }
         .scrollIndicators(.hidden)
         .id(chapter?.id)
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: MacReaderScrollMetrics.self) { geometry in
+            MacReaderScrollMetrics(
+                offset: geometry.contentOffset.y,
+                maximumOffset: max(geometry.contentSize.height - geometry.containerSize.height, 0)
+            )
+        } action: { _, metrics in
+            latestMetrics = metrics
+            if let pendingRestoreOffset, metrics.maximumOffset > 0 {
+                self.pendingRestoreOffset = nil
+                scrollPosition.scrollTo(y: CGFloat(pendingRestoreOffset) * metrics.maximumOffset)
+            } else {
+                schedulePositionSave(metrics)
+            }
+        }
         .transition(.opacity)
-        .animation(LinoMotion.reader, value: chapter?.id)
+        .linoAnimation(LinoMotion.reader, value: chapter?.id)
     }
 
     private var chapterEndMark: some View {
@@ -303,6 +374,49 @@ struct MacReaderView: View {
             .components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    private func preparePositionRestore() {
+        positionSaveTask?.cancel()
+        savePosition(latestMetrics.relativeOffset)
+        latestMetrics = MacReaderScrollMetrics(offset: 0, maximumOffset: 0)
+        guard let chapter else {
+            pendingRestoreOffset = nil
+            positionContext = nil
+            scrollPosition.scrollTo(edge: .top)
+            return
+        }
+        positionContext = MacReaderPositionContext(
+            bookID: chapter.bookId,
+            chapterID: chapter.id,
+            text: chapter.draftText
+        )
+        pendingRestoreOffset = ReaderPositionStore.load(
+            bookID: chapter.bookId,
+            chapterID: chapter.id,
+            text: chapter.draftText
+        )
+        scrollPosition.scrollTo(edge: .top)
+    }
+
+    private func schedulePositionSave(_ metrics: MacReaderScrollMetrics) {
+        positionSaveTask?.cancel()
+        let relativeOffset = metrics.relativeOffset
+        positionSaveTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            savePosition(relativeOffset)
+        }
+    }
+
+    private func savePosition(_ relativeOffset: Double) {
+        guard let positionContext else { return }
+        ReaderPositionStore.save(
+            bookID: positionContext.bookID,
+            chapterID: positionContext.chapterID,
+            text: positionContext.text,
+            relativeOffset: relativeOffset
+        )
     }
 
     /// 铁律口径：去空白字符数。

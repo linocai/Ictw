@@ -97,11 +97,16 @@ def test_accept_success_and_reaccept_replaces_events(client, auth_headers, wait_
     accepted = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
     assert accepted.status_code == 200
     assert accepted.json()["phase"] == "extracting"
+    assert accepted.json()["job_id"]
     status = wait_for_terminal(client, chapter["id"], auth_headers)
     assert status["phase"] == "done"
+    assert status["outcome_current"] is True
     assert status["chapter"]["status"] == "finalized"
 
     client.post(f"/api/v1/chapters/{chapter['id']}/reopen", headers=auth_headers).raise_for_status()
+    stale = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert stale["phase"] == "done"
+    assert stale["outcome_current"] is False
     assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 200
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
     events = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]
@@ -165,7 +170,17 @@ def test_selected_extractor_item_malformed_restores_draft_ready(client, auth_hea
     assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 200
     status = wait_for_terminal(client, chapter["id"], auth_headers)
     assert status["phase"] == "failed"
+    assert status["job_id"]
+    assert status["outcome_current"] is True
     assert client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()["status"] == "draft_ready"
+    client.patch(
+        f"/api/v1/chapters/{chapter['id']}",
+        headers=auth_headers,
+        json={"character_links": []},
+    ).raise_for_status()
+    stale = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert stale["phase"] == "failed"
+    assert stale["outcome_current"] is False
 
 
 def test_writer_preflight_uses_longest_name_and_rejects_unselected(client, auth_headers, wait_for_terminal):
@@ -505,6 +520,38 @@ def test_accept_rejects_live_job(client, auth_headers):
         assert response.json()["detail"]["code"] == "write_running"
     finally:
         write_registry.clear()
+
+
+def test_cancelled_job_remains_current_after_chapter_restore(client, auth_headers):
+    import time
+
+    class BlockingWriter(TextLLM):
+        def complete_stream(self, *, cancel_event=None, **kwargs):
+            while cancel_event is not None and not cancel_event.is_set():
+                time.sleep(0.01)
+            return
+            yield  # pragma: no cover - keep this a generator
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "target_word_count": 20},
+    ).json()
+    client.app.dependency_overrides[get_writer_client] = lambda: BlockingWriter("")
+
+    started = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).json()
+    assert started["job_id"]
+    cancelled = client.post(
+        f"/api/v1/chapters/{chapter['id']}/write/cancel",
+        headers=auth_headers,
+    )
+    assert cancelled.status_code == 200
+
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert status["phase"] == "cancelled"
+    assert status["job_id"] == started["job_id"]
+    assert status["outcome_current"] is True
 
 
 def test_delete_finalized_chapter_cascades_events_and_reverts_dynamic_state(client, auth_headers, wait_for_terminal):

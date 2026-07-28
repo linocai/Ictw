@@ -62,9 +62,9 @@ enum LinoTheme {
 
 // MARK: - LinoMotion（时长阶梯 + 语义动画）
 
-/// 动效 token：时长阶梯 + 语义动画。全部走 value-based（`.animation(_, value:)`
-/// 或 `withAnimation` 包状态变更），因此天然可被打断；不含 `.repeatForever`
-/// 或视差类持续动画。时长参数来源：老项目 BookCard `easeOut 0.18`、
+/// 动效 token：时长阶梯 + 语义动画。全部经 `linoAnimation` 走 value-based
+/// transaction，因此天然可被打断，并统一遵循“减少动态效果”；不含
+/// `.repeatForever` 或视差类持续动画。时长参数来源：老项目 BookCard `easeOut 0.18`、
 /// StatusBadge 双 key `smooth 0.30`、小控件 `0.14`，与本项目现存
 /// `smooth 0.22/0.24/0.25` 对齐取整。
 enum LinoMotion {
@@ -94,6 +94,26 @@ enum LinoMotion {
     /// 整页/大容器换面（书架↔工作台等）。新旧两棵树交叉淡化期间玻璃层数翻倍，
     /// 合成开销大，必须用最短时长压缩重叠窗口（v1.4.1 性能修复）。
     static let containerSwap = Animation.easeOut(duration: micro)
+
+    static func resolved(_ animation: Animation, reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : animation
+    }
+}
+
+private struct LinoValueAnimationModifier<Value: Equatable>: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let animation: Animation
+    let value: Value
+
+    func body(content: Content) -> some View {
+        content.animation(LinoMotion.resolved(animation, reduceMotion: reduceMotion), value: value)
+    }
+}
+
+extension View {
+    func linoAnimation<Value: Equatable>(_ animation: Animation, value: Value) -> some View {
+        modifier(LinoValueAnimationModifier(animation: animation, value: value))
+    }
 }
 
 // MARK: - LinoRadius（pt）
@@ -109,6 +129,32 @@ enum LinoRadius {
     static let panel: CGFloat = 18
     static let glass: CGFloat = 20
     static let bar: CGFloat = 22
+}
+
+enum LinoControlMetrics {
+    static var compactHeight: CGFloat {
+        #if os(iOS)
+        44
+        #else
+        34
+        #endif
+    }
+
+    static var regularHeight: CGFloat {
+        #if os(iOS)
+        44
+        #else
+        42
+        #endif
+    }
+
+    static var segmentedHeight: CGFloat {
+        #if os(iOS)
+        38
+        #else
+        26
+        #endif
+    }
 }
 
 // MARK: - LinoSurface（白卡不透明度）

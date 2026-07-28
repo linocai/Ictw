@@ -26,9 +26,9 @@ struct LinoIStatusPill: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(palette.background, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .animation(LinoMotion.status, value: status)
+            .linoAnimation(LinoMotion.status, value: status)
             // 双 key：status 不变但 label 变化时（如「写作中」→「修订中」）也要 morph，对齐老项目 StatusBadge。
-            .animation(LinoMotion.status, value: text)
+            .linoAnimation(LinoMotion.status, value: text)
     }
 
     private var palette: (text: Color, background: Color) {
@@ -45,6 +45,242 @@ struct LinoIStatusPill: View {
             return (LinoTheme.danger, LinoTheme.danger.opacity(0.14))
         default:
             return (LinoTheme.muted, LinoTheme.muted.opacity(0.13))
+        }
+    }
+}
+
+struct LinoIGenerationStatusPanel: View {
+    let state: ChapterEditorPresentationState
+    var onRetry: (() -> Void)?
+    var onRetrySave: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("生成进度")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(LinoTheme.ink)
+                    Text(statusHeadline)
+                        .font(.caption)
+                        .foregroundStyle(statusColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                saveBadge
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(state.steps) { step in
+                    generationStep(step)
+                }
+            }
+
+            if state.connectionInterrupted {
+                explanationRow(
+                    systemImage: "wifi.exclamationmark",
+                    title: "连接暂时中断",
+                    detail: LinoErrorPresenter.connectionInterrupted,
+                    color: LinoTheme.warning
+                )
+            }
+
+            if let failureStep {
+                explanationRow(
+                    systemImage: "exclamationmark.octagon.fill",
+                    title: "\(failureStep.stage.label)未完成",
+                    detail: state.headline ?? "任务没有完成，原因暂时未知。",
+                    color: LinoTheme.danger
+                )
+                if let reason = state.validationReason, !reason.isEmpty {
+                    Text("程序校验：\(reason)")
+                        .font(.caption)
+                        .foregroundStyle(LinoTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let code = state.failureCode, !code.isEmpty {
+                    Text("错误代码：\(code)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(LinoTheme.muted)
+                        .textSelection(.enabled)
+                }
+                if let action = state.recoveryAction, let onRetry {
+                    Button(action: onRetry) {
+                        Label(action.title, systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(LinoITintButtonStyle(compact: true))
+                }
+            } else if let cancelledStep {
+                explanationRow(
+                    systemImage: "stop.circle.fill",
+                    title: "\(cancelledStep.stage.label)已停止",
+                    detail: state.headline ?? "任务已停止，当前草稿仍保留。",
+                    color: LinoTheme.muted
+                )
+            }
+
+            if let saveFailure = state.saveState.failureMessage {
+                explanationRow(
+                    systemImage: "externaldrive.badge.exclamationmark",
+                    title: state.saveState.label,
+                    detail: saveFailure,
+                    color: LinoTheme.danger
+                )
+                if let onRetrySave {
+                    Button(action: onRetrySave) {
+                        Label("重试保存", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(LinoITintButtonStyle(compact: true))
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(LinoTheme.hairline, lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("生成进度，\(statusHeadline)，\(state.saveState.label)")
+    }
+
+    private var failureStep: ChapterGenerationStep? {
+        state.steps.first { $0.state == .failed }
+    }
+
+    private var cancelledStep: ChapterGenerationStep? {
+        state.steps.first { $0.state == .cancelled }
+    }
+
+    private var activeStep: ChapterGenerationStep? {
+        state.steps.first { $0.state == .active }
+    }
+
+    private var statusHeadline: String {
+        if failureStep != nil {
+            return "生成未完成，原因和下一步见下方"
+        }
+        if cancelledStep != nil {
+            return "任务已停止"
+        }
+        if state.connectionInterrupted {
+            return "任务仍在服务器执行，App 正在自动重连"
+        }
+        if let headline = state.headline {
+            return headline
+        }
+        if state.steps.allSatisfy({ $0.state == .completed }) {
+            return "本章流程已完成"
+        }
+        if state.steps.first(where: { $0.stage == .validationAndRevision })?.state == .completed {
+            return "正文已就绪，等待接受并提取"
+        }
+        return "尚未开始生成"
+    }
+
+    private var statusColor: Color {
+        if failureStep != nil { return LinoTheme.danger }
+        if state.connectionInterrupted { return LinoTheme.warning }
+        if activeStep != nil { return LinoTheme.accentDeep }
+        return LinoTheme.muted
+    }
+
+    private var saveBadge: some View {
+        Label(state.saveState.label, systemImage: saveSystemImage)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(state.saveState.failureMessage == nil ? LinoTheme.muted : LinoTheme.danger)
+            .lineLimit(2)
+            .multilineTextAlignment(.trailing)
+            .accessibilityLabel("保存状态：\(state.saveState.label)")
+    }
+
+    private var saveSystemImage: String {
+        switch state.saveState {
+        case .synced: return "checkmark.icloud"
+        case .savingLocally, .savingRemotely: return "arrow.trianglehead.2.clockwise.rotate.90"
+        case .localDraft, .restoredLocalDraft: return "externaldrive"
+        case .localSaveFailed, .remoteSaveFailed: return "externaldrive.badge.exclamationmark"
+        }
+    }
+
+    private func generationStep(_ step: ChapterGenerationStep) -> some View {
+        HStack(spacing: 9) {
+            Group {
+                if step.state == .active {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: stepSystemImage(step.state))
+                        .foregroundStyle(stepColor(step.state))
+                }
+            }
+            .frame(width: 18, height: 18)
+
+            Text(step.stage.label)
+                .font(.system(size: 12, weight: step.state == .active ? .semibold : .regular))
+                .foregroundStyle(step.state == .pending ? LinoTheme.faint : LinoTheme.body)
+            Spacer()
+            Text(stepStateLabel(step.state))
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(stepColor(step.state))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(step.stage.label)，\(stepStateLabel(step.state))")
+    }
+
+    private func explanationRow(
+        systemImage: String,
+        title: String,
+        detail: String,
+        color: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: systemImage)
+                .foregroundStyle(color)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(LinoTheme.ink)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(LinoTheme.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.09), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    private func stepSystemImage(_ state: ChapterGenerationStepState) -> String {
+        switch state {
+        case .pending: return "circle"
+        case .active: return "circle"
+        case .completed: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.octagon.fill"
+        case .cancelled: return "stop.circle.fill"
+        }
+    }
+
+    private func stepColor(_ state: ChapterGenerationStepState) -> Color {
+        switch state {
+        case .pending: return LinoTheme.faint
+        case .active: return LinoTheme.accent
+        case .completed: return LinoTheme.success
+        case .failed: return LinoTheme.danger
+        case .cancelled: return LinoTheme.muted
+        }
+    }
+
+    private func stepStateLabel(_ state: ChapterGenerationStepState) -> String {
+        switch state {
+        case .pending: return "待进行"
+        case .active: return "进行中"
+        case .completed: return "已完成"
+        case .failed: return "未完成"
+        case .cancelled: return "已停止"
         }
     }
 }
@@ -254,7 +490,7 @@ struct LinoIPrimaryButtonStyle: ButtonStyle {
             .font(.system(size: compact ? 13 : 14, weight: .semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, compact ? 14 : 18)
-            .frame(minHeight: compact ? 34 : 44)
+            .frame(minHeight: compact ? LinoControlMetrics.compactHeight : 44)
             .frame(maxWidth: compact ? nil : .infinity)
             .background(LinoTheme.accentGradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .shadow(color: LinoTheme.accent.opacity(configuration.isPressed ? 0.12 : 0.24), radius: 10, y: 6)
@@ -282,7 +518,7 @@ struct LinoITintButtonStyle: ButtonStyle {
             .font(.system(size: compact ? 13 : 14, weight: .semibold))
             .foregroundStyle(LinoTheme.accentDeep)
             .padding(.horizontal, compact ? 12 : 16)
-            .frame(minHeight: compact ? 34 : 42)
+            .frame(minHeight: compact ? LinoControlMetrics.compactHeight : LinoControlMetrics.regularHeight)
             .background(LinoTheme.accentSoft.opacity(configuration.isPressed ? 0.70 : 0.96), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.accent.opacity(0.18), lineWidth: 0.5))
     }
@@ -295,7 +531,7 @@ struct LinoIDangerButtonStyle: ButtonStyle {
             .font(.system(size: compact ? 13 : 14, weight: .semibold))
             .foregroundStyle(LinoTheme.danger)
             .padding(.horizontal, compact ? 12 : 16)
-            .frame(minHeight: compact ? 34 : 42)
+            .frame(minHeight: compact ? LinoControlMetrics.compactHeight : LinoControlMetrics.regularHeight)
             .background(LinoTheme.danger.opacity(configuration.isPressed ? 0.18 : 0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.danger.opacity(0.24), lineWidth: 0.5))
     }
@@ -324,6 +560,24 @@ struct LinoISegmented<Option: Hashable>: View {
     let label: (Option) -> String
     @Binding var selection: Option
 
+    var body: some View {
+        LinoSegmentedCore(
+            options: options,
+            label: label,
+            selection: $selection
+        )
+    }
+}
+
+/// Shared visual and interaction core used by both platform wrappers. macOS
+/// adds pointer feedback conditionally; geometry, type, selection background,
+/// animation and accessibility stay byte-identical across targets.
+struct LinoSegmentedCore<Option: Hashable>: View {
+    let options: [Option]
+    let label: (Option) -> String
+    @Binding var selection: Option
+    var enablesPointerFeedback = false
+
     @Namespace private var namespace
 
     var body: some View {
@@ -331,13 +585,13 @@ struct LinoISegmented<Option: Hashable>: View {
             ForEach(options, id: \.self) { option in
                 let isSelected = option == selection
                 Button {
-                    withAnimation(LinoMotion.selection) { selection = option }
+                    selection = option
                 } label: {
                     Text(label(option))
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(isSelected ? LinoTheme.ink : LinoTheme.muted)
                         .padding(.horizontal, 14)
-                        .frame(height: 26)
+                        .frame(height: LinoControlMetrics.segmentedHeight)
                         .background {
                             if isSelected {
                                 RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -348,6 +602,15 @@ struct LinoISegmented<Option: Hashable>: View {
                         }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(label(option))
+                .accessibilityValue(isSelected ? "已选择" : "未选择")
+                #if os(macOS)
+                .onHover { inside in
+                    if enablesPointerFeedback {
+                        pointer(inside)
+                    }
+                }
+                #endif
             }
         }
         .padding(3)
@@ -356,6 +619,7 @@ struct LinoISegmented<Option: Hashable>: View {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .stroke(LinoTheme.hairline, lineWidth: 0.5)
         )
+        .linoAnimation(LinoMotion.selection, value: selection)
     }
 }
 
@@ -370,7 +634,7 @@ struct LinoICardButtonStyle: ButtonStyle {
         configuration.label
             .shadow(color: LinoTheme.hex(0x143052, opacity: 0.10), radius: 18, y: 10)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(LinoMotion.press, value: configuration.isPressed)
+            .linoAnimation(LinoMotion.press, value: configuration.isPressed)
     }
 }
 

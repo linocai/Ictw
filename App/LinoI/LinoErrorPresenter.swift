@@ -70,6 +70,25 @@ enum LinoErrorPresenter {
         }
     }
 
+    /// Stable local classification for failures that happen before a job
+    /// snapshot exists. This lets the persistent task card choose honest
+    /// recovery UI without parsing the user-facing Chinese sentence.
+    static func code(for error: Error) -> String? {
+        guard let apiError = error as? APIError else { return nil }
+        switch apiError {
+        case .notConfigured:
+            return "not_configured"
+        case .badURL:
+            return "bad_url"
+        case .transport:
+            return "transport"
+        case .http(let statusCode, _):
+            return statusCode == 401 ? "unauthorized" : "http_\(statusCode)"
+        case .validation(let code, _, _):
+            return code
+        }
+    }
+
     /// `runPolling`'s transient "still retrying" toast. Not a failure — kept
     /// here as a shared constant (rather than a literal at the call site) so
     /// iOS and macOS show byte-identical copy and any future wording change

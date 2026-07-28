@@ -29,20 +29,25 @@ async def lifespan(app: FastAPI):
 
 def recover_interrupted_chapters(db) -> None:
     runs = db.scalars(select(JobRun).where(JobRun.phase.notin_(["done", "failed", "cancelled"]))).all()
+    chapters = db.scalars(select(Chapter).where(Chapter.status.in_(["writing", "extracting"]))).all()
+    for chapter in chapters:
+        chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
+    # Flush restored chapter timestamps first. The terminal run timestamp must
+    # be at least as new as that authoritative chapter state so /job can mark
+    # this recovery failure as the current outcome.
+    if chapters:
+        db.flush()
     for run in runs:
         run.phase = "failed"
         run.error_code = "interrupted"
         run.error_message = "服务重启，任务中断"
         run.finished_at = utc_now()
-    chapters = db.scalars(select(Chapter).where(Chapter.status.in_(["writing", "extracting"]))).all()
-    for chapter in chapters:
-        chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
     if runs or chapters:
         db.commit()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="LinoI API", version="1.3.2", lifespan=lifespan)
+    app = FastAPI(title="LinoI API", version="1.5.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -55,7 +60,7 @@ def create_app() -> FastAPI:
 
     @app.get(f"{prefix}/health", dependencies=deps)
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "1.3.2"}
+        return {"status": "ok", "version": "1.5.0"}
 
     app.include_router(books.router, prefix=prefix, dependencies=deps)
     app.include_router(characters.router, prefix=prefix, dependencies=deps)

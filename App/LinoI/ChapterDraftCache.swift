@@ -106,33 +106,37 @@ final class ChapterDraftCache {
         return try? decoder.decode(LocalChapterDraft.self, from: data)
     }
 
-    func saveClean(_ chapter: Chapter) {
+    @discardableResult
+    func saveClean(_ chapter: Chapter) -> Bool {
         let draft = LocalChapterDraft(chapter: chapter, dirty: false, cleanBaselineAt: Date())
-        save(draft)
+        return save(draft)
     }
 
-    func saveDirty(_ chapter: Chapter) {
+    @discardableResult
+    func saveDirty(_ chapter: Chapter) -> Bool {
         let existing = load(chapterId: chapter.id)
         let draft = LocalChapterDraft(
             chapter: chapter,
             dirty: true,
             cleanBaselineAt: existing?.cleanBaselineAt
         )
-        save(draft)
+        return save(draft)
     }
 
     func remove(chapterId: String) {
         try? FileManager.default.removeItem(at: fileURL(chapterId))
     }
 
-    private func save(_ draft: LocalChapterDraft) {
+    private func save(_ draft: LocalChapterDraft) -> Bool {
         do {
             let data = try encoder.encode(draft)
             try data.write(to: fileURL(draft.chapterId), options: [.atomic])
+            return true
         } catch {
             #if DEBUG
             print("ChapterDraftCache save failed: \(error.localizedDescription)")
             #endif
+            return false
         }
     }
 

@@ -47,7 +47,7 @@ struct LinoICharactersPane: View {
                             }
                         }
                     }
-                    .animation(LinoMotion.listItem, value: characters.characters.map(\.id))
+                    .linoAnimation(LinoMotion.listItem, value: characters.characters.map(\.id))
                     .padding(.vertical, 2)
                 }
 
@@ -80,16 +80,22 @@ private struct LinoICharacterChip: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(character.name.isEmpty ? "未命名" : character.name)
                         .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if !character.role.isEmpty {
                         Text(character.role)
                             .font(.caption2)
                             .foregroundStyle(selected ? .white.opacity(0.72) : LinoTheme.muted)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
+                .frame(maxWidth: 190, alignment: .leading)
             }
             .foregroundStyle(selected ? .white : LinoTheme.ink)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
+            .frame(minHeight: 44)
             .background {
                 if selected {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -102,6 +108,8 @@ private struct LinoICharacterChip: View {
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(LinoTheme.hairline, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(character.name.isEmpty ? "未命名人物" : character.name)
+        .accessibilityValue(selected ? "已选择" : "未选择")
     }
 }
 
@@ -309,7 +317,7 @@ private struct LinoICharacterEventRow: View {
                 .transition(.opacity)
             }
         }
-        .animation(LinoMotion.content, value: isEditing)
+        .linoAnimation(LinoMotion.content, value: isEditing)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(11)
         .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))

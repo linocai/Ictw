@@ -12,6 +12,7 @@ struct MacChapterEditor: View {
     @EnvironmentObject private var editor: ChapterEditorStore
 
     @Binding var selectedChapterId: String?
+    @Binding var scrollPosition: ScrollPosition
     /// 打开阅读 overlay 的回调，由 `MacWorkspaceView` 注入（阅读页挂在它那一
     /// 层，本视图不持有阅读状态）。
     let onOpenReader: () -> Void
@@ -79,7 +80,7 @@ struct MacChapterEditor: View {
                     if let chapter = editor.currentChapter {
                         LinoIStatusPill(text: chapter.status.linoStatusLabel, status: chapter.status)
                     }
-                    if let phase = editor.writingPhase.label {
+                    if let phase = editor.writingPhase.compactLabel {
                         LinoIStatusPill(text: phase, status: editor.writingPhase.pillStatus)
                     }
                     Text("\(editor.draftCharCount) 字")
@@ -135,14 +136,15 @@ struct MacChapterEditor: View {
                         .transition(.opacity.combined(with: .offset(y: 6)))
                 }
             }
-            .animation(LinoMotion.content, value: editor.restoredLocalDraft)
-            .animation(LinoMotion.content, value: editor.currentChapter.map(showExtraction) ?? false)
+            .linoAnimation(LinoMotion.content, value: editor.restoredLocalDraft)
+            .linoAnimation(LinoMotion.content, value: editor.currentChapter.map(showExtraction) ?? false)
             .frame(maxWidth: LinoMacMetrics.contentMaxWidth)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 28)
             .padding(.top, 22)
             .padding(.bottom, 60)
         }
+        .scrollPosition($scrollPosition)
     }
 
     private var restoredBanner: some View {
@@ -263,7 +265,7 @@ struct MacChapterEditor: View {
                     .transition(.opacity)
                 }
             }
-            .animation(LinoMotion.content, value: draftMode)
+            .linoAnimation(LinoMotion.content, value: draftMode)
             actionBar
         }
         .padding(16)
@@ -307,55 +309,11 @@ struct MacChapterEditor: View {
                 Spacer()
             }
 
-            if editor.writingPhase.isActive, let label = editor.writingPhase.label {
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small).tint(LinoTheme.accent)
-                    Text(label)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(LinoTheme.muted)
-                }
-            }
-
-            Group {
-                if case .expanding(let attempt) = editor.writingPhase {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("程序校验发现篇幅不足，Writer 正在进行第 \(attempt)/2 次有机扩写。")
-                        if let reason = editor.currentValidationReason {
-                            Text("未通过验证：\(reason)")
-                        }
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(LinoTheme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity)
-                } else if case .revising(let attempt) = editor.writingPhase {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("程序校验未通过，Reviser 正在进行第 \(attempt)/2 次修订。修订不会自行增加新剧情。")
-                        if let reason = editor.currentValidationReason {
-                            Text("未通过验证：\(reason)")
-                        }
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(LinoTheme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity)
-                } else if editor.writingPhase.isFailed, let reason = editor.currentValidationReason {
-                    Text("未通过验证：\(reason)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(LinoTheme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .transition(.opacity)
-                } else if editor.currentChapter?.status == "finalized" {
-                    Text("已完成章节必须先「重新编辑本章」，才能重新生成。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(LinoTheme.muted)
-                        .transition(.opacity)
-                }
-            }
-            .animation(LinoMotion.content, value: editor.writingPhase)
+            LinoIGenerationStatusPanel(
+                state: editor.presentationState,
+                onRetry: retryFailureAction,
+                onRetrySave: retrySaveAction
+            )
 
             if editor.writingPhase.isFailed, !editor.pendingExemptionNames.isEmpty {
                 exemptionPrompt
@@ -395,8 +353,14 @@ struct MacChapterEditor: View {
     }
 
     private var actionBar: some View {
-        Group {
+        VStack(spacing: 10) {
             if editor.currentChapter?.status == "finalized" {
+                Button(action: onOpenReader) {
+                    Label("进入阅读", systemImage: "book.pages")
+                }
+                .buttonStyle(LinoIPrimaryButtonStyle())
+                .onHover { pointer($0) }
+
                 Button {
                     Task {
                         if let chapter = await editor.reopen() { workspace.upsert(chapter) }
@@ -492,7 +456,40 @@ struct MacChapterEditor: View {
     }
 
     private var canAccept: Bool {
-        hasDraft && !editor.writingPhase.isActive && !editor.writingPhase.isFailed
+        guard hasDraft, !editor.writingPhase.isActive else { return false }
+        if editor.writingPhase.isFailed {
+            return editor.writingPhase.currentStage == .extraction
+        }
+        return true
+    }
+
+    private var retryFailureAction: (() -> Void)? {
+        guard let action = editor.presentationState.recoveryAction else { return nil }
+        return {
+            Task {
+                let chapter: Chapter?
+                switch action {
+                case .retryGeneration:
+                    chapter = await editor.generate()
+                case .retryExtraction:
+                    chapter = await editor.accept()
+                }
+                if let chapter {
+                    workspace.upsert(chapter)
+                }
+            }
+        }
+    }
+
+    private var retrySaveAction: (() -> Void)? {
+        guard editor.presentationState.saveState.needsRetry else { return nil }
+        return {
+            Task {
+                if let chapter = await editor.save() {
+                    workspace.upsert(chapter)
+                }
+            }
+        }
     }
 
     private func showExtraction(_ chapter: Chapter) -> Bool {

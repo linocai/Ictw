@@ -12,34 +12,117 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - **后端**：FastAPI + SQLAlchemy 2 + Alembic + SQLite，单 worker uvicorn；LLM 走 OpenAI-compatible 协议，capability registry 管推理参数（DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash、未知模型）。
 - **部署**：HK 云服务器，Nginx HTTPS 反代 → 127.0.0.1:8787，systemd `linoi-backend.service`。详情见 `~/Lino/hk_info.md`。
 
-## 当前状态（2026-07-28，交接快照）
+## 当前状态（2026-07-28，v1.5.0(14) 发版收尾）
 
-- **版本**：双端 App `1.4.1(13)`（v1.4.0 视觉升级 + v1.4.1 动画性能快修，用户实测流畅确认，tag/Release 已发）；生产后端 = 仓库 Backend HEAD = **v1.3.2**（v1.4.x 纯客户端，Alembic head `20260711_0006`，健康检查 `{"status":"ok","version":"1.3.2"}`）；后端 81 测试全绿。macOS `/Applications/ICTW.app` 为 1.4.1(13)；iOS 真机由用户自行安装。
-- **2026-07-28 独立代码审计完成**（主会话亲自执行，未经 agent）：范围 = v1.2.3 review 后全部 28 提交（v1.3.0/1/2 + v1.4.0/1）+ 地基复查。**结论无 P0/P1，3 条 P2 归入 Backlog。** 已核：全路由鉴权、迁移链单 head、零 create_all、防泄漏白名单（数字 code 防 bool）、内容过滤分类保留并强化、`writer_expansion_failed` 新码双端契约同步无漂移、扩写/修订循环终止性、上一章结尾与记忆共享 1800 预算无双花、`GET /job` write_running 竞态处理、v1.4.x 动画作用域与 Namespace 私有性。
-- **HK 云服务器即将到期 → 下一件大事：整体迁移宁波云**，交接概要见「当前 Plan」（待立项）。
-- 已决议不修：iOS night 阅读页状态栏灰缝（系统对灵动岛区域的固定渲染，两组像素采样实验证实 App 层无解）。
+- **当前版本**：生产 Backend 已部署 `v1.5.0`，macOS `/Applications/ICTW.app` 已换装 `v1.5.0(14)`；iOS 安装由用户处理。Alembic head 仍为 `20260711_0006`，无数据库迁移。
+- **本版契约**：后端只增加 `WriteJobStatus.job_id/outcome_current` 和终态时序修正。客户端先读权威 Chapter，再静默对账 `/job`，只恢复仍属于当前章节输入的失败/取消结果。
+- **现有前端事实**：iOS 由 `LinoIChapterEditorScreen` 在编辑/阅读间切换；macOS 由 `MacWorkspaceView` 顶层 `MacReaderView` overlay 切换。`ChapterEditorStore` 已从 `GET /chapters/{id}/job` 恢复轮询；接口已有 `kind`、`phase`、`attempt`、`error_code`、`error_message`、`error_context` 与 `violations`，`LinoErrorPresenter` 已被双端共用。`ChapterDraftCache` 已有本机 dirty/clean 基线，但尚未向界面完整表达保存状态。
+- **审计基线**：2026-07-28 初始独立审计无 P0/P1；v1.5 候选复审随后发现 2 个 P1（冷启动/跨设备失败丢失、旧本地失败覆盖新权威状态）与 1 个 P2（重启后丢失校验详情和豁免动作），现均已修复并有客户端/后端回归测试。既有 `chapter_style` 兼容窗口、`LinoI/ChapterDrafts` 路径、target/Bundle ID 与已有 wire 字段保持兼容。
+- **运维调整**：HK 服务器确认于 **2026-08-09** 到期，宁波迁移继续暂停。本次只在 HK 原机原地部署 v1.5 Backend，未迁移数据库、未改 DNS；完整迁移方案保留在下方「暂停／待恢复」段落。
+- **本版状态**：`v1.5.0(14)` Block 1–6、复审修复、自动验收、生产 Backend 部署与 macOS 换装均已完成；正在按用户授权创建 tag/Release。iOS 安装由用户处理。
+- **既知不修项**：iOS night 阅读页状态栏灰缝是灵动岛安全区域固定系统合成层，两组像素采样均证明 App 层无解；本版不重复试验。
 
 ## 当前 Plan
 
-### 交接：宁波云迁移（待立项——新会话请先召唤 planner 正式立项再施工）
+### v1.5.0(14) 双端前端优化（候选验收中）
 
-**背景**：HK 服务器（`45.192.104.232` / `linoi.neluvee.top`，详见仓库外 `~/Lino/hk_info.md`）即将到期，全部服务端组件迁往用户的宁波云新机。**数据迁移 = 高危区**：发版/迁移前必须备份 `linoi.db`（铁律），建议施工完成后叫一次 review。
+**目标**：让编辑与阅读是清晰分离且可无损往返的两种体验；生成中、失败、离线、恢复和禁用状态都有常驻、可读、可操作的说明；继续提升切换流畅度，并完成 iOS/macOS 的前端 bug 与可访问性扫查。
 
-**迁移组件清单**：后端代码 + venv（rsync 部署，见下「惯例」）、`.env` 三秘密（`APP_TOKEN`/`KEK_SECRET`/`DATABASE_URL`）、`linoi.db`、systemd `linoi-backend.service`、Nginx + TLS（certbot）、DNS A 记录、`/opt/linoi/backups`。客户端与 GitHub 不在服务器上，域名与 Token 不变则双端 App 零改动。
+**稳定决定与范围**：不把阶段当百分比或承诺时长。后端 Chapter + job snapshot 共同构成生成真相，本地草稿缓存只用于恢复未同步编辑；视图与本地失败缓存不得反向覆盖服务端新章。为解决已复现的冷启动/跨设备终态歧义，允许后端 additive 增加 nullable `job_id/outcome_current`，不迁移数据库，旧客户端可忽略。全程保留现有写作链、字数/人物白名单、错误真实分类、`chapter_style` 兼容和 Keychain/UserDefaults/草稿目录标识。每个失败路径必须同时有文字、语义/图标和可执行动作，不能仅以颜色区分。
 
-**四段流程骨架**（立项时由 planner 细化成施工块）：
-1. **准备**（老机在线，无影响）：新机基础处置 + 顺手做掉安全整改欠账（UFW/禁 root 密码/Fail2ban/低权服务用户）；SSH 授权本机 `.deploy` 公钥并核验新机主机键；rsync 代码重建 venv；`.env` 原样迁移；数据库预迁移（`.backup` → 完整性/外键/alembic 三检）；systemd + Nginx 照抄；新机 IP 内部健康检查跑通。
-2. **切换**（分钟级停机窗）：提前 1 天 DNS TTL 降到 300s；老机**先停服务**（防双写分叉）→ 终备份 → 拷终版 DB → 新机起服务 → 用户网页改 DNS A 记录 → certbot 重签证书 → 健康检查 + App 真机全链验证。
-3. **收尾**：老机停服只读保留一周作回滚，销毁前拉最后快照；`hk_info.md` 退役 → 新建宁波信息文件（项目 CLAUDE.md 指路同步改）；PROJECT_PLAN 记变更。
-4. **迁移后立即做**：每日自动备份 + 异地副本（Backlog 老项，新机落地）。
+**纳入本版的建议**：生成阶段轨道、草稿保存状态、按章节状态重排主操作层级、阅读位置记忆、分段控件共享视觉核心、非颜色依赖的错误呈现全部纳入。阅读的书签/朗读/翻页动画等增强仍留在 Backlog；位置记忆只记录本书本章的阅读位置，正文版本变化时回到章首，绝不伪造跨正文版本的精确位置。
 
-**关键风险（立项 plan 必须逐条覆盖）**：
-- `KEK_SECRET` 丢失 = 库内全部 LLM Profile 加密 API Key 作废，最高优先级带走项；`APP_TOKEN` 保持不变则双端 Keychain 零改动。
-- 双写分叉：切换期两机同时活着且用户写作会裂库——必须先停老机再切 DNS。
-- **备案（未决，用户拍板）**：宁波云为境内节点，未备案域名 80/443 会被拦。选项 a) ICP 备案（周级工期，老机需撑住）b) HTTPS 走非标端口（双端需重填带端口 baseURL）c) 换已备案域名。此决定影响整个时间表。
-- 新机主机键/known_hosts 更新，`.deploy` 不进 Git。
+#### Block 1 — 架构与状态基线（Builder：共享客户端层）
 
-**用户网页操作清单（预览，立项时细化带 URL）**：购机/实名认证、（可能）ICP 备案、域名商改 DNS A 记录与 TTL。
+- **目标/所有权**：在 `App/LinoI/LinoStores.swift`、`LinoModels.swift`、`ChapterDraftCache.swift`、`LinoErrorPresenter.swift` 与 `LinoTheme.swift` 建立一份可测试的展示状态，供两端视图消费；iOS/macOS 页面只渲染、派发动作，不各自推断 job 或草稿真相。
+- **具体工作**：把 job `idle/selecting_memory/writing/revising/extracting/done/failed/cancelled`、`kind`、`attempt`、当前校验原因、保存状态和连接中断收敛为显式展示模型；将「本机已保存」「本机有未同步修改」「正在保存到服务器」「服务器保存失败但本机草稿仍在」区分开。缓存 450ms 防抖、远端更新时间比较和失败后刷新语义不倒退。
+- **不可破坏契约**：`WriteJobStatus` 现有 snake_case 解码与 `GET /job` 竞态处理不变；只从既有 job/Chapter/cache 推导，不改 wire 字段、不把本地 dirty 草稿上传或标为远端已保存。iOS 前台恢复仍走 `handleScenePhaseActive()`；macOS 仍仅由 `refreshActiveJobIfNeeded()` 做一次静默对账，避免旧失败 Toast 重播。
+- **验证/完成门禁**：为展示模型与 `LinoErrorPresenter` 补纯函数/Store 测试，覆盖冷启动、章节切换、前后台、`write_running` 领养、终态重入、缓存恢复与远端较新覆盖。任一来源不明或状态能自相矛盾，即不得进入 UI 重构。
+- **2026-07-28 完成记录**：`LinoModels.swift` 新建共享 `ChapterWritingPhase`、五阶段轨道、`ChapterSaveState` 与纯函数 `ChapterEditorPresentationState.make`；`LinoStores.swift` 双端统一消费同一状态，轮询断线成为显式状态，失败阶段由安全 job context/code 推导；`ChapterDraftCache.saveClean/saveDirty` 改返回真实落盘结果。修复“编辑后立即远端保存且 PATCH 失败时，450ms 防抖尚未落盘便被取消”的本机草稿风险：联网前先写精确 dirty 快照，磁盘也失败时不再假报“本机草稿仍在”。复审后新增 `ChapterJobReconciler` 与 v2 任务结果缓存；纯 Swift 测试覆盖当前/过期/旧服务终态、完整输入指纹、缓存不可复活、finalized 权威性及失败详情恢复。
+
+#### Block 2 — 编辑器与阅读器分离（Builder：iOS、macOS 各自页面；共享状态由 Block 1）
+
+- **目标/文件**：iOS 改 `ChapterEditorViews.swift`、`ReadingViews.swift`、必要时 `WorkspaceViews.swift`；macOS 改 `MacWorkspaceView.swift`、`MacChapterEditor.swift`、`MacReaderView.swift`、`MacShell.swift`。编辑器只承载配置、草稿、生成与接受；阅读器只承载已完成正文、主题、字号、位置和相邻已完成章节导航。
+- **iOS 决定**：从编辑状态进入独立阅读 destination/presentation，而非在同一编辑树中混排编辑表单；退出阅读返回同一章、同一编辑滚动锚点和未保存本机草稿。切换相邻完成章时更新阅读上下文，不额外重置书/章节导航栈；草稿、空正文、未完成章均不可进入阅读并说明原因。
+- **macOS 决定**：保留工作台选中章为单一选择源，但将 reader presentation 与编辑器内容树分开；退出 overlay 后保持当前章和编辑器滚动位置。宽度 `>=1100`、`800...1099`、`<800` 三栏/右抽屉/双抽屉互斥规则不变，阅读态不得泄漏任何编辑、删除或生成入口。
+- **阅读位置**：按 book+chapter+正文版本持久化、去抖保存并在正文载入完成后恢复；iOS 使用可访问的 SwiftUI scroll position/锚点，macOS 以 `NSScrollView` 可恢复的相对位置实现。位置不可解析、正文为空、正文版本不同或相邻章切换时回章首；绝不以数组索引/字符偏移猜测位置。
+- **主操作层级**：草稿态突出「生成正文」、有合格草稿时突出「接受并提取」、完成态突出「进入阅读」；重新编辑、导入、停止、删除等降为语义明确的次级/危险操作。激活任务期间编辑和冲突操作禁用，同时说明正在等待的阶段与可用操作。
+- **验证/完成门禁**：每端以长正文、空正文、draft/writing/extracting/failed/finalized 六态验证进出阅读、翻章、返回编辑、重启恢复位置、编辑滚动保留与禁用文案。任何返回导致草稿丢失、错误进入阅读或滚动跳至无关位置均阻断本块。
+- **2026-07-28 完成记录**：iOS 编辑器保持为根页面，finalized 章以独立全屏阅读页呈现；macOS 工作台与阅读器改为顶层互斥分支，阅读态不再挂载编辑、删除、生成和右侧辅助栏。两端均保留所选章节与编辑滚动位置，支持相邻完成章原地翻页；阅读位置按 book+chapter+正文指纹和相对偏移去抖持久化，正文变化回章首。
+
+#### Block 3 — 持久生成状态与失败解释（Builder：共享 Store/Presenter + 双端编辑器）
+
+- **目标/文件**：在 `LinoStores.swift`、`LinoErrorPresenter.swift`、`ChapterEditorViews.swift`、`MacChapterEditor.swift`、`LinoComponents.swift` 实现不假报进度的阶段轨道和常驻失败卡；如需解码兼容，仅 additive 修改 `LinoModels.swift`。
+- **阶段轨道**：显示「选择记忆 → 写正文（含扩写次数）→ 修订（含次数）→ 提取 → 完成」，依据现有 `phase/kind/attempt` 标示已完成、当前、待办、失败或已取消；网络短断仅提示“自动重试中”，不把轮询断开说成模型生成失败。前后台/重启/跨端继续时先读 `GET /job` 再渲染，不以旧内存状态覆盖服务端。
+- **失败说明**：开始请求、轮询、模型上游、内容拦截、程序校验、取消、认证、网络、HTTP/解码未知错误都必须在任务区保留「发生环节、真实原因/安全摘要、下一步」；Toast 只是补充。原始 `blockReason`/`finishReason`、模型名和安全白名单上游原因沿用现有契约，未知错误诚实显示分类/HTTP 状态而非编造原因；重试、豁免重试、检查网络、重新登录、返回编辑等动作只在确实可执行时出现。
+- **后端契约门禁**：逐类对账证明既有字段能解释“为什么失败”，但无法判断最新终态是否晚于章节的后续编辑/重开，也无法让新设备识别任务身份。按门禁增加 nullable `job_id/outcome_current`：旧客户端忽略，旧服务缺字段时新客户端不冒险重播失败；不记录 Prompt/正文/API Key、不迁移数据库。`outcome_current` 由终态 `finished_at >= chapter.updated_at` 推导，人物关联等 relationship-only 编辑也显式推进章节更新时间。
+- **验证/完成门禁**：用隔离 Backend+mock 覆盖成功、扩写、修订、Extractor、内容拦截、上游拒绝、超时/断网、401、`write_running`、校验失败、取消、后台恢复及终态重开。所有终态截图/断言都能回答“哪一步、为什么、现在能做什么”；否则本块未完成。
+- **2026-07-28 完成记录**：新增双端共享的五阶段常驻进度面板，逐步显示已完成/当前/待办/失败/取消、真实失败摘要与代码、程序校验原因、断线自动重连和本机/服务器保存状态。失败与取消结果按章节全部任务输入的指纹本地保留，并保存安全的校验原因、豁免人物名和 job ID；输入变化、新任务、服务端过期终态或 finalized 状态会清除旧结果。章节加载必做一次静默 `/job` 对账，冷启动与跨设备失败可恢复且不重放旧 Toast；旧服务缺 `outcome_current` 时保持安全降级。
+
+#### Block 4 — 动画与性能治理（Builder：共享动效核心 + 双端容器）
+
+- **目标/文件**：审查并按需收敛 `LinoTheme.swift`、`LinoComponents.swift`、`LinoMacControls.swift`、`LinoIApp.swift`、`MacShell.swift`、工作台/编辑器/阅读器。以 v1.4.1 的结论为基线：不恢复阴影逐帧插值、整页双树长交叉淡化或正文逐帧排版。
+- **具体工作**：将双分段控件抽取为共享的视觉规格/样式核心（选中底、字号、边框、状态与可访问性），保留 iOS/macOS 平台各自可编译的交互封装，避免把 AppKit hover 强塞进 iOS。审查所有切换点只让 chrome 做短、可打断的 transform/opacity；列表只对稳定 ID 变化动画，长正文、主题换色、字号和大列表不触发昂贵重排动画。
+- **减少动态效果**：接入 `accessibilityReduceMotion` 的单一策略；开启时抽屉、分段、页面、reader 翻章和状态变化立即落位或只保留无位移淡变，关闭 matched-geometry 位移动画。普通模式继续使用既有语义 motion token，禁止新增散落的时长字面量。
+- **验证/完成门禁**：在长正文、100+ 章节/人物、连续切 tab、主题/字号切换、抽屉断点往返、生成状态连续更新下做 Instruments/实际帧率观察；无新持续掉帧、无双树重复渲染、Reduce Motion 无位移晃动，才允许进入 release 验收。
+- **2026-07-28 完成记录**：所有显式动效统一走 `LinoMotion` 与 `linoAnimation`，自动响应 Reduce Motion；移除散落 `withAnimation`，保留阴影瞬切和长正文禁动画边界。iOS/macOS 分段控件复用同一视觉与可访问性核心；阅读/编辑仅做短 chrome 切换，不再长期并存昂贵内容树。
+
+#### Block 5 — 双端 bug sweep 与可访问性（Builder：各自 UI 文件；共享组件统一修）
+
+- **目标/文件**：扫描 `ShelfViews.swift`、`WorkspaceViews.swift`、`CharactersViews.swift`、`SettingsViews.swift`、`ChapterEditorViews.swift`、`ReadingViews.swift` 与全部 `App/LinoIMac/Mac*.swift`；优先修复可复现前端 bug，包括 Backlog 的 iOS 人物顶部超长 chip 截断及分段控件漂移风险。
+- **可访问性标准**：错误、连接、禁用、进行中与选中态均含文字/图标/VoiceOver label，不只靠红绿或透明度；iOS 可点击区至少 44pt、Dynamic Type 不截断关键操作；macOS 保留键盘焦点、Tab 顺序、Escape/命令键、tooltip 与非 hover 的同等入口。阅读主题 swatch、无文字图标、进度轨道与危险按钮均提供可读 label/hint/value。
+- **测试矩阵**：
+
+| 场景 | iOS | macOS |
+| --- | --- | --- |
+| 内容与状态 | 空书/空章、长正文、超长人物名、草稿恢复、加载/错误/禁用 | 同数据；三栏、章节空态、右栏空态 |
+| 生成与网络 | 生成各阶段、失败常驻说明、断网重连、前后台恢复 | 同契约；窗口失焦/再激活静默对账 |
+| 尺寸与输入 | 紧凑宽度、横竖屏、Dynamic Type、VoiceOver | 799/800/1099/1100pt、键盘导航、窄窗双抽屉 |
+| 阅读 | 三主题、字号、长章位置恢复、翻已完成相邻章 | 同主题/位置；NSTextView 选中、窗口 resize |
+
+- **完成门禁**：每个可复现问题附复现条件和回归证据；未修的系统限制须明确归因、影响和不修理由。任一错误仅颜色可见、关键按钮被截断/无键盘路径、窄窗抽屉重叠或长内容回归，即不得通过。
+- **2026-07-28 完成记录**：隔离 iPhone 16 Pro 模拟器与隔离 macOS Debug 实跑覆盖书架、章节三态、长正文、超长人物名、失败面板、阅读设置和独立阅读页。修复 iOS 标题区失败长文撑爆、人物 chip 越界、阅读设置窄屏拥挤、关键触控区不足；补齐双端进度/主题/翻章标签，macOS 共享图标按钮、书卡和章节入口的 VoiceOver label，并为阅读返回绑定 Escape。GUI 截图保存在本次隔离临时目录，发版前仍需用户在真实设备确认手感。
+
+#### Block 6 — 版本、截图、构建、签名与 Release 验收（Builder；Release 由用户授权）
+
+- **版本/范围核对**：Block 3 additive 后端门禁已触发，Backend 版本同步为 `1.5.0`，但 Alembic 迁移必须为空；在 `App/LinoI.xcodeproj/project.pbxproj` 的双 target Debug/Release 共 4 处同步设 `MARKETING_VERSION=1.5.0`、`CURRENT_PROJECT_VERSION=14`，不改 target 名、Bundle ID、Keychain/UserDefaults 键或产品名。
+- **构建与签名**：按 AGENTS.md 完整执行 iOS `LinoI` 与 macOS `LinoIMac` Debug build；共享层改动双端都必须绿。发版候选再构建 macOS Release，执行 `codesign --verify --deep --strict`，用 `ditto` 打包/换装而非 `cp`；不得用测试产物写入生产 ICTW 的 Keychain/UserDefaults。
+- **截图与人工验收**：iOS 只用隔离模拟器、隔离 Backend/Token/SQLite；macOS 必须在隔离用户配置或用户明确允许的测试态运行，不能因与生产同 Bundle ID 共享状态而点击真实数据。按 Block 5 矩阵保存关键截图/录屏证据；若本机的 115 手势工具或用户活动阻止 GUI 自动化，记录为 release blocker，不能用代码审查代替交互验收。
+- **Release 门禁与回滚**：构建、状态/错误测试、Reduce Motion、可访问性、截图矩阵、版本号、签名与干净 diff 全绿后，先由用户确认体验和发版授权，才可 tag `v1.5.0`、发布 `ICTW-1.5.0.zip`。用户网页操作（仅到此门禁后）：在 [GitHub 新建 Release](https://github.com/linocai/Ictw/releases/new?tag=v1.5.0) 审核 tag、zip、签名说明和 release notes；iOS 真机安装仍由用户完成。回滚只恢复已发布的 v1.4.1 客户端包，不触碰服务器或数据库。
+- **2026-07-28 候选完成记录**：双 target 版本均为 `1.5.0(14)`，Backend 版本为 `1.5.0`；iOS/macOS Debug 构建通过，macOS Release 以 Apple Development 身份签名并通过 `codesign --verify --deep --strict`，hardened runtime 保留，应用类别为 Productivity。Backend 82 测试全绿，客户端状态测试全绿，Alembic 唯一 head `20260711_0006`，`git diff --check` 通过。生产部署前备份为 `20260728-183901`，本机/公网 health 均为 1.5.0，数据库三检和 `/job` additive 契约烟测通过；macOS 已原子换装并启动，旧版 App 备份在 `/tmp/ictw-app-backup.POaqfx`。tag/Release 待下一步完成，iOS 留用户。
+
+### 后续：宁波云生产迁移（暂停／待恢复；完整执行计划保留）
+
+**恢复条件**：用户明确重新启用迁移后，须先按当时工信部、接入商和云供应商的**官方说明**重新核验合规路径并替换式写回本文件与维护窗。可作为恢复起点的可靠路径仅为：完成中国大陆节点所需的 ICP/接入备案，或改部署到中国大陆外节点；供应商所称的域名白名单未取得官方依据且不能默认替代备案。恢复前仅可做只读盘点；严禁 DNS/TTL、停旧机、传送秘密/生产库或路线专属施工。
+
+**目标/范围**：将后端代码、`.env`、`linoi.db`、`linoi-backend.service`、Nginx/TLS、`/opt/linoi/backups` 从 HK 迁至宁波。部署仍由本机 rsync（排除 `.env`/`linoi.db`/`.venv`），不改业务代码或表结构；`KEK_SECRET`/`APP_TOKEN` 必须原样迁移且不打印。域名与 Token 不变时双端 App 零改动。
+
+**Block 0 — 路线决策门禁（用户）**
+
+- 恢复时用户须将经官方说明核验的合规路线写回本 Plan：A) **中国大陆节点**：完成 ICP 备案及接入商要求的接入备案/核验后再切换；B) **中国大陆外节点**：确认供应商、域名、客户端迁移和回退方案后再切换。HTTPS 非标准端口不能替代 ICP/接入备案；“域名白名单”只有取得供应商官方说明且确认合规后才能另行评估，不能作为默认路线。未选择前只能做只读盘点与新机离线准备，严禁 DNS/TTL、停旧机、终版库和任何路线专属施工。
+- 大陆节点的切换前门禁是备案及接入商核验获批；大陆外节点的切换前门禁是用户确认客户端迁移/回退方案和供应商可用性。用户在 [Cloudflare Dashboard](https://dash.cloudflare.com/) 管理 DNS，在 [工信部备案查询](https://beian.miit.gov.cn/) 核验 ICP；新云供应商、域名白名单（若有）和异地存储控制台的官方说明/URL 未记录，必须由用户提供，不能猜测。
+- **验证/回滚**：记录选择、维护窗和用户在场；未满足门禁即停在本块，HK 不变。
+
+**Block 1 — 新机隔离预置与预演（Builder）**
+
+- **前置条件**：新机访问、带外主机指纹、管理源 IP 与恢复通道已提供；路线未定时只做不含秘密/生产数据的离线预置。
+- 新建 sudo 运维用户并以新会话验证后关闭 root/密码 SSH；安全组/UFW 仅管理 SSH、80、443，8787 只 loopback；安装更新、NTP、swap、Fail2ban。建立无登录 `linoi` 用户，systemd 采用 `User/Group`、`UMask=0077`、`NoNewPrivileges`、`PrivateTmp`、`ProtectSystem=strict`、`ProtectHome`、`ReadWritePaths=/opt/linoi/backend`。
+- 核验指纹后写 `.deploy/known_hosts`，rsync 代码、重建 venv；Nginx 仅反代 `/api/v1/`，默认/`/docs`/`/openapi.json` 不进应用，准备 loopback 维护态和 ACME 路由。路线门禁满足后才安全迁移 `.env` 与预演库。
+- 预演库必须由 `sqlite3 .backup` 产生；验证 `PRAGMA integrity_check=ok`、`PRAGMA foreign_key_check` 零行且 `foreign_keys=1`、Alembic `current` 与唯一 `heads` 均为 `20260711_0006`。验收还包括 `nginx -t`、systemd 加固、带 Bearer 的本机健康检查；失败即停新机并维持 HK。
+
+**Block 2 — 冻结、终备份、DNS/TLS 单写入切换（Builder + 用户）**
+
+- **前置条件**：Block 1 全绿，Block 0 所选合规路线的专属门禁已通过；用户确认维护窗且无 `writing`/`extracting` 任务。大陆备案方案在切换至少 24 小时前才将 TTL 降至 300；大陆外节点按已确认的客户端迁移计划执行；非标准端口或未核验的域名白名单均不得作为绕过备案的切换条件。
+- **顺序**：先停止并禁用旧 `linoi-backend.service`、确认 inactive，阻断旧写入；再做终版 `.backup`、校验和、安全传送。新机接收终版库后重复 SQLite/Alembic 三检；后端仅 loopback 启动，Nginx 维护态（仅 ACME、其余 503）。
+- 用户仅在 Builder 报告“旧机禁写、终版三检、新机维护态”后改 DNS；完成所选路线的 TLS/证书配置，验证证书、`certbot.timer`、`certbot renew --dry-run`、`--resolve` 链路和认证健康检查，再解除维护态，由用户 App 做只读与受控建/删测试书。
+- **回滚**：DNS 改动前可启旧机；DNS 已改且维护态未解除时，停新机、用户回指 DNS、等待生效后启旧机。解除维护态并可能有新写入后旧库已过期，禁止直接回切；只能在新机修复或另立数据回迁计划。
+
+**Block 3 — 加固、备份与退役观察（Builder + 用户）**
+
+- **前置条件**：Block 2 经至少一个完整写作流程稳定；旧机服务保持 disabled，观察期不得重新启动。
+- 复核 Nginx 最小路由/限流、TLS 自动续期、Fail2ban、UFW、低权 systemd 与 8787 非公网；保留旧机终版快照与记录 7 天，再由用户确认销毁。
+- 建每日 systemd timer：`flock` + SQLite `.backup`、完整性/外键/Alembic 三检和校验和，本地保留 14 天；每日同步加密异地副本、远端保留 30 天；每月隔离恢复并三检，失败告警且不删除最近可用副本。用户创建最小权限 bucket/凭证并提供控制台入口，否则本块不完成。
+- **验收**：单一写入端=宁波；HTTPS、认证健康检查、App 受控读写、三检、TLS/systemd 加固、每日两地备份及恢复演练都有可复核证据。施工后替换式更新 `hk_info.md` 与本文件，绝不把秘密或数据库内容写入 Git。
 
 ### 交接：施工惯例与环境事实（CLAUDE.md 之外新 agent 必知）
 
@@ -69,7 +152,6 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - write_registry 为进程内单例，未来多 worker 前必须换 DB 层 job 锁（v1.1.0 review P2#7，前瞻）
 - 阅读模式增强（书签、朗读、翻页动画等）
 - `CharactersViews.swift` 人物 tab 顶部横向滚动 chip 对超长人物名无截断，长名被屏幕边缘裁切（v1.4.0 块⑤发现，与已修的编辑器人物选择 chip 是不同控件）
-- 【2026-07-28 审计 P2】CLAUDE.md 铁律「未知模型一律不发额外参数」与 v1.3.1 起「非思考请求统一强制 `top_p=0.95`（含未知模型）」的实现不一致——改铁律措辞或把 top_p 收进 capability 门控，二选一
 - 【2026-07-28 审计 P2】记忆导出中嵌套动态字段值以 `json.dumps` 单行渲染，人读 TXT 观感生硬（books.py `_dynamic_value_text`）
 - 【2026-07-28 审计 P2】`LinoISegmented`（共享）与 `LinoMacSegmented`（Mac）两套视觉同构分段控件并行维护，长期漂移风险，下个大版本可合并
 
@@ -123,3 +205,7 @@ LinoI 是单人小说写作工作台：SwiftUI iOS/macOS App + FastAPI 后端。
 - 2026-07-16 v1.4.1 性能快修：v1.4.0 实测卡顿（书卡 hover/页面 tab 切换/阅读主题切换）。根因=动画加在昂贵图层：①阴影模糊半径逐帧插值（书卡 hover 与 LinoICardButtonStyle 按压）→ 改阴影瞬切/恒定 + 只动 offset/scale（GPU 变换，阴影先于变换光栅化）；②整页/tab 交叉淡化期间新旧玻璃树并存合成翻倍 → 工作台 tab（双端）改瞬时切换、书架↔工作台改 containerSwap（micro 0.14）新 token；③阅读页正文 NSTextView/段落随主题动画整章重排 → .transaction 排除正文，主题渐变只留 chrome，字号变更取消动画。双 target 构建绿，版本 1.4.1(13)，ICTW 已换装；tag/Release 待用户确认手感后补。
 - 2026-07-16 v1.4.1 发版收尾：用户实测确认流畅，tag v1.4.1 + ICTW-1.4.1.zip 已发 https://github.com/linocai/Ictw/releases/tag/v1.4.1 ；iOS 真机安装留用户。
 - 2026-07-28 独立代码审计完成（主会话亲自执行）：范围 v1.2.3 review 后全部 28 提交 + 地基复查，无 P0/P1，3 条 P2 归 Backlog（top_p 铁律措辞偏差 / 记忆导出嵌套 JSON 渲染 / 双分段控件并行）。同日写入交接文档：HK 服务器到期，宁波云迁移交接概要（组件清单/四段流程/KEK-双写-备案三风险/用户网页操作清单预览）入「当前 Plan」待立项，施工惯例与环境事实（rsync 部署、发版流程、GUI 验证范式、Bundle 共享注意）单列交接段，Backlog 全量整合。
+- 2026-07-28 接管更新（合规订正）：`top_p` 铁律已与实现同步，移出 Backlog；宁波迁移正式细化为 Block 0–3。恢复迁移时须重新核验官方要求；可靠路线为完成中国大陆节点所需 ICP/接入备案，或部署到中国大陆外节点。非标准 HTTPS 端口不能替代备案；供应商域名白名单未取得官方说明前不能视为替代路线。未满足门禁不得进行路线专属施工。
+- 2026-07-28 v1.5.0(14) 立项：用户确认 HK 现网网络已恢复、服务器 2026-08-09 到期，决定暂停宁波迁移；完整迁移 Block 0–3 改标「暂停／待恢复」并原文保留。当前 Plan 切换为双端前端优化：编辑/阅读分离、持久生成状态与失败解释、动画性能与 Reduce Motion、双端 bug/accessibility sweep、版本/截图/签名/Release 门禁。默认客户端优先、无数据库迁移/无后端发布；仅在现有 job 契约无法安全说明可复现失败时，才允许经独立门禁立项 additive 后端字段。
+- 2026-07-28 v1.5.0 复审立即修复：修复 2 个 P1（冷启动/跨设备失败未恢复；本地旧失败可能覆盖新服务端状态）与 1 个 P2（校验原因/豁免动作重启后丢失）。Backend additive 增加 `job_id/outcome_current` 并修正取消、服务重启恢复和人物关联编辑的时间戳顺序；客户端每次加载章节静默对账最新任务，v2 缓存以完整任务输入指纹失效且不保存正文/Prompt。新增客户端纯 Swift 回归驱动和后端终态时序测试；82 个后端测试、客户端测试、双端 Debug、macOS Release 验签、Alembic head 与 diff check 全绿。尚未部署、换装、tag 或发布。
+- 2026-07-28 v1.5.0 生产部署与 macOS 换装：确认无运行任务后创建全量回滚备份 `20260728-183901`，rsync 排除 `.env`/数据库/venv，原地部署 HK Backend 1.5.0；本机与公网 health、Alembic、SQLite integrity/foreign keys、实体计数及 `/job` 新字段烟测全绿。随后将签名 Release 候选原子换装到 `/Applications/ICTW.app` 并启动，版本确认为 1.5.0(14)，旧 App 备份在 `/tmp/ictw-app-backup.POaqfx`。iOS 安装由用户处理。

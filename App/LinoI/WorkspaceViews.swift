@@ -63,7 +63,7 @@ private struct LinoIWorkspaceHeader: View {
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 36, height: 36)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
             .foregroundStyle(LinoTheme.accentDeep)
@@ -137,7 +137,7 @@ struct LinoIChaptersPane: View {
                         .buttonStyle(LinoICardButtonStyle())
                     }
                 }
-                .animation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
+                .linoAnimation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
             }
         }
         .padding(.top, 8)

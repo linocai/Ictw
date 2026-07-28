@@ -370,6 +370,8 @@ struct JobErrorContext: Codable, Sendable {
 /// terminal value (`done` / `failed` / `cancelled`).
 struct WriteJobStatus: Codable, Sendable {
     var chapterId: String
+    var jobId: String?
+    var outcomeCurrent: Bool?
     var kind: String
     var phase: String
     var attempt: Int?
@@ -383,6 +385,8 @@ struct WriteJobStatus: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case chapterId = "chapter_id"
+        case jobId = "job_id"
+        case outcomeCurrent = "outcome_current"
         case kind, phase, attempt
         case errorCode = "error_code"
         case errorMessage = "error_message"
@@ -390,6 +394,514 @@ struct WriteJobStatus: Codable, Sendable {
         case violations, chapter
         case updatedCharacterIds = "updated_character_ids"
         case addedEventIds = "added_event_ids"
+    }
+}
+
+enum ChapterJobReconciliationDecision: Equatable, Sendable {
+    case none
+    case active
+    case currentTerminal
+    case obsoleteTerminal
+    case unverifiedTerminal
+}
+
+/// Chooses whether a `/job` snapshot is safe to apply after loading the
+/// authoritative Chapter. Old servers do not send `outcome_current`; their
+/// failures remain local-cache-only rather than risking replay of stale state.
+enum ChapterJobReconciler {
+    static func decide(
+        status: WriteJobStatus,
+        chapter: Chapter,
+        hasLocalInputDivergence: Bool
+    ) -> ChapterJobReconciliationDecision {
+        switch status.phase {
+        case "selecting_memory", "writing", "revising", "extracting":
+            return .active
+        case "done":
+            return hasLocalInputDivergence ? .obsoleteTerminal : .currentTerminal
+        case "failed", "cancelled":
+            if hasLocalInputDivergence || chapter.status == "finalized" {
+                return .obsoleteTerminal
+            }
+            switch status.outcomeCurrent {
+            case true: return .currentTerminal
+            case false: return .obsoleteTerminal
+            case nil: return .unverifiedTerminal
+            }
+        case "idle":
+            return .none
+        default:
+            return .none
+        }
+    }
+}
+
+/// Shared, platform-neutral lifecycle used by both chapter editors. It keeps
+/// transport/job truth out of the SwiftUI views so iOS and macOS cannot infer
+/// different meanings from the same backend snapshot.
+enum ChapterGenerationStage: Int, CaseIterable, Equatable, Sendable {
+    case memorySelection
+    case drafting
+    case validationAndRevision
+    case extraction
+    case completed
+
+    var label: String {
+        switch self {
+        case .memorySelection: return "选择记忆"
+        case .drafting: return "生成正文"
+        case .validationAndRevision: return "校验与修订"
+        case .extraction: return "提取归档"
+        case .completed: return "完成"
+        }
+    }
+}
+
+enum ChapterGenerationStepState: Equatable, Sendable {
+    case pending
+    case active
+    case completed
+    case failed
+    case cancelled
+}
+
+struct ChapterGenerationStep: Identifiable, Equatable, Sendable {
+    var id: ChapterGenerationStage { stage }
+    var stage: ChapterGenerationStage
+    var state: ChapterGenerationStepState
+}
+
+enum ChapterWritingPhase: Equatable, Sendable {
+    case idle
+    case selectingMemory
+    case writing
+    case expanding(attempt: Int)
+    case revising(attempt: Int)
+    case extracting
+    case failed(code: String?, message: String, stage: ChapterGenerationStage?)
+    case cancelled(message: String, stage: ChapterGenerationStage?)
+
+    var isActive: Bool {
+        switch self {
+        case .selectingMemory, .writing, .expanding, .revising, .extracting: return true
+        case .idle, .failed, .cancelled: return false
+        }
+    }
+
+    /// True only for write-side phases. Extraction has no cancel endpoint.
+    var isGenerating: Bool {
+        switch self {
+        case .selectingMemory, .writing, .expanding, .revising: return true
+        default: return false
+        }
+    }
+
+    var label: String? {
+        switch self {
+        case .selectingMemory: return "正在选择相关记忆"
+        case .writing: return "正在生成正文"
+        case .expanding(let attempt): return "Writer 第 \(attempt)/2 次扩写"
+        case .revising(let attempt): return "Reviser 第 \(attempt)/2 次修订"
+        case .extracting: return "Extractor 正在整理本章记忆"
+        case .failed(_, let message, _), .cancelled(let message, _): return message
+        case .idle: return nil
+        }
+    }
+
+    /// Short state text for compact headers. Terminal details belong in the
+    /// always-visible generation panel, where they can wrap without pushing
+    /// the title and character count out of place.
+    var compactLabel: String? {
+        switch self {
+        case .failed: return "生成失败"
+        case .cancelled: return "已停止"
+        default: return label
+        }
+    }
+
+    var pillStatus: String {
+        switch self {
+        case .extracting: return "extracting"
+        case .selectingMemory, .writing, .expanding, .revising: return "writing"
+        case .failed: return "failed"
+        case .idle, .cancelled: return "idle"
+        }
+    }
+
+    var isFailed: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+
+    var currentStage: ChapterGenerationStage? {
+        switch self {
+        case .selectingMemory: return .memorySelection
+        case .writing, .expanding: return .drafting
+        case .revising: return .validationAndRevision
+        case .extracting: return .extraction
+        case .failed(_, _, let stage), .cancelled(_, let stage): return stage
+        case .idle: return nil
+        }
+    }
+}
+
+enum ChapterRecoveryAction: Equatable, Sendable {
+    case retryGeneration
+    case retryExtraction
+
+    var title: String {
+        switch self {
+        case .retryGeneration: return "重新生成"
+        case .retryExtraction: return "重新提取"
+        }
+    }
+}
+
+/// Honest save states: "saved locally" is deliberately different from
+/// "synced to the server". A failed remote save can therefore reassure the
+/// user that the recoverable local copy still exists without claiming the
+/// server accepted it.
+enum ChapterSaveState: Equatable, Sendable {
+    case synced
+    case savingLocally
+    case localDraft
+    case localSaveFailed(message: String)
+    case restoredLocalDraft
+    case savingRemotely
+    case remoteSaveFailed(message: String, localDraftPreserved: Bool)
+
+    var label: String {
+        switch self {
+        case .synced: return "已与服务器同步"
+        case .savingLocally: return "正在保存到本机"
+        case .localDraft: return "已保存到本机，尚未同步"
+        case .localSaveFailed: return "本机草稿保存失败"
+        case .restoredLocalDraft: return "已恢复本机草稿，尚未同步"
+        case .savingRemotely: return "正在保存到服务器"
+        case .remoteSaveFailed(_, let localDraftPreserved):
+            return localDraftPreserved
+                ? "服务器保存失败，本机草稿仍在"
+                : "服务器与本机草稿保存均失败"
+        }
+    }
+
+    var failureMessage: String? {
+        switch self {
+        case .localSaveFailed(let message):
+            return message
+        case .remoteSaveFailed(let message, _):
+            return message
+        default:
+            return nil
+        }
+    }
+
+    var needsRetry: Bool {
+        failureMessage != nil
+    }
+}
+
+/// The single presentation snapshot consumed by both frontends. It is a pure
+/// derivation of server-backed chapter/job state plus the explicit local
+/// cache/connection state, which makes contradictory UI states testable.
+struct ChapterEditorPresentationState: Equatable, Sendable {
+    var steps: [ChapterGenerationStep]
+    var headline: String?
+    var validationReason: String?
+    var failureCode: String?
+    var recoveryAction: ChapterRecoveryAction?
+    var saveState: ChapterSaveState
+    var connectionInterrupted: Bool
+
+    static func make(
+        phase: ChapterWritingPhase,
+        chapterStatus: String?,
+        validationReason: String?,
+        saveState: ChapterSaveState,
+        connectionInterrupted: Bool
+    ) -> ChapterEditorPresentationState {
+        var states = Dictionary(
+            uniqueKeysWithValues: ChapterGenerationStage.allCases.map { ($0, ChapterGenerationStepState.pending) }
+        )
+
+        func complete(before stage: ChapterGenerationStage) {
+            for candidate in ChapterGenerationStage.allCases where candidate.rawValue < stage.rawValue {
+                states[candidate] = .completed
+            }
+        }
+
+        var failureCode: String?
+        switch phase {
+        case .selectingMemory:
+            states[.memorySelection] = .active
+        case .writing, .expanding:
+            complete(before: .drafting)
+            states[.drafting] = .active
+        case .revising:
+            complete(before: .validationAndRevision)
+            states[.validationAndRevision] = .active
+        case .extracting:
+            complete(before: .extraction)
+            states[.extraction] = .active
+        case .failed(let code, _, let stage):
+            let failedStage = stage ?? .drafting
+            complete(before: failedStage)
+            states[failedStage] = .failed
+            failureCode = code
+        case .cancelled(_, let stage):
+            let cancelledStage = stage ?? .drafting
+            complete(before: cancelledStage)
+            states[cancelledStage] = .cancelled
+        case .idle:
+            switch chapterStatus {
+            case "finalized":
+                for stage in ChapterGenerationStage.allCases {
+                    states[stage] = .completed
+                }
+            case "draft_ready":
+                states[.memorySelection] = .completed
+                states[.drafting] = .completed
+                states[.validationAndRevision] = .completed
+            case "extracting":
+                complete(before: .extraction)
+                states[.extraction] = .active
+            case "writing":
+                complete(before: .drafting)
+                states[.drafting] = .active
+            default:
+                break
+            }
+        }
+
+        let recoveryAction: ChapterRecoveryAction?
+        if case .failed(_, _, let stage) = phase {
+            let requiresUserChange: Set<String> = [
+                "unauthorized",
+                "not_configured",
+                "bad_url",
+                "bible_empty",
+                "chapter_finalized",
+                "unselected_characters_in_bible",
+                "ambiguous_character_name",
+                "llm_content_blocked",
+                "revision_failed",
+                "writer_expansion_failed",
+            ]
+            if let failureCode, requiresUserChange.contains(failureCode) {
+                recoveryAction = nil
+            } else {
+                recoveryAction = stage == .extraction ? .retryExtraction : .retryGeneration
+            }
+        } else {
+            recoveryAction = nil
+        }
+
+        return ChapterEditorPresentationState(
+            steps: ChapterGenerationStage.allCases.map {
+                ChapterGenerationStep(stage: $0, state: states[$0] ?? .pending)
+            },
+            headline: phase.label,
+            validationReason: validationReason,
+            failureCode: failureCode,
+            recoveryAction: recoveryAction,
+            saveState: saveState,
+            connectionInterrupted: connectionInterrupted
+        )
+    }
+}
+
+private struct CachedChapterTaskOutcome: Codable {
+    enum Kind: String, Codable {
+        case failed
+        case cancelled
+    }
+
+    let formatVersion: Int?
+    let kind: Kind
+    let inputFingerprint: String?
+    /// v1.5 review compatibility only. Records using the old body-only
+    /// fingerprint are deliberately ignored because they can outlive edits to
+    /// the Bible, target count, selected characters, or a cross-device success.
+    let contentFingerprint: String?
+    let message: String
+    let code: String?
+    let stageRawValue: Int?
+    let validationReason: String?
+    let pendingExemptionNames: [String]?
+    let jobID: String?
+}
+
+struct ChapterTaskOutcome: Equatable, Sendable {
+    let phase: ChapterWritingPhase
+    let validationReason: String?
+    let pendingExemptionNames: [String]
+    let jobID: String?
+}
+
+/// Keeps an unsuccessful task explanation available after a client restart.
+/// It is cleared as soon as the user changes inputs or starts a new task, and
+/// is restored only while every chapter-side task input still matches the
+/// failed attempt. No prompt/body content is stored, only a one-way fingerprint
+/// plus already-safe presentation details.
+enum ChapterTaskOutcomeStore {
+    private static let keyPrefix = "linoi.chapter-task-outcome"
+    private static let currentFormatVersion = 2
+
+    static func load(
+        chapter: Chapter,
+        defaults: UserDefaults = .standard
+    ) -> ChapterTaskOutcome? {
+        guard chapter.status != "finalized" else {
+            clear(chapterID: chapter.id, defaults: defaults)
+            return nil
+        }
+        guard let data = defaults.data(forKey: key(chapterID: chapter.id)),
+              let record = try? JSONDecoder().decode(CachedChapterTaskOutcome.self, from: data) else {
+            return nil
+        }
+        guard record.formatVersion == currentFormatVersion,
+              record.inputFingerprint == taskInputFingerprint(chapter) else {
+            clear(chapterID: chapter.id, defaults: defaults)
+            return nil
+        }
+        let stage = record.stageRawValue.flatMap(ChapterGenerationStage.init(rawValue:))
+        let phase: ChapterWritingPhase
+        switch record.kind {
+        case .failed:
+            phase = .failed(code: record.code, message: record.message, stage: stage)
+        case .cancelled:
+            phase = .cancelled(message: record.message, stage: stage)
+        }
+        return ChapterTaskOutcome(
+            phase: phase,
+            validationReason: record.validationReason,
+            pendingExemptionNames: record.pendingExemptionNames ?? [],
+            jobID: record.jobID
+        )
+    }
+
+    static func save(
+        phase: ChapterWritingPhase,
+        chapter: Chapter,
+        validationReason: String? = nil,
+        pendingExemptionNames: [String] = [],
+        jobID: String? = nil,
+        defaults: UserDefaults = .standard
+    ) {
+        let record: CachedChapterTaskOutcome
+        switch phase {
+        case .failed(let code, let message, let stage):
+            record = CachedChapterTaskOutcome(
+                formatVersion: currentFormatVersion,
+                kind: .failed,
+                inputFingerprint: taskInputFingerprint(chapter),
+                contentFingerprint: nil,
+                message: message,
+                code: code,
+                stageRawValue: stage?.rawValue,
+                validationReason: validationReason,
+                pendingExemptionNames: pendingExemptionNames,
+                jobID: jobID
+            )
+        case .cancelled(let message, let stage):
+            record = CachedChapterTaskOutcome(
+                formatVersion: currentFormatVersion,
+                kind: .cancelled,
+                inputFingerprint: taskInputFingerprint(chapter),
+                contentFingerprint: nil,
+                message: message,
+                code: nil,
+                stageRawValue: stage?.rawValue,
+                validationReason: validationReason,
+                pendingExemptionNames: pendingExemptionNames,
+                jobID: jobID
+            )
+        default:
+            return
+        }
+        guard let data = try? JSONEncoder().encode(record) else { return }
+        defaults.set(data, forKey: key(chapterID: chapter.id))
+    }
+
+    static func clear(
+        chapterID: String,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.removeObject(forKey: key(chapterID: chapterID))
+    }
+
+    static func taskInputFingerprint(_ chapter: Chapter) -> String {
+        let scalarParts = [
+            chapter.title,
+            chapter.userPrompt,
+            String(chapter.targetWordCount),
+            chapter.authorNote,
+            chapter.draftText,
+            chapter.summary,
+            chapter.headline,
+            chapter.characterLinks.map(\.characterId).sorted().joined(separator: "\u{1F}"),
+            chapter.exemptedCharacterNames.sorted().joined(separator: "\u{1F}"),
+        ]
+        let canonical = scalarParts
+            .map { "\($0.utf8.count):\($0)" }
+            .joined(separator: "\u{1E}")
+        return ReaderPositionStore.fingerprint(canonical)
+    }
+
+    private static func key(chapterID: String) -> String {
+        "\(keyPrefix).\(chapterID)"
+    }
+}
+
+private struct ReaderPositionRecord: Codable {
+    let contentFingerprint: String
+    let relativeOffset: Double
+}
+
+/// Persists a relative reading position only while the chapter body still
+/// matches the saved content version. A revised body deliberately opens at
+/// the top instead of guessing an obsolete character or array offset.
+enum ReaderPositionStore {
+    private static let keyPrefix = "linoi.reader-position"
+
+    static func load(bookID: String, chapterID: String, text: String) -> Double? {
+        guard
+            let data = UserDefaults.standard.data(forKey: key(bookID: bookID, chapterID: chapterID)),
+            let record = try? JSONDecoder().decode(ReaderPositionRecord.self, from: data),
+            record.contentFingerprint == fingerprint(text),
+            record.relativeOffset.isFinite
+        else {
+            return nil
+        }
+        return min(max(record.relativeOffset, 0), 1)
+    }
+
+    static func save(
+        bookID: String,
+        chapterID: String,
+        text: String,
+        relativeOffset: Double
+    ) {
+        guard relativeOffset.isFinite else { return }
+        let record = ReaderPositionRecord(
+            contentFingerprint: fingerprint(text),
+            relativeOffset: min(max(relativeOffset, 0), 1)
+        )
+        guard let data = try? JSONEncoder().encode(record) else { return }
+        UserDefaults.standard.set(data, forKey: key(bookID: bookID, chapterID: chapterID))
+    }
+
+    static func fingerprint(_ text: String) -> String {
+        var hash: UInt64 = 1_469_598_103_934_665_603
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+
+    private static func key(bookID: String, chapterID: String) -> String {
+        "\(keyPrefix).\(bookID).\(chapterID)"
     }
 }
 

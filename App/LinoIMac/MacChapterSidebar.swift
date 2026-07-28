@@ -47,6 +47,7 @@ struct MacChapterSidebar: View {
             .buttonStyle(.plain)
             .disabled(isCreating)
             .help("新建章节")
+            .accessibilityLabel("新建章节")
             .onHover { pointer($0 && !isCreating) }
         }
         .padding(.horizontal, 16)
@@ -69,7 +70,7 @@ struct MacChapterSidebar: View {
                         }
                     }
                 }
-                .animation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
+                .linoAnimation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
                 .padding(.horizontal, 10)
                 .padding(.top, 4)
                 .padding(.bottom, 12)
@@ -143,9 +144,13 @@ private struct MacChapterRow: View {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .stroke(selected ? LinoTheme.accent.opacity(0.32) : Color.clear, lineWidth: 0.6)
             )
-            .animation(LinoMotion.selection, value: selected)
+            .linoAnimation(LinoMotion.selection, value: selected)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(
+            "第 \(chapter.index) 章，\(chapter.title.isEmpty ? "未命名章节" : chapter.title)，\(chapter.status.linoStatusLabel)"
+        )
+        .accessibilityValue(selected ? "已选择" : "未选择")
         .onHover { pointer($0) }
     }
 }

@@ -63,12 +63,13 @@ struct LinoMacIconButton: View {
                         .stroke(style.stroke, lineWidth: LinoMacMetrics.hairlineWidth)
                 )
                 .brightness(hovered && !isDisabled ? 0.05 : 0)
-                .animation(LinoMotion.hover, value: hovered)
+                .linoAnimation(LinoMotion.hover, value: hovered)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.4 : 1)
         .help(help ?? "")
+        .accessibilityLabel(help ?? systemName)
         .onHover { inside in
             hovered = inside && !isDisabled
             pointer(hovered)
@@ -83,38 +84,12 @@ struct LinoMacSegmented<Option: Hashable>: View {
     let label: (Option) -> String
     @Binding var selection: Option
 
-    @Namespace private var namespace
-
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(options, id: \.self) { option in
-                let isSelected = option == selection
-                Button {
-                    withAnimation(LinoMotion.selection) { selection = option }
-                } label: {
-                    Text(label(option))
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(isSelected ? LinoTheme.ink : LinoTheme.muted)
-                        .padding(.horizontal, 14)
-                        .frame(height: 26)
-                        .background {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    .fill(Color.white)
-                                    .shadow(color: LinoTheme.hex(0x143052, opacity: 0.14), radius: 6, y: 2)
-                                    .matchedGeometryEffect(id: "selection", in: namespace)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .onHover { inside in pointer(inside) }
-            }
-        }
-        .padding(3)
-        .background(LinoMacMetrics.hairline, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth)
+        LinoSegmentedCore(
+            options: options,
+            label: label,
+            selection: $selection,
+            enablesPointerFeedback: true
         )
     }
 }
@@ -177,7 +152,7 @@ struct LinoMacConnectionChip: View {
         .padding(.vertical, 5)
         .background(Color.white.opacity(0.55), in: Capsule())
         .overlay(Capsule().stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth))
-        .animation(LinoMotion.content, value: state)
+        .linoAnimation(LinoMotion.content, value: state)
         .task(id: session.baseURL + "\u{0}" + session.token) {
             await probe()
         }

@@ -6,16 +6,13 @@ struct LinoIChapterEditorScreen: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var notices: NoticeBus
     @State private var confirmingDelete = false
     @State private var isDeleting = false
-    @State private var viewMode: ChapterViewMode = .editing
+    @State private var readerPresented = false
     @State private var activeChapterId: String
     @State private var activeIndex: Int
-    // 只用来给「读取章节」spinner 定色：这个 loading 态在阅读模式内翻章时也会
-    // 短暂出现（`switchChapter` 先切 `activeChapterId` 再 await 加载），若还用
-    // 默认蓝色系统色，会在 night 阅读主题下显得突兀（同 Mac `MacReaderView`
-    // 的 ProgressView 是同一类 bug）。编辑态下沿用原有 `LinoTheme.accent`。
-    @AppStorage("linoi.reader.theme") private var storedReaderTheme = LinoReadingTheme.day.rawValue
+    @State private var editorScrollPosition = ScrollPosition(edge: .top)
 
     let summary: ChapterSummary
 
@@ -25,19 +22,18 @@ struct LinoIChapterEditorScreen: View {
         _activeIndex = State(initialValue: summary.index)
     }
 
-    private var readerTheme: LinoReadingTheme {
-        LinoReadingTheme(rawValue: storedReaderTheme) ?? .day
-    }
-
     var body: some View {
         ZStack {
             LinoTheme.background.ignoresSafeArea()
             if editor.isLoading && editor.currentChapter?.id != activeChapterId {
                 ProgressView("读取章节")
                     .foregroundStyle(LinoTheme.muted)
-                    .tint(viewMode == .reading ? readerTheme.accent : LinoTheme.accent)
+                    .tint(LinoTheme.accent)
             } else if editor.currentChapter?.id == activeChapterId {
-                LinoIChapterEditor(viewMode: $viewMode, onSwitchChapter: switchChapter)
+                LinoIChapterEditor(
+                    scrollPosition: $editorScrollPosition,
+                    onOpenReader: openReader
+                )
             } else {
                 LinoIEmptyCard(title: "章节读取失败", subtitle: "返回章节列表后再试一次。", actionTitle: nil)
                     .padding(18)
@@ -45,9 +41,6 @@ struct LinoIChapterEditorScreen: View {
         }
         .navigationTitle("第 \(activeIndex) 章")
         .navigationBarTitleDisplayMode(.inline)
-        // 阅读模式自绘主题化顶栏（`LinoIReadingView.topBar`），隐藏系统 nav 栏，
-        // 避免锁浅色下 night 主题阅读页顶部仍是亮色系统条。
-        .toolbar(viewMode == .reading ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -76,10 +69,10 @@ struct LinoIChapterEditorScreen: View {
         .task(id: summary.id) {
             activeChapterId = summary.id
             activeIndex = summary.index
-            viewMode = .editing
+            readerPresented = false
             await editor.load(summary)
-            if editor.currentChapter?.id == summary.id {
-                viewMode = editor.currentChapter?.status == "finalized" ? .reading : .editing
+            if editor.currentChapter?.id == summary.id, editor.currentChapter?.status == "finalized" {
+                readerPresented = true
             }
             if let book = session.currentBook {
                 await characters.load(bookId: book.id)
@@ -89,11 +82,14 @@ struct LinoIChapterEditorScreen: View {
             guard let chapter = editor.currentChapter, chapter.id == activeChapterId else { return }
             workspace.upsert(chapter)
             if new == "finalized", old != nil, old != "finalized" {
-                viewMode = .reading
+                readerPresented = true
                 if let book = session.currentBook {
                     Task { await characters.load(bookId: book.id) }
                 }
             }
+        }
+        .fullScreenCover(isPresented: $readerPresented) {
+            readerCover
         }
     }
 
@@ -117,9 +113,37 @@ struct LinoIChapterEditorScreen: View {
         Task {
             activeChapterId = target.id
             activeIndex = target.index
+            editorScrollPosition.scrollTo(edge: .top)
             await editor.load(target)
-            if editor.currentChapter?.id == target.id {
-                viewMode = .reading
+        }
+    }
+
+    private func openReader() {
+        guard
+            let chapter = editor.currentChapter,
+            chapter.status == "finalized",
+            chapter.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
+            notices.publish("本章尚未定稿，暂时不能进入阅读。")
+            return
+        }
+        readerPresented = true
+    }
+
+    @ViewBuilder
+    private var readerCover: some View {
+        if let chapter = editor.currentChapter, chapter.id == activeChapterId, chapter.status == "finalized" {
+            LinoIReadingView(
+                chapter: chapter,
+                onExit: { readerPresented = false },
+                onSwitchChapter: switchChapter
+            )
+        } else {
+            ZStack {
+                LinoTheme.background.ignoresSafeArea()
+                ProgressView("读取章节")
+                    .foregroundStyle(LinoTheme.muted)
+                    .tint(LinoTheme.accent)
             }
         }
     }
@@ -148,8 +172,8 @@ private struct LinoIChapterEditor: View {
     @State private var showingImport = false
     @State private var draftMode: DraftMode = .preview
 
-    @Binding var viewMode: ChapterViewMode
-    let onSwitchChapter: (ChapterSummary) -> Void
+    @Binding var scrollPosition: ScrollPosition
+    let onOpenReader: () -> Void
 
     enum DraftMode: String, CaseIterable, Identifiable {
         case preview = "预览"
@@ -158,17 +182,7 @@ private struct LinoIChapterEditor: View {
     }
 
     var body: some View {
-        Group {
-            if viewMode == .reading, let chapter = editor.currentChapter {
-                LinoIReadingView(
-                    chapter: chapter,
-                    onExit: { viewMode = .editing },
-                    onSwitchChapter: onSwitchChapter
-                )
-            } else {
-                editingContent
-            }
-        }
+        editingContent
         .sheet(isPresented: $showingImport) {
             LinoIImportDraftSheet()
                 .presentationDetents([.large])
@@ -191,12 +205,13 @@ private struct LinoIChapterEditor: View {
                         .transition(.opacity.combined(with: .offset(y: 6)))
                 }
             }
-            .animation(LinoMotion.content, value: editor.restoredLocalDraft)
-            .animation(LinoMotion.content, value: editor.currentChapter.map(showExtraction) ?? false)
+            .linoAnimation(LinoMotion.content, value: editor.restoredLocalDraft)
+            .linoAnimation(LinoMotion.content, value: editor.currentChapter.map(showExtraction) ?? false)
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 34)
         }
+        .scrollPosition($scrollPosition)
     }
 
     private var header: some View {
@@ -210,7 +225,7 @@ private struct LinoIChapterEditor: View {
                     if let chapter = editor.currentChapter {
                         LinoIStatusPill(text: chapter.status.linoStatusLabel, status: chapter.status)
                     }
-                    if let phase = editor.writingPhase.label {
+                    if let phase = editor.writingPhase.compactLabel {
                         LinoIStatusPill(text: phase, status: editor.writingPhase.pillStatus)
                     }
                     Text("\(editor.draftCharCount) 字")
@@ -228,7 +243,7 @@ private struct LinoIChapterEditor: View {
             } label: {
                 Image(systemName: editor.isSaving ? "hourglass" : "square.and.arrow.down")
                     .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 38, height: 38)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
             .disabled(editor.writingPhase.isActive)
@@ -311,7 +326,7 @@ private struct LinoIChapterEditor: View {
                                 .overlay(Capsule().stroke(LinoTheme.accent.opacity(isSelected(character) ? 0 : 0.22), lineWidth: 0.6))
                         }
                         .buttonStyle(.plain)
-                        .animation(LinoMotion.selection, value: isSelected(character))
+                        .linoAnimation(LinoMotion.selection, value: isSelected(character))
                     }
                 }
             }
@@ -346,7 +361,7 @@ private struct LinoIChapterEditor: View {
                     .transition(.opacity)
                 }
             }
-            .animation(LinoMotion.content, value: draftMode)
+            .linoAnimation(LinoMotion.content, value: draftMode)
 
             actionBar
         }
@@ -391,56 +406,11 @@ private struct LinoIChapterEditor: View {
                 .disabled(editor.writingPhase.isActive)
             }
 
-            if editor.writingPhase.isActive, let label = editor.writingPhase.label {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .tint(LinoTheme.accent)
-                    Text(label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(LinoTheme.muted)
-                }
-            }
-
-            Group {
-                if case .expanding(let attempt) = editor.writingPhase {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("程序校验发现篇幅不足，Writer 正在进行第 \(attempt)/2 次有机扩写。")
-                        if let reason = editor.currentValidationReason {
-                            Text("未通过验证：\(reason)")
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(LinoTheme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity)
-                } else if case .revising(let attempt) = editor.writingPhase {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("程序校验未通过，Reviser 正在进行第 \(attempt)/2 次修订。修订不会自行增加新剧情。")
-                        if let reason = editor.currentValidationReason {
-                            Text("未通过验证：\(reason)")
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(LinoTheme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity)
-                } else if editor.writingPhase.isFailed, let reason = editor.currentValidationReason {
-                    Text("未通过验证：\(reason)")
-                        .font(.caption)
-                        .foregroundStyle(LinoTheme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .transition(.opacity)
-                } else if editor.currentChapter?.status == "finalized" {
-                    Text("已完成章节必须先“重新编辑本章”，才能重新生成。")
-                        .font(.caption)
-                        .foregroundStyle(LinoTheme.muted)
-                        .transition(.opacity)
-                }
-            }
-            .animation(LinoMotion.content, value: editor.writingPhase)
+            LinoIGenerationStatusPanel(
+                state: editor.presentationState,
+                onRetry: retryFailureAction,
+                onRetrySave: retrySaveAction
+            )
 
             if editor.writingPhase.isFailed, !editor.pendingExemptionNames.isEmpty {
                 exemptionPrompt
@@ -481,6 +451,11 @@ private struct LinoIChapterEditor: View {
     private var actionBar: some View {
         VStack(spacing: 10) {
             if editor.currentChapter?.status == "finalized" {
+                Button(action: onOpenReader) {
+                    Label("进入阅读", systemImage: "book.pages")
+                }
+                .buttonStyle(LinoIPrimaryButtonStyle())
+
                 Button {
                     Task {
                         if let chapter = await editor.reopen() {
@@ -568,7 +543,40 @@ private struct LinoIChapterEditor: View {
     }
 
     private var canAccept: Bool {
-        hasDraft && !editor.writingPhase.isActive && !editor.writingPhase.isFailed
+        guard hasDraft, !editor.writingPhase.isActive else { return false }
+        if editor.writingPhase.isFailed {
+            return editor.writingPhase.currentStage == .extraction
+        }
+        return true
+    }
+
+    private var retryFailureAction: (() -> Void)? {
+        guard let action = editor.presentationState.recoveryAction else { return nil }
+        return {
+            Task {
+                let chapter: Chapter?
+                switch action {
+                case .retryGeneration:
+                    chapter = await editor.generate()
+                case .retryExtraction:
+                    chapter = await editor.accept()
+                }
+                if let chapter {
+                    workspace.upsert(chapter)
+                }
+            }
+        }
+    }
+
+    private var retrySaveAction: (() -> Void)? {
+        guard editor.presentationState.saveState.needsRetry else { return nil }
+        return {
+            Task {
+                if let chapter = await editor.save() {
+                    workspace.upsert(chapter)
+                }
+            }
+        }
     }
 
     private func showExtraction(_ chapter: Chapter) -> Bool {

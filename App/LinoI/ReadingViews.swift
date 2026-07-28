@@ -1,12 +1,19 @@
 import SwiftUI
 
-/// Whether the chapter screen shows the distraction-free reader or the
-/// full editing surface. Finalized chapters open straight into `.reading`;
-/// the top bar's back chevron flips back to `.editing` without reopening
-/// the chapter.
-enum ChapterViewMode {
-    case editing
-    case reading
+private struct ReaderScrollMetrics: Equatable {
+    let offset: CGFloat
+    let maximumOffset: CGFloat
+
+    var relativeOffset: Double {
+        guard maximumOffset > 0 else { return 0 }
+        return Double(min(max(offset / maximumOffset, 0), 1))
+    }
+}
+
+private struct ReaderPositionContext {
+    let bookID: String
+    let chapterID: String
+    let text: String
 }
 
 enum ReaderFontScale: String, CaseIterable, Identifiable {
@@ -59,9 +66,9 @@ enum ReaderFontScale: String, CaseIterable, Identifiable {
 /// in `LinoIChapterEditorScreen`) — under the app-wide locked-light-mode
 /// constraint a system nav bar would stay bright even when the night theme
 /// is active, which is exactly the "阴阳脸" this is meant to avoid. Structure
-/// (back + title + theme swatches + font control) mirrors macOS
-/// `MacReaderView.topBar`; the font control keeps iOS's existing 3-level
-/// 小/中/大 semantics instead of porting Mac's continuous ladder.
+/// (back + title + reading-settings menu) mirrors macOS
+/// `MacReaderView.topBar`; the menu keeps iOS's existing 3-level 小/中/大
+/// semantics instead of porting Mac's continuous ladder.
 struct LinoIReadingView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var workspace: WorkspaceStore
@@ -69,7 +76,11 @@ struct LinoIReadingView: View {
     @AppStorage("linoi.reader.fontScale") private var storedFontScale = ReaderFontScale.medium.rawValue
     @AppStorage("linoi.reader.theme") private var storedTheme = LinoReadingTheme.day.rawValue
 
-    @Namespace private var fontNamespace
+    @State private var scrollPosition = ScrollPosition(edge: .top)
+    @State private var pendingRestoreOffset: Double?
+    @State private var latestMetrics = ReaderScrollMetrics(offset: 0, maximumOffset: 0)
+    @State private var positionSaveTask: Task<Void, Never>?
+    @State private var positionContext: ReaderPositionContext?
 
     let chapter: Chapter
     let onExit: () -> Void
@@ -108,12 +119,37 @@ struct LinoIReadingView: View {
                 controlBar
             }
             .id(chapter.id)
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: ReaderScrollMetrics.self) { geometry in
+                ReaderScrollMetrics(
+                    offset: geometry.contentOffset.y,
+                    maximumOffset: max(geometry.contentSize.height - geometry.containerSize.height, 0)
+                )
+            } action: { _, metrics in
+                latestMetrics = metrics
+                if let pendingRestoreOffset, metrics.maximumOffset > 0 {
+                    self.pendingRestoreOffset = nil
+                    scrollPosition.scrollTo(y: CGFloat(pendingRestoreOffset) * metrics.maximumOffset)
+                } else {
+                    schedulePositionSave(metrics)
+                }
+            }
             .transition(.opacity)
-            .animation(LinoMotion.reader, value: chapter.id)
+            .linoAnimation(LinoMotion.reader, value: chapter.id)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.background.ignoresSafeArea())
-        .animation(LinoMotion.reader, value: theme)
+        .linoAnimation(LinoMotion.reader, value: theme)
+        .onAppear {
+            preparePositionRestore()
+        }
+        .onChange(of: chapter.id) { _, _ in
+            preparePositionRestore()
+        }
+        .onDisappear {
+            positionSaveTask?.cancel()
+            savePosition(latestMetrics.relativeOffset)
+        }
     }
 
     // MARK: - Top bar（自绘，替代隐藏的系统 nav 栏；结构对齐 Mac topBar）
@@ -123,7 +159,7 @@ struct LinoIReadingView: View {
             Button(action: onExit) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 34, height: 34)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
             .foregroundStyle(theme.text)
@@ -135,16 +171,41 @@ struct LinoIReadingView: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            HStack(spacing: 6) {
-                ForEach(LinoReadingTheme.allCases) { t in
-                    themeSwatch(t)
+            Menu {
+                Section("阅读主题") {
+                    ForEach(LinoReadingTheme.allCases) { candidate in
+                        Button {
+                            storedTheme = candidate.rawValue
+                        } label: {
+                            Label(
+                                candidate.label,
+                                systemImage: candidate == theme ? "checkmark.circle.fill" : "circle"
+                            )
+                        }
+                    }
                 }
-                Rectangle()
-                    .fill(theme.hairline)
-                    .frame(width: 1, height: 20)
-                    .padding(.horizontal, 2)
-                fontScalePicker
+                Section("字号") {
+                    ForEach(ReaderFontScale.allCases) { scale in
+                        Button {
+                            storedFontScale = scale.rawValue
+                        } label: {
+                            Label(
+                                scale.label,
+                                systemImage: scale == fontScale ? "checkmark.circle.fill" : "circle"
+                            )
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "textformat.size")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 44, height: 44)
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.text)
+            .background(theme.chipBackground, in: Circle())
+            .accessibilityLabel("阅读设置")
+            .accessibilityHint("调整阅读主题和字号")
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
@@ -152,58 +213,6 @@ struct LinoIReadingView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.hairline).frame(height: 0.5)
         }
-    }
-
-    private func themeSwatch(_ t: LinoReadingTheme) -> some View {
-        let selected = t == theme
-        return Button {
-            storedTheme = t.rawValue
-        } label: {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(t.swatchFill)
-                .frame(width: 24, height: 24)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(theme.hairline, lineWidth: 0.5)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(theme.accent, lineWidth: 2)
-                        .padding(-2)
-                        .opacity(selected ? 1 : 0)
-                )
-        }
-        .buttonStyle(.plain)
-        .animation(LinoMotion.selection, value: theme)
-    }
-
-    /// 字号 pill：iOS 既有 小/中/大 三级语义不变，滑动选中底换
-    /// `matchedGeometryEffect`（对齐 Mac 分段控件的廉价滑动机制）。
-    private var fontScalePicker: some View {
-        HStack(spacing: 2) {
-            ForEach(ReaderFontScale.allCases) { scale in
-                let selected = fontScale == scale
-                Button {
-                    withAnimation(LinoMotion.reader) { storedFontScale = scale.rawValue }
-                } label: {
-                    Text(scale.label)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(selected ? theme.accent : theme.secondary)
-                        .frame(width: 26, height: 26)
-                        .background {
-                            if selected {
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(theme.background)
-                                    .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
-                                    .matchedGeometryEffect(id: "fontScale", in: fontNamespace)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(2)
-        .background(theme.chipBackground, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     // MARK: - Body content
@@ -246,14 +255,59 @@ struct LinoIReadingView: View {
             .filter { !$0.isEmpty }
     }
 
+    private func preparePositionRestore() {
+        positionSaveTask?.cancel()
+        savePosition(latestMetrics.relativeOffset)
+        latestMetrics = ReaderScrollMetrics(offset: 0, maximumOffset: 0)
+        positionContext = ReaderPositionContext(
+            bookID: chapter.bookId,
+            chapterID: chapter.id,
+            text: chapter.draftText
+        )
+        pendingRestoreOffset = ReaderPositionStore.load(
+            bookID: chapter.bookId,
+            chapterID: chapter.id,
+            text: chapter.draftText
+        )
+        scrollPosition.scrollTo(edge: .top)
+    }
+
+    private func schedulePositionSave(_ metrics: ReaderScrollMetrics) {
+        positionSaveTask?.cancel()
+        let relativeOffset = metrics.relativeOffset
+        positionSaveTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            savePosition(relativeOffset)
+        }
+    }
+
+    private func savePosition(_ relativeOffset: Double) {
+        guard let positionContext else { return }
+        ReaderPositionStore.save(
+            bookID: positionContext.bookID,
+            chapterID: positionContext.chapterID,
+            text: positionContext.text,
+            relativeOffset: relativeOffset
+        )
+    }
+
     // MARK: - Bottom control bar（翻章）
 
     private var controlBar: some View {
         HStack {
             Spacer()
             HStack(spacing: 14) {
-                navButton(target: adjacentSummary(direction: -1), systemImage: "chevron.left")
-                navButton(target: adjacentSummary(direction: 1), systemImage: "chevron.right")
+                navButton(
+                    target: adjacentSummary(direction: -1),
+                    systemImage: "chevron.left",
+                    accessibilityLabel: "上一章"
+                )
+                navButton(
+                    target: adjacentSummary(direction: 1),
+                    systemImage: "chevron.right",
+                    accessibilityLabel: "下一章"
+                )
             }
             .padding(10)
             .background(theme.barBackground, in: Capsule())
@@ -265,19 +319,25 @@ struct LinoIReadingView: View {
         .padding(.bottom, 8)
     }
 
-    private func navButton(target: ChapterSummary?, systemImage: String) -> some View {
+    private func navButton(
+        target: ChapterSummary?,
+        systemImage: String,
+        accessibilityLabel: String
+    ) -> some View {
         Button {
             guard let target else { return }
             onSwitchChapter(target)
         } label: {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .semibold))
-                .frame(width: 44, height: 34)
+                .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
         .foregroundStyle(target == nil ? theme.secondary.opacity(0.5) : theme.text)
         .background(theme.chipBackground, in: Capsule())
         .disabled(target == nil || editor.isLoading)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(target == nil ? "不可用" : "可用")
     }
 
     private func adjacentSummary(direction: Int) -> ChapterSummary? {

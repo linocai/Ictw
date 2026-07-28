@@ -175,6 +175,7 @@ def test_recover_interrupted_jobs_marks_failed(client, auth_headers):
         assert recovered.error_code == "interrupted"
         assert recovered.finished_at is not None
         assert db.get(Chapter, chapter["id"]).status == "draft"
+        assert recovered.finished_at >= db.get(Chapter, chapter["id"]).updated_at
     finally:
         db.close()
 
@@ -357,7 +358,7 @@ def test_chapter_patch_summary_and_headline(client, auth_headers):
 
 
 def test_health_reports_current_version(client, auth_headers):
-    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.3.2"
+    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.5.0"
 
 
 # --- B8 migration from the production revision --------------------------------

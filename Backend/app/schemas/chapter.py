@@ -88,6 +88,11 @@ class WriteRequest(BaseModel):
 
 class WriteJobStatus(BaseModel):
     chapter_id: str
+    # Additive identity/currentness fields used by v1.5 clients to reconcile
+    # cold-start and cross-device terminal outcomes without replaying an old
+    # failure after the chapter has since been edited or finalized.
+    job_id: str | None = None
+    outcome_current: bool | None = None
     kind: str
     phase: str
     attempt: int | None = None

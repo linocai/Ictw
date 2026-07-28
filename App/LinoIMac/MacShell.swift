@@ -28,8 +28,8 @@ struct MacShell: View {
             }
             // containerSwap（micro 时长）：整页交叉淡化期间新旧两棵玻璃树并存，
             // 时长越长掉帧窗口越大（v1.4.1 性能修复，勿改回 content 档）。
-            .animation(LinoMotion.containerSwap, value: session.token.isEmpty)
-            .animation(LinoMotion.containerSwap, value: session.currentBook?.id)
+            .linoAnimation(LinoMotion.containerSwap, value: session.token.isEmpty)
+            .linoAnimation(LinoMotion.containerSwap, value: session.currentBook?.id)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {

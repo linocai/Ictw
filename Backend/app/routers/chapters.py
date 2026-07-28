@@ -16,7 +16,7 @@ from app.llm.factory import (
     get_writer_client,
 )
 from app.models import Book, Chapter, ChapterCharacter, Character, CharacterFieldPatch, JobRun
-from app.models.entities import uuid_str
+from app.models.entities import utc_now, uuid_str
 from app.schemas.chapter import (
     ChapterCreate,
     ChapterImportRequest,
@@ -66,8 +66,13 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
 
 
 def _job_status_from_run(chapter: Chapter, run: JobRun) -> WriteJobStatus:
+    outcome_current = None
+    if run.phase in {"done", "failed", "cancelled"}:
+        outcome_current = run.finished_at is not None and run.finished_at >= chapter.updated_at
     status_out = WriteJobStatus(
         chapter_id=chapter.id,
+        job_id=run.id,
+        outcome_current=outcome_current,
         kind=run.kind,
         phase=run.phase,
         attempt=run.attempt,
@@ -95,6 +100,10 @@ def _replace_links(db: Session, chapter: Chapter, links: list) -> None:
             raise HTTPException(status_code=400, detail=f"invalid character_id {item.character_id}")
         chapter.character_links.append(ChapterCharacter(character_id=item.character_id))
         seen.add(item.character_id)
+    # Relationship-only edits do not otherwise issue an UPDATE for chapters,
+    # so explicitly advance the authoritative version used by /job
+    # outcome_current reconciliation.
+    chapter.updated_at = utc_now()
 
 
 def _apply_author_note(chapter: Chapter, author_note: str | None) -> None:
@@ -307,7 +316,7 @@ def write_chapter(
     chapter.status = "writing"
     db.commit()
     write_registry.launch(job, SessionLocal)
-    return WriteJobStatus(chapter_id=chapter.id, kind="write", phase="selecting_memory")
+    return WriteJobStatus(chapter_id=chapter.id, job_id=job_id, kind="write", phase="selecting_memory")
 
 
 @router.get("/chapters/{chapter_id}/job", response_model=WriteJobStatus)
@@ -334,6 +343,7 @@ def chapter_job(chapter_id: str, db: Session = Depends(get_db)) -> WriteJobStatu
         # treating the stale row as its outcome.
         return WriteJobStatus(
             chapter_id=chapter_id,
+            job_id=live_job.job_id or None,
             kind=live_job.kind,
             phase=live_job.phase,
         )
@@ -349,7 +359,6 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
         write_registry.cancel(job, discard=True)
         if job.thread is not None:
             job.thread.join(timeout=8)
-        record_job_phase(SessionLocal, job.job_id, "cancelled")
     db.expire_all()
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
@@ -358,6 +367,11 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
         chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
         db.commit()
         db.refresh(chapter)
+    # Record the terminal row only after the chapter has reached its restored
+    # baseline. This ordering makes outcome_current deterministic even when the
+    # worker did not finish within the bounded join above.
+    if job is not None:
+        record_job_phase(SessionLocal, job.job_id, "cancelled")
     return _chapter_read(chapter)
 
 
@@ -397,7 +411,7 @@ def accept_chapter(
     chapter.status = "extracting"
     db.commit()
     write_registry.launch(job, SessionLocal)
-    return WriteJobStatus(chapter_id=chapter.id, kind="extract", phase="extracting")
+    return WriteJobStatus(chapter_id=chapter.id, job_id=job_id, kind="extract", phase="extracting")
 
 
 @router.post("/chapters/{chapter_id}/reopen", response_model=ChapterRead)
