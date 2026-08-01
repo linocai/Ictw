@@ -7,9 +7,9 @@
 - SwiftUI iOS（`LinoI`）/macOS（`LinoIMac`）客户端，FastAPI + SQLAlchemy + Alembic + SQLite 后端；产品历史标识 `LinoI` 与 Bundle/Keychain/草稿目录兼容标识不改。
 - `v1.5.0(14)` 于 2026-07-28 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 当前工作树有用户未提交的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 改动；v1.6 施工不得覆盖、回滚或纳入无关提交。
-- `v1.6.3(18)` 已完成 Backend 部署、Alembic 摘要合并迁移与 macOS 正式 App 换装；tag 与 GitHub Release 正在收尾，iOS 不在本次范围。
+- `v1.6.3(18)` 已完成 Backend 部署、Alembic 摘要合并迁移、macOS 正式 App 换装、tag 与 GitHub Release；iOS 未打包或安装。
 
-## 当前版本：v1.6.3(18) 章节摘要合并快修（发布执行中）
+## 当前版本：v1.6.3(18) 章节摘要合并快修（已发布，iOS 未发包）
 
 ### 版本目标
 
@@ -23,7 +23,7 @@
 4. Selector 机械扩大召回后低温压缩为带来源的“本章记忆简报”；上一章尾段独立承担开场承接。无来源或无效来源的记忆不进入 Writer，实际 Writer 上下文可查看。
 5. Writer 一次生成整章，不分场景、不扩写旧稿。只要求去空白字符 `>=4000` 且正常结束；无产品字数上限。首稿不足/截断仅可从同一输入完整重写一次，第二次失败即停止；人物白名单等既有可程序验证约束仍保留。
 6. Checker 只对 Bible 的遗漏、矛盾和新增剧情举证，结论为通过/存疑/明确越界；不修改正文、不评价文风。Writer 新稿只有 Checker 明确通过后才提升为当前正文；存疑、越界或检查不可用的稿件仅在后端留档，前端显示原因和必要证据但不渲染全文。
-7. Extractor 只从已接受正文提取长摘要、状态变化、未决事项和带来源原子记忆；既有人物白名单和字段回滚约束不变。
+7. Extractor 只从已接受正文提取唯一章节摘要、状态变化、未决事项和带来源原子记忆；既有人物白名单和字段回滚约束不变。
 8. 所有候选稿在后端保留且互不覆盖，但双端不拉取、不展示、不切换候选全文；当前正文是唯一前端正文。四个现役 Agent 的默认人格词重做，双端可编辑、可恢复默认。人格词与始终生效的不可编辑程序协议分离。
 
 ### 非范围与兼容
@@ -74,6 +74,8 @@
 
 **2026-08-01 v1.6.3 生产部署与 macOS 换装完成**：迁移前确认 59 章中 58 章仅有旧梗概、1 章已有新摘要；停服全量备份位于 `/opt/linoi/backups/20260801-160612`。Alembic 升级至唯一 head `20260801_0008`，旧 `summary` 列已删除且 59 章 `long_summary` 均非空；数据库 integrity／foreign keys、旧 App `summary` wire 别名、零活动任务和实体数量 `3 books / 59 chapters / 27 characters / 214 chapter links / 215 character events / 4 personas / 4 bindings` 全部复核通过。内外网健康检查均为 `1.6.3`，服务 active、`NRestarts=0`、错误标记为 0。本机正式 App 已换装、验签并运行 `1.6.3(18)`，旧版备份位于 `/tmp/ictw-app-backup-v163.HdZKmc`；发布包 `ICTW-1.6.3.zip` 为 3,117,944 B，SHA-256 `12c4bbcae75b580bf29fe55fa5387c54b80cee2d8322430be8aebe8f8886fc17`。iOS 未打包或安装；下一步只剩 tag、推送和 GitHub Release。
 
+**2026-08-01 v1.6.3 发布完成**：实现提交 `0b62f13`、生产落账提交 `c9b3ebf`；annotated tag `v1.6.3` 指向 `c9b3ebf` 并已推送。GitHub Release `ICTW / LinoI v1.6.3` 已发布，资产 `ICTW-1.6.3.zip` 为 3,117,944 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.3>。iOS 未打包或安装，由用户自行处理。
+
 ## 验收基线
 
 - 迁移前备份生产库；迁移后 `integrity_check`、`foreign_key_check`、`alembic heads` 全通过。任何生产 schema 改动只走 `alembic upgrade head`。
@@ -97,4 +99,4 @@
 - `v1.6.0(15)`：已发布，详细执行记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.1(16)`：已发布，iOS 未发包；补丁记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.2(17)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.3(18)`：摘要合并快修，Backend 与 macOS 已部署，Release 收尾中。
+- `v1.6.3(18)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。

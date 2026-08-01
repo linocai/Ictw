@@ -49,7 +49,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
-- `v1.6.3(18)` 已于 2026-08-01 完成 Backend 部署、Alembic `20260801_0008` 摘要迁移与 macOS 正式 App 换装；tag 与 GitHub Release 正在收尾，iOS 未打包或安装。
+- `v1.6.3(18)` 已于 2026-08-01 完成 Backend 部署、Alembic `20260801_0008` 摘要迁移、macOS 正式 App 换装、tag 与 GitHub Release；iOS 未打包或安装。
 - `v1.6.2(17)` 已于 2026-08-01 完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；按用户要求未打包或安装 iOS。
 - `v1.6.1(16)` 已于 2026-08-01 完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；按用户要求未打包或安装 iOS。
 - `v1.6.0(15)` 已于 2026-08-01 完成香港现网 Backend 部署与 Alembic `20260801_0007` 迁移、macOS 正式 App 换装、tag 与 GitHub Release；iOS 由用户处理。

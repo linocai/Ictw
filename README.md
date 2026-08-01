@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 [`1.6.2(17)`](https://github.com/linocai/Ictw/releases/tag/v1.6.2)；Backend、macOS App、tag 与 GitHub Release 已发布，按发布范围未打包或安装 iOS。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 [`1.6.3(18)`](https://github.com/linocai/Ictw/releases/tag/v1.6.3)；Backend、macOS App、tag 与 GitHub Release 已发布，按发布范围未打包或安装 iOS。写作流程为：
 
 ```text
 Memory Selector → Writer → Checker → 用户接受 → Extractor
@@ -26,7 +26,7 @@ Memory Selector → Writer → Checker → 用户接受 → Extractor
 - Writer 使用人物白名单，历史记忆不会自动授予人物本章出场权限；短名校验对单字名走左边界启发式（“森林”不再误命中“林”），并支持章级豁免。
 - Writer 每次从同一份 Bible 与记忆上下文完整生成整章，不扩写旧稿；所有候选只在后端完整留档，双端不拉取或渲染候选全文。
 - Checker 只举证 Bible 遗漏、矛盾和剧情越界，不修改正文或评价文风；Writer 新稿只有明确通过后才进入正文区，存疑、越界或检查不可用的稿件保持后台留档。用户手动编辑当前正文后仍可复查，并对当前可见正文明确覆盖接受。
-- Extractor 只从用户接受的正文提取长摘要、状态变化、未决事项、原子记忆和已选人物更新，事务化提交并为后续记忆提供来源。
+- Extractor 只从用户接受的正文提取唯一章节摘要、状态变化、未决事项、原子记忆和已选人物更新，事务化提交并为后续记忆提供来源。
 - 每次 LLM 调用写入 `llm_call_audits`（role/model/耗时/usage/finish_reason/error_code），绝不记录 API Key、prompt 或正文。
 - 四个现役 Agent 可独立绑定模型、可编辑人格、思考开关与思考强度；不可编辑程序协议始终生效。
 - 支持 DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash 的显式推理能力。
