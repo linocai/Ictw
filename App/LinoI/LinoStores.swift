@@ -344,7 +344,7 @@ final class ChapterEditorStore: ObservableObject {
         ChapterEditorPresentationState.make(
             phase: writingPhase,
             chapterStatus: currentChapter?.status,
-            checkerVerdict: checkerResult?.displayVerdict,
+            checkerVerdict: checkerAppliesToVisibleDraft ? checkerResult?.displayVerdict : nil,
             validationReason: currentValidationReason,
             saveState: saveState,
             connectionInterrupted: pollingConnectionInterrupted
@@ -514,15 +514,22 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
-    func rerunChecker() async -> DraftCandidate? {
+    func rerunChecker() async -> CheckerResult? {
         guard !writingPhase.isActive, let chapter = currentChapter else { return nil }
+        let startingRevision = localEditRevision
         checkerRefreshing = true
         defer { checkerRefreshing = false }
         do {
-            let candidate = try await session.api.rerunChecker(chapterId: chapter.id)
-            checkerResult = candidate.checkerResult
-            checkerAppliesToVisibleDraft = true
-            return candidate
+            let response = try await session.api.rerunChecker(chapterId: chapter.id)
+            guard currentChapter?.id == chapter.id else { return nil }
+            guard ChapterRefreshReconciler.shouldReplaceLocal(
+                startingRevision: startingRevision,
+                currentRevision: localEditRevision,
+                hasLocalInputDivergence: hasLocalInputDivergence
+            ) else { return nil }
+            checkerResult = response.checkerResult
+            checkerAppliesToVisibleDraft = response.checkerResult != nil
+            return response.checkerResult
         } catch {
             session.notices.publish(error)
             return nil
@@ -773,7 +780,6 @@ final class ChapterEditorStore: ObservableObject {
         guard currentChapter?.id == chapterId else { return }
         pollingConnectionInterrupted = false
         if let context = status.memoryContext { memoryContext = context }
-        if let result = status.checkerResult ?? status.draftCandidate?.checkerResult { checkerResult = result }
         switch status.phase {
         case "selecting_memory":
             checkerAppliesToVisibleDraft = false
@@ -807,7 +813,10 @@ final class ChapterEditorStore: ObservableObject {
             setCurrentChapterStatus("extracting", chapterId: chapterId)
         case "done":
             memoryContext = status.memoryContext ?? memoryContext
-            checkerResult = status.checkerResult ?? status.draftCandidate?.checkerResult ?? checkerResult
+            if status.kind == "write" {
+                checkerResult = status.visibleCheckerResult ?? status.checkerResult
+                checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
+            }
             if let chapter = status.chapter {
                 currentChapter = chapter
                 cache.saveClean(chapter)
@@ -818,9 +827,6 @@ final class ChapterEditorStore: ObservableObject {
                 }
             }
             ChapterTaskOutcomeStore.clear(chapterID: chapterId)
-            if status.kind == "write" {
-                checkerAppliesToVisibleDraft = checkerResult?.isPassed == true
-            }
             writingPhase = .idle
             pendingExemptionNames = []
             currentValidationReason = nil
@@ -834,6 +840,10 @@ final class ChapterEditorStore: ObservableObject {
             )
             currentValidationReason = nil
             pendingExemptionNames = []
+            if status.kind == "write" {
+                checkerResult = status.visibleCheckerResult
+                checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
+            }
             if let chapter = currentChapter {
                 ChapterTaskOutcomeStore.save(
                     phase: writingPhase,
@@ -856,10 +866,8 @@ final class ChapterEditorStore: ObservableObject {
     ) {
         let presented = LinoErrorPresenter.present(jobFailure: status)
         if status.kind == "write" {
-            if status.checkerResult == nil && status.draftCandidate?.checkerResult == nil {
-                checkerResult = nil
-            }
-            checkerAppliesToVisibleDraft = false
+            checkerResult = status.visibleCheckerResult
+            checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
         }
         writingPhase = .failed(
             code: status.errorCode,

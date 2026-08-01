@@ -409,9 +409,8 @@ struct MacChapterEditor: View {
             Text("这次失败稿只在后端留档，没有进入正文区。请调整输入后重新生成。")
                 .font(.system(size: 11))
                 .foregroundStyle(LinoTheme.warning)
-        } else {
-            HStack { Button(editor.checkerRefreshing ? "检查中" : "重新检查") { Task { _ = await editor.rerunChecker() } }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.checkerRefreshing || !hasDraft); Button("编辑后检查") { draftMode = .edit }.buttonStyle(LinoITintButtonStyle(compact: true)) }
         }
+        HStack { Button(editor.checkerRefreshing ? "检查中" : "重新检查") { Task { _ = await editor.rerunChecker() } }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.checkerRefreshing || !VisibleDraftActionPolicy.canCheck(hasDraft: hasDraft, phase: editor.writingPhase)); Button("编辑后检查") { draftMode = .edit }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.writingPhase.isActive) }
     }
 
     private func labeledText(_ title: String, _ value: String) -> some View { VStack(alignment: .leading, spacing: 2) { Text(title).font(.system(size: 10, weight: .semibold)).foregroundStyle(LinoTheme.muted); Text(value).font(.system(size: 11)).foregroundStyle(LinoTheme.body).fixedSize(horizontal: false, vertical: true) } }
@@ -513,11 +512,12 @@ struct MacChapterEditor: View {
         editor.checkerAppliesToVisibleDraft && editor.checkerResult?.isPassed == true
     }
     private var canAccept: Bool {
-        guard hasDraft, !editor.writingPhase.isActive else { return false }
-        if editor.writingPhase.isFailed {
-            return editor.writingPhase.currentStage == .extraction
-        }
-        return checkerAllowsAcceptance
+        VisibleDraftActionPolicy.canAccept(
+            hasDraft: hasDraft,
+            phase: editor.writingPhase,
+            checkerApplies: editor.checkerAppliesToVisibleDraft,
+            checkerPassed: editor.checkerResult?.isPassed == true
+        )
     }
 
     private var retryFailureAction: (() -> Void)? {

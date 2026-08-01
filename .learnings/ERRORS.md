@@ -672,3 +672,30 @@ Inspect `pragma_table_info` before writing ad-hoc production SQL, or reuse a ver
 ### Resolution
 - **Resolved**: 2026-08-01T13:10:00+08:00
 - **Notes**: Confirmed the live column is `agent_role`, reran the role and remaining service checks, and observed no production error markers.
+## [ERR-20260801-016] New cancellation test captured assertions from its neighbor
+
+**Logged**: 2026-08-01T13:35:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The first v1.6.2 targeted test run failed because two assertions from the existing cancellation test were left below the newly inserted test function.
+
+### Error
+`NameError: name 'started' is not defined`
+
+### Context
+- The new cancel-during-Checker behavior itself passed through all of its assertions.
+- Only the test file's function boundary was wrong; no application failure was involved.
+
+### Suggested Fix
+When inserting a test between existing functions, inspect the complete neighboring function and keep all of its assertions above the next `def`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `Backend/tests/test_api.py`
+
+### Resolution
+- **Resolved**: 2026-08-01T13:35:00+08:00
+- **Notes**: Restored the original assertions to `test_cancelled_job_remains_current_after_chapter_restore` and reran the targeted suites.

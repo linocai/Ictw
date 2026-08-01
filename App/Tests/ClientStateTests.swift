@@ -192,6 +192,7 @@ private func testV16ContextAndCheckerDecode() throws {
             "conflicts": [["text": "历史记录与 Bible 可能不同", "source_ids": ["chapter:1:summary"]]],
         ],
         "checker_result": ["verdict": "suspect", "issues": [["kind": "new_plot", "draft_evidence": "正文片段", "bible_evidence": "Bible 片段", "reason": "会影响后续事实"]], "draft_fingerprint": "fingerprint"],
+        "visible_checker_result": ["verdict": "passed", "issues": [], "draft_fingerprint": "visible-fingerprint"],
     ]
     let data = try JSONSerialization.data(withJSONObject: object)
     let status = try JSONDecoder().decode(WriteJobStatus.self, from: data)
@@ -199,6 +200,7 @@ private func testV16ContextAndCheckerDecode() throws {
     try expect(status.memoryContext?.previousTail == "上一章结尾", "previous ending must stay separate")
     try expect(status.memoryContext?.sources.first?.excerpt == "原始依据", "source excerpts must decode")
     try expect(status.checkerResult?.displayVerdict == "suspect", "checker verdict must decode")
+    try expect(status.visibleCheckerResult?.isPassed == true, "visible draft Checker result must decode separately")
     try expect(status.checkerResult?.issues?.first?.bibleEvidence == "Bible 片段", "checker evidence must decode")
     try expect(ChapterWritingPhase.legacyRevising.label == "旧版任务记录", "legacy phase must not expose Reviser")
 }
@@ -257,6 +259,36 @@ private func testLateRefreshCannotOverwriteLocalCharacterEdit() throws {
     )
 }
 
+private func testFailedRegenerationKeepsVisibleDraftActions() throws {
+    let failed = ChapterWritingPhase.failed(
+        code: "checker_rejected",
+        message: "新候选未通过",
+        stage: .bibleChecking
+    )
+    try expect(
+        VisibleDraftActionPolicy.canCheck(hasDraft: true, phase: failed),
+        "a preserved visible baseline must remain eligible for Checker after regeneration fails"
+    )
+    try expect(
+        VisibleDraftActionPolicy.canAccept(
+            hasDraft: true,
+            phase: failed,
+            checkerApplies: true,
+            checkerPassed: true
+        ),
+        "a preserved baseline with its own current pass must remain acceptable"
+    )
+    try expect(
+        !VisibleDraftActionPolicy.canAccept(
+            hasDraft: true,
+            phase: failed,
+            checkerApplies: false,
+            checkerPassed: false
+        ),
+        "a preserved baseline without a current pass must require recheck"
+    )
+}
+
 @main
 private struct ClientStateTestRunner {
     static func main() throws {
@@ -269,6 +301,7 @@ private struct ClientStateTestRunner {
         try testV16ContextAndCheckerDecode()
         try testDraftReadyDoesNotPretendCheckerPassed()
         try testLateRefreshCannotOverwriteLocalCharacterEdit()
+        try testFailedRegenerationKeepsVisibleDraftActions()
         print("Client state tests passed")
     }
 }

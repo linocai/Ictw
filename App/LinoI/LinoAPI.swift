@@ -78,7 +78,7 @@ struct APIClient {
         try await request("/chapters/\(chapterId)/accept", method: "POST", body: CheckerAcceptPayload(override_checker: overrideChecker))
     }
 
-    func rerunChecker(chapterId: String) async throws -> DraftCandidate {
+    func rerunChecker(chapterId: String) async throws -> CheckerRunResult {
         try await request("/chapters/\(chapterId)/check", method: "POST")
     }
 

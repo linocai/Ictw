@@ -22,7 +22,8 @@
 - 任何部署或迁移前先备份生产 `linoi.db`，随后验证 SQLite integrity、foreign keys 和 Alembic head。
 - v1.6 字数按去空白字符数计算，正文只要求不少于 4000 字且正常结束，不设产品上限；首次长度／截断失败最多从同一输入完整重写一次，常量在 `Backend/app/services/context.py`。
 - 人物选择是本章允许出现人物集合的上限；历史记忆与 Extractor 输出不会自动授权未选人物。
-- Writer 候选仅在后端留档；只有确定性校验和 Checker 均通过的候选才能提升为当前正文。双端不得拉取或渲染候选全文，也不得用旧正文的 Checker 结果表示新一轮生成已通过。
+- Writer 候选仅在后端留档；公开 API 不提供候选列表、选择或真实候选正文。只有确定性校验和 Checker 均通过、且任务仍持有本章所有权时才能提升当前正文；提升与 JobRun 终态必须同一事务提交。
+- 双端不得拉取或渲染候选全文，也不得用旧正文的 Checker 结果表示新一轮生成已通过；失败重生成保留旧正文时，旧正文仍可按它自己的 Checker 状态接受或重新检查。
 - 能程序校验的约束必须程序复检，不能依赖模型自报“已修好”。
 - `thinking`/`effort` 是否发送由 `model_capabilities.py` 决定；实际非思考请求统一发送 `top_p=0.95`（包括未知模型），思考请求不发送 `top_p`。
 - 上游错误必须保留 `blockReason`/`finishReason` 的真实分类；不得把内容过滤伪装成普通失败，日志不得泄露 API Key、Prompt 或正文。
@@ -48,6 +49,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
+- 用户已授权发布 `v1.6.2(17)`：允许 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；沿用上一版边界，在 iOS 发包／安装前停止。
 - `v1.6.1(16)` 已于 2026-08-01 完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；按用户要求未打包或安装 iOS。
 - `v1.6.0(15)` 已于 2026-08-01 完成香港现网 Backend 部署与 Alembic `20260801_0007` 迁移、macOS 正式 App 换装、tag 与 GitHub Release；iOS 由用户处理。
 - `v1.5.0(14)` 已于 2026-07-28 完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。

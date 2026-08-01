@@ -415,7 +415,7 @@ struct WriteJobStatus: Decodable, Sendable {
     var addedEventIds: [String]?
     var memoryContext: MemoryContext? = nil
     var checkerResult: CheckerResult? = nil
-    var draftCandidate: DraftCandidate? = nil
+    var visibleCheckerResult: CheckerResult? = nil
 
     enum CodingKeys: String, CodingKey {
         case chapterId = "chapter_id"
@@ -430,7 +430,7 @@ struct WriteJobStatus: Decodable, Sendable {
         case addedEventIds = "added_event_ids"
         case memoryContext = "memory_context"
         case checkerResult = "checker_result"
-        case draftCandidate = "draft_candidate"
+        case visibleCheckerResult = "visible_checker_result"
     }
 }
 
@@ -501,22 +501,9 @@ struct CheckerResult: Decodable, Hashable, Sendable {
     var isPassed: Bool { displayVerdict == "passed" }
 }
 
-struct DraftCandidate: Decodable, Hashable, Sendable, Identifiable {
-    var id: String
-    var chapterId: String
-    var jobId: String?
-    var attempt: Int
-    var draftText: String
-    var nonWhitespaceCount: Int
-    var finishReason: String?
-    var deterministicViolations: [Violation]?
+struct CheckerRunResult: Decodable, Sendable {
     var checkerResult: CheckerResult?
-    var bibleSHA256: String?
-    var draftFingerprint: String?
-    var isCurrent: Bool
-    var createdAt: String
-    var displaySource: String { finishReason == "manual_edit" ? "手动编辑" : "第 \(attempt) 次" }
-    enum CodingKeys: String, CodingKey { case id, attempt; case chapterId = "chapter_id"; case jobId = "job_id"; case draftText = "draft_text"; case nonWhitespaceCount = "non_whitespace_count"; case finishReason = "finish_reason"; case deterministicViolations = "deterministic_violations"; case checkerResult = "checker_result"; case bibleSHA256 = "bible_sha256"; case draftFingerprint = "draft_fingerprint"; case isCurrent = "is_current"; case createdAt = "created_at" }
+    enum CodingKeys: String, CodingKey { case checkerResult = "checker_result" }
 }
 
 enum ChapterJobReconciliationDecision: Equatable, Sendable {
@@ -860,6 +847,25 @@ enum ChapterRefreshReconciler {
         hasLocalInputDivergence: Bool
     ) -> Bool {
         startingRevision == currentRevision && !hasLocalInputDivergence
+    }
+}
+
+enum VisibleDraftActionPolicy {
+    static func canAccept(
+        hasDraft: Bool,
+        phase: ChapterWritingPhase,
+        checkerApplies: Bool,
+        checkerPassed: Bool
+    ) -> Bool {
+        guard hasDraft, !phase.isActive else { return false }
+        if phase.isFailed, phase.currentStage == .extraction {
+            return true
+        }
+        return checkerApplies && checkerPassed
+    }
+
+    static func canCheck(hasDraft: Bool, phase: ChapterWritingPhase) -> Bool {
+        hasDraft && !phase.isActive
     }
 }
 

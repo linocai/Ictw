@@ -102,12 +102,14 @@ class CheckerAcceptRequest(BaseModel):
     override_checker: bool = False
 
 
-class DraftCandidateRead(ORMModel):
+class CheckerRunRead(ORMModel):
     id: str
     chapter_id: str
     job_id: str | None = None
     attempt: int
-    draft_text: str
+    # Empty compatibility placeholder for v1.6.0/1.6.1 clients whose decoder
+    # still requires the key. The actual candidate text never leaves Backend.
+    draft_text: str = ""
     non_whitespace_count: int
     finish_reason: str | None = None
     deterministic_violations: list[dict] | None = None
@@ -116,10 +118,6 @@ class DraftCandidateRead(ORMModel):
     draft_fingerprint: str | None = None
     is_current: bool
     created_at: datetime
-
-
-class CandidateSelectionRequest(BaseModel):
-    candidate_id: str
 
 
 class WriteJobStatus(BaseModel):
@@ -142,4 +140,6 @@ class WriteJobStatus(BaseModel):
     added_event_ids: list[str] | None = None
     memory_context: dict | None = None
     checker_result: dict | None = None
-    draft_candidate: DraftCandidateRead | None = None
+    # The Checker result that belongs to the currently visible chapter text.
+    # Rejected candidate text and metadata remain backend-only.
+    visible_checker_result: dict | None = None

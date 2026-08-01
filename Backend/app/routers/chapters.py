@@ -25,9 +25,8 @@ from app.schemas.chapter import (
     ChapterPatch,
     ChapterRead,
     ChapterSummary,
-    CandidateSelectionRequest,
     CheckerAcceptRequest,
-    DraftCandidateRead,
+    CheckerRunRead,
     WriteJobStatus,
     WriteRequest,
 )
@@ -76,7 +75,11 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
     )
 
 
-def _job_status_from_run(chapter: Chapter, run: JobRun, candidate: ChapterDraftCandidate | None = None) -> WriteJobStatus:
+def _job_status_from_run(
+    chapter: Chapter,
+    run: JobRun,
+    visible_checker_result: dict | None = None,
+) -> WriteJobStatus:
     outcome_current = None
     if run.phase in {"done", "failed", "cancelled"}:
         outcome_current = run.finished_at is not None and run.finished_at >= chapter.updated_at
@@ -93,9 +96,8 @@ def _job_status_from_run(chapter: Chapter, run: JobRun, candidate: ChapterDraftC
         violations=run.violations,
         memory_context=run.memory_context,
         checker_result=run.checker_result,
+        visible_checker_result=visible_checker_result,
     )
-    if candidate is not None:
-        status_out.draft_candidate = DraftCandidateRead.model_validate(candidate)
     if run.phase == "done":
         status_out.chapter = _chapter_read(chapter)
         status_out.updated_character_ids = run.updated_character_ids
@@ -340,10 +342,8 @@ def write_chapter(
 
 @router.get("/chapters/{chapter_id}/job", response_model=WriteJobStatus)
 def chapter_job(chapter_id: str, db: Session = Depends(get_db)) -> WriteJobStatus:
-    # Read the run BEFORE the chapter. pysqlite does not hold a snapshot across
-    # SELECTs, and the worker commits the finalized/draft_ready chapter before it
-    # commits the terminal job phase. Observing a terminal run therefore
-    # guarantees the subsequent chapter read sees the already-committed result.
+    # Read the run before the chapter so a terminal row and its chapter snapshot
+    # are observed in the same order used by the worker's atomic terminal commit.
     run = db.scalars(
         select(JobRun)
         .where(JobRun.chapter_id == chapter_id)
@@ -368,12 +368,7 @@ def chapter_job(chapter_id: str, db: Session = Depends(get_db)) -> WriteJobStatu
         )
     if run is None:
         return WriteJobStatus(chapter_id=chapter_id, kind="write", phase="idle")
-    candidate = db.scalars(
-        select(ChapterDraftCandidate)
-        .where(ChapterDraftCandidate.chapter_id == chapter_id, ChapterDraftCandidate.job_id == run.id)
-        .order_by(ChapterDraftCandidate.created_at.desc(), ChapterDraftCandidate.id.desc())
-    ).first()
-    return _job_status_from_run(chapter, run, candidate)
+    return _job_status_from_run(chapter, run, _visible_checker_result(db, chapter))
 
 
 @router.post("/chapters/{chapter_id}/write/cancel", response_model=ChapterRead)
@@ -411,6 +406,21 @@ def _current_candidate(db: Session, chapter: Chapter) -> ChapterDraftCandidate |
     ).first()
 
 
+def _visible_checker_result(db: Session, chapter: Chapter) -> dict | None:
+    candidate = _current_candidate(db, chapter)
+    if candidate is None or candidate.draft_text != chapter.draft_text:
+        return None
+    fingerprint = _candidate_fingerprint(chapter, candidate)
+    result = candidate.checker_result or {}
+    if (
+        candidate.bible_sha256 != hashlib.sha256(chapter.user_prompt.encode()).hexdigest()
+        or candidate.draft_fingerprint != fingerprint
+        or result.get("draft_fingerprint") != fingerprint
+    ):
+        return None
+    return result
+
+
 def _next_candidate_attempt(db: Session, chapter_id: str) -> int:
     current_max = db.scalar(
         select(func.max(ChapterDraftCandidate.attempt)).where(ChapterDraftCandidate.chapter_id == chapter_id)
@@ -418,33 +428,8 @@ def _next_candidate_attempt(db: Session, chapter_id: str) -> int:
     return int(current_max or 0) + 1
 
 
-@router.get("/chapters/{chapter_id}/candidates", response_model=list[DraftCandidateRead])
-def list_draft_candidates(chapter_id: str, db: Session = Depends(get_db)) -> list[ChapterDraftCandidate]:
-    if db.get(Chapter, chapter_id) is None:
-        raise HTTPException(status_code=404, detail="chapter not found")
-    return list(db.scalars(
-        select(ChapterDraftCandidate).where(ChapterDraftCandidate.chapter_id == chapter_id)
-        .order_by(ChapterDraftCandidate.created_at, ChapterDraftCandidate.id)
-    ).all())
-
-
-@router.post("/chapters/{chapter_id}/candidates/select", response_model=ChapterRead)
-def select_draft_candidate(chapter_id: str, payload: CandidateSelectionRequest, db: Session = Depends(get_db)) -> ChapterRead:
-    chapter = db.get(Chapter, chapter_id)
-    candidate = db.get(ChapterDraftCandidate, payload.candidate_id)
-    if chapter is None:
-        raise HTTPException(status_code=404, detail="chapter not found")
-    if candidate is None or candidate.chapter_id != chapter.id:
-        raise HTTPException(status_code=404, detail="draft candidate not found")
-    db.execute(update(ChapterDraftCandidate).where(ChapterDraftCandidate.chapter_id == chapter.id).values(is_current=False))
-    candidate.is_current = True
-    chapter.draft_text, chapter.status = candidate.draft_text, "draft_ready"
-    db.commit(); db.refresh(chapter)
-    return _chapter_read(chapter)
-
-
-@router.post("/chapters/{chapter_id}/check", response_model=DraftCandidateRead)
-def rerun_checker(chapter_id: str, db: Session = Depends(get_db), checker_client=Depends(get_checker_client)) -> ChapterDraftCandidate:
+@router.post("/chapters/{chapter_id}/check", response_model=CheckerRunRead)
+def rerun_checker(chapter_id: str, db: Session = Depends(get_db), checker_client=Depends(get_checker_client)) -> CheckerRunRead:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
@@ -493,7 +478,7 @@ def rerun_checker(chapter_id: str, db: Session = Depends(get_db), checker_client
     candidate.bible_sha256 = hashlib.sha256(chapter.user_prompt.encode()).hexdigest()
     candidate.draft_fingerprint = fingerprint
     db.commit(); db.refresh(candidate)
-    return candidate
+    return CheckerRunRead.model_validate(candidate).model_copy(update={"draft_text": ""})
 
 
 @router.post("/chapters/{chapter_id}/accept", response_model=WriteJobStatus)

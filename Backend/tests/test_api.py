@@ -1,10 +1,39 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 
+import app.db as db_module
 from app.llm.base import LLMError
 from app.llm.factory import get_checker_client, get_extractor_client, get_writer_client
+from app.models import ChapterDraftCandidate
 from app.services.write_jobs import WriteJob, write_registry
+
+
+def stored_candidates(chapter_id: str) -> list[dict]:
+    """Inspect backend-only candidate audit records without a public API."""
+    db = db_module.SessionLocal()
+    try:
+        rows = db.scalars(
+            select(ChapterDraftCandidate)
+            .where(ChapterDraftCandidate.chapter_id == chapter_id)
+            .order_by(ChapterDraftCandidate.created_at, ChapterDraftCandidate.id)
+        ).all()
+        return [
+            {
+                "id": row.id,
+                "attempt": row.attempt,
+                "draft_text": row.draft_text,
+                "deterministic_violations": row.deterministic_violations,
+                "checker_result": row.checker_result,
+                "bible_sha256": row.bible_sha256,
+                "draft_fingerprint": row.draft_fingerprint,
+                "is_current": row.is_current,
+            }
+            for row in rows
+        ]
+    finally:
+        db.close()
 
 
 class TextLLM:
@@ -219,7 +248,7 @@ def test_short_draft_rewrites_once_from_identical_input_and_preserves_candidates
     status = wait_for_terminal(client, chapter["id"], auth_headers)
     assert status["phase"] == "done" and writer.calls == 2
     assert writer.users[0] == writer.users[1]
-    candidates = client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).json()
+    candidates = stored_candidates(chapter["id"])
     assert [item["attempt"] for item in candidates] == [1, 2]
 
 
@@ -237,14 +266,24 @@ def test_checker_violation_stays_backend_only_and_does_not_replace_visible_draft
     assert status["phase"] == "failed"
     assert status["error_code"] == "checker_rejected"
     assert status["checker_result"]["verdict"] == "violation"
+    assert "draft_candidate" not in status
+    assert ("文" * 4000) not in client.get(
+        f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers
+    ).text
     visible = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert visible["draft_text"] == ""
     assert visible["status"] == "draft"
-    candidates = client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).json()
+    candidates = stored_candidates(chapter["id"])
     assert len(candidates) == 1
     assert candidates[0]["draft_text"] == "文" * 4000
     assert candidates[0]["checker_result"]["verdict"] == "violation"
     assert candidates[0]["is_current"] is False
+    assert client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).status_code == 404
+    assert client.post(
+        f"/api/v1/chapters/{chapter['id']}/candidates/select",
+        headers=auth_headers,
+        json={"candidate_id": candidates[0]["id"]},
+    ).status_code == 404
 
 
 def test_deterministic_failure_keeps_candidate_backend_only_and_restores_visible_baseline(
@@ -292,10 +331,11 @@ def test_deterministic_failure_keeps_candidate_backend_only_and_restores_visible
     assert failed["phase"] == "failed"
     assert failed["error_code"] == "writer_validation_failed"
     assert {item["code"] for item in failed["violations"]} == {"unselected_character"}
+    assert failed["visible_checker_result"]["verdict"] == "passed"
 
     visible = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert visible["draft_text"] == baseline
-    candidates = client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).json()
+    candidates = stored_candidates(chapter["id"])
     assert len(candidates) == 2
     assert candidates[0]["draft_text"] == baseline and candidates[0]["is_current"] is True
     assert candidates[1]["draft_text"] == rejected and candidates[1]["is_current"] is False
@@ -319,13 +359,14 @@ def test_manual_edit_recheck_preserves_generated_candidate_and_creates_next_atte
     client.app.dependency_overrides[get_checker_client] = lambda: checker
     client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
-    old = client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).json()[0]
+    old = stored_candidates(chapter["id"])[0]
 
     client.patch(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers, json={"draft_text": "改" * 4000}).raise_for_status()
     rerun = client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers)
     assert rerun.status_code == 200
     assert rerun.json()["finish_reason"] == "manual_edit"
-    candidates = client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).json()
+    assert rerun.json()["draft_text"] == ""
+    candidates = stored_candidates(chapter["id"])
     assert len(candidates) == 2
     assert candidates[0]["id"] == old["id"] and candidates[0]["draft_text"] == "初" * 4000
     assert candidates[0]["is_current"] is False
@@ -378,7 +419,7 @@ def test_checker_fingerprint_requires_recheck_after_world_or_selected_character_
     client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("文" * 4000)
     client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
-    original = client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).json()[0]
+    original = stored_candidates(chapter["id"])[0]
 
     client.patch(f"/api/v1/books/{book['id']}", headers=auth_headers, json={"world_setting": "新世界观"}).raise_for_status()
     assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 409
@@ -563,6 +604,66 @@ def test_cancelled_job_remains_current_after_chapter_restore(client, auth_header
     assert status["phase"] == "cancelled"
     assert status["job_id"] == started["job_id"]
     assert status["outcome_current"] is True
+
+
+def test_cancel_during_checker_never_promotes_old_candidate(client, auth_headers):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    class BlockingChecker:
+        def __init__(self):
+            self.started = Event()
+            self.release = Event()
+
+        def complete_json(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            return {"verdict": "passed", "issues": []}
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动"},
+    ).json()
+    baseline = "旧稿"
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": baseline},
+    ).raise_for_status()
+    checker = BlockingChecker()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("新" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/write",
+        headers=auth_headers,
+        json={"replace_draft": True},
+    ).raise_for_status()
+    assert checker.started.wait(timeout=3)
+    job = write_registry.get_live(chapter["id"])
+    assert job is not None
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        cancelling = executor.submit(
+            client.post,
+            f"/api/v1/chapters/{chapter['id']}/write/cancel",
+            headers=auth_headers,
+        )
+        assert job.cancel_event.wait(timeout=3)
+        checker.release.set()
+        response = cancelling.result(timeout=3)
+
+    assert response.status_code == 200
+    assert response.json()["draft_text"] == baseline
+    assert response.json()["status"] == "draft_ready"
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert status["phase"] == "cancelled"
+    candidates = stored_candidates(chapter["id"])
+    assert len(candidates) == 1
+    assert candidates[0]["draft_text"] == "新" * 4000
+    assert candidates[0]["checker_result"] is None
+    assert candidates[0]["is_current"] is False
 
 
 def test_delete_finalized_chapter_cascades_events_and_reverts_dynamic_state(client, auth_headers, wait_for_terminal):

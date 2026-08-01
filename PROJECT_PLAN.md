@@ -7,9 +7,9 @@
 - SwiftUI iOS（`LinoI`）/macOS（`LinoIMac`）客户端，FastAPI + SQLAlchemy + Alembic + SQLite 后端；产品历史标识 `LinoI` 与 Bundle/Keychain/草稿目录兼容标识不改。
 - `v1.5.0(14)` 于 2026-07-28 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 当前工作树有用户未提交的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 改动；v1.6 施工不得覆盖、回滚或纳入无关提交。
-- `v1.6.1(16)` 已完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；按授权在 iOS 发包前停止。
+- `v1.6.1(16)` 已发布；用户已授权将发布后 Review 的五项修复直接作为 `v1.6.2(17)` 发布，并沿用“iOS 发包前停止”的范围。
 
-## 当前版本：v1.6.1(16) 候选闸门与状态修复（已发布，iOS 未发包）
+## 当前版本：v1.6.2(17) 候选隔离与任务原子性补丁（发版执行中）
 
 ### 版本目标
 
@@ -64,6 +64,8 @@
 
 **2026-08-01 v1.6.1 发布完成**：实现提交 `3fce69f`、版本提交 `89437c0`、生产落账提交 `5cf238c`；annotated tag `v1.6.1` 指向 `5cf238c` 并已推送。GitHub Release `ICTW / LinoI v1.6.1` 已发布，资产 `ICTW-1.6.1.zip` 为 3,129,059 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.1>。本次按用户要求在 iOS 发包前停止，未打包或安装 iOS。
 
+**2026-08-01 v1.6.2 Review 修复与发版授权**：独立 Review 确认旧 Checker 在取消／替换任务后仍可能提升旧候选、旧客户端候选 API 可提升未通过稿、失败重生成会锁住旧正文、`/job` 仍下发候选全文，以及正文提升与 JobRun 终态不原子。现已将取消／完成纳入同一任务所有权临界区，正文／候选／JobRun 在同一事务完成；候选列表和选择端点退出公开 API，`/job` 不再返回候选，复查仅返回空正文兼容壳与 Checker 元数据。双端恢复旧可见正文自己的 Checker 状态，允许失败后复查／接受，并以本地 revision 拒绝迟到复查结果。版本更新为 `1.6.2(17)`；Backend 88 项、客户端状态测试、iOS/macOS Debug、签名 macOS Release 和唯一 Alembic head `20260801_0007` 已通过，本补丁无新 migration。用户授权直接发布 Backend、macOS、tag 与 GitHub Release；按上一版边界不打包或安装 iOS。
+
 ## 验收基线
 
 - 迁移前备份生产库；迁移后 `integrity_check`、`foreign_key_check`、`alembic heads` 全通过。任何生产 schema 改动只走 `alembic upgrade head`。
@@ -86,3 +88,4 @@
 - `v1.5.0(14)`：已发布，索引见 `archive/v1.5.0施工plan.md`。
 - `v1.6.0(15)`：已发布，详细执行记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.1(16)`：已发布，iOS 未发包；补丁记录见 `archive/v1.6.0施工plan.md`。
+- `v1.6.2(17)`：发版执行中；候选隔离与任务原子性补丁记录见 `archive/v1.6.0施工plan.md`。

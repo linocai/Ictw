@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import update
@@ -127,10 +128,32 @@ class WriteJobRegistry:
         with self._lock:
             return self._jobs.get(job.chapter_id) is job
 
-    def cancel(self, job: WriteJob, *, discard: bool = False) -> None:
-        job.discard_on_cancel = discard
-        job.cancel_event.set()
-        job.mark_cancelled()
+    def cancel(self, job: WriteJob, *, discard: bool = False) -> bool:
+        with self._lock:
+            if self._jobs.get(job.chapter_id) is not job or job.is_terminal:
+                return False
+            job.discard_on_cancel = discard
+            job.cancel_event.set()
+            job.mark_cancelled()
+            return True
+
+    def finish_if_current(self, job: WriteJob, persist: Callable[[], None], *, phase: str) -> bool:
+        """Persist a terminal result only while this job exclusively owns the chapter.
+
+        Cancellation, replacement and terminal persistence share the registry lock.
+        The callback must commit the chapter/candidate and JobRun terminal state in
+        one database transaction before the in-memory job becomes terminal.
+        """
+        with self._lock:
+            if (
+                self._jobs.get(job.chapter_id) is not job
+                or job.cancel_event.is_set()
+                or job.is_terminal
+            ):
+                return False
+            persist()
+            job.mark_terminal(phase)
+            return True
 
     def launch(self, job: WriteJob, session_factory: sessionmaker[Session]) -> None:
         target = _run_extract_job if job.kind == "extract" else _run_job
@@ -141,25 +164,30 @@ class WriteJobRegistry:
 write_registry = WriteJobRegistry()
 
 
-def record_job_phase(session_factory: sessionmaker[Session], job_id: str, phase: str, **fields: Any) -> None:
+def _apply_job_phase(db: Session, job_id: str, phase: str, **fields: Any) -> bool:
     if not job_id:
-        return
+        return False
+    run = db.get(JobRun, job_id)
+    if run is None or run.phase in TERMINAL_PHASES:
+        return False
+    run.phase = phase
+    for key in (
+        "attempt", "violations", "error_code", "error_message", "error_context",
+        "updated_character_ids", "added_event_ids", "memory_context", "checker_result",
+        "bible_sha256", "draft_fingerprint",
+    ):
+        if key in fields:
+            setattr(run, key, fields[key])
+    if phase in TERMINAL_PHASES:
+        run.finished_at = utc_now()
+    return True
+
+
+def record_job_phase(session_factory: sessionmaker[Session], job_id: str, phase: str, **fields: Any) -> None:
     db = session_factory()
     try:
-        run = db.get(JobRun, job_id)
-        if run is None or run.phase in TERMINAL_PHASES:
-            return
-        run.phase = phase
-        for key in (
-            "attempt", "violations", "error_code", "error_message", "error_context",
-            "updated_character_ids", "added_event_ids", "memory_context", "checker_result",
-            "bible_sha256", "draft_fingerprint",
-        ):
-            if key in fields:
-                setattr(run, key, fields[key])
-        if phase in TERMINAL_PHASES:
-            run.finished_at = utc_now()
-        db.commit()
+        if _apply_job_phase(db, job_id, phase, **fields):
+            db.commit()
     finally:
         db.close()
 
@@ -329,43 +357,67 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             checker_result = {"status": "unavailable", "draft_fingerprint": fingerprint, "error_code": exc.code, "error_context": _error_context(exc)}
         except Exception as exc:  # malformed checker output never destroys the Writer candidate
             checker_result = {"status": "unavailable", "draft_fingerprint": fingerprint, "error_code": "checker_invalid", "error_message": str(exc)}
-        last_candidate.checker_result = checker_result
-        db.commit()
         if checker_result.get("verdict") == "passed":
-            db.execute(
-                update(ChapterDraftCandidate)
-                .where(ChapterDraftCandidate.chapter_id == chapter.id)
-                .values(is_current=False)
-            )
-            last_candidate.is_current = True
-            chapter.draft_text, chapter.status = last_candidate.draft_text, "draft_ready"
-            db.commit()
-            record_job_phase(
-                sf,
-                job.job_id,
-                "done",
-                checker_result=checker_result,
-                bible_sha256=job.bible_sha256,
-                draft_fingerprint=fingerprint,
-            )
-            job.mark_terminal("done")
+            def persist_passed() -> None:
+                last_candidate.checker_result = checker_result
+                db.execute(
+                    update(ChapterDraftCandidate)
+                    .where(ChapterDraftCandidate.chapter_id == chapter.id)
+                    .values(is_current=False)
+                )
+                last_candidate.is_current = True
+                chapter.draft_text, chapter.status = last_candidate.draft_text, "draft_ready"
+                # Flush the authoritative chapter timestamp before stamping the
+                # terminal run, so outcome_current remains deterministic.
+                db.flush()
+                if not _apply_job_phase(
+                    db,
+                    job.job_id,
+                    "done",
+                    checker_result=checker_result,
+                    bible_sha256=job.bible_sha256,
+                    draft_fingerprint=fingerprint,
+                ):
+                    raise RuntimeError("write job terminal row is no longer writable")
+                db.commit()
+
+            if not write_registry.finish_if_current(job, persist_passed, phase="done"):
+                db.rollback()
+                return
         else:
-            _restore_baseline(db, job)
             error_code = checker_result.get("error_code") or "checker_rejected"
-            error_message = checker_result.get("error_message") or "Checker 未通过；失败稿已后台留档，未替换当前正文"
+            issue_reasons = [
+                item.get("reason", "").strip()
+                for item in checker_result.get("issues", [])
+                if isinstance(item, dict) and isinstance(item.get("reason"), str) and item.get("reason", "").strip()
+            ]
+            default_message = "Checker 未通过；失败稿已后台留档，未替换当前正文"
+            if issue_reasons:
+                default_message = f"Checker 未通过：{'；'.join(issue_reasons)}；失败稿已后台留档，未替换当前正文"
+            error_message = checker_result.get("error_message") or default_message
             error_context = checker_result.get("error_context") or {"agent_role": "checker"}
-            record_job_phase(
-                sf,
-                job.job_id,
-                "failed",
-                checker_result=checker_result,
-                bible_sha256=job.bible_sha256,
-                draft_fingerprint=fingerprint,
-                error_code=error_code,
-                error_message=error_message,
-                error_context=error_context,
-            )
-            job.mark_terminal("failed")
+
+            def persist_rejected() -> None:
+                last_candidate.checker_result = checker_result
+                chapter.draft_text, chapter.status = job.baseline_text, job.baseline_status
+                db.flush()
+                if not _apply_job_phase(
+                    db,
+                    job.job_id,
+                    "failed",
+                    checker_result=checker_result,
+                    bible_sha256=job.bible_sha256,
+                    draft_fingerprint=fingerprint,
+                    error_code=error_code,
+                    error_message=error_message,
+                    error_context=error_context,
+                ):
+                    raise RuntimeError("write job terminal row is no longer writable")
+                db.commit()
+
+            if not write_registry.finish_if_current(job, persist_rejected, phase="failed"):
+                db.rollback()
+                return
     except LLMError as exc:
         db.rollback(); _restore_baseline(db, job)
         record_job_phase(sf, job.job_id, "failed", error_code=exc.code, error_message=str(exc), error_context=_error_context(exc))
