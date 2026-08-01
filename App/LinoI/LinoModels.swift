@@ -146,7 +146,11 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         draftText = try container.decode(String.self, forKey: .draftText)
         summary = try container.decode(String.self, forKey: .summary)
         headline = try container.decodeIfPresent(String.self, forKey: .headline) ?? ""
-        longSummary = try container.decodeIfPresent(String.self, forKey: .longSummary) ?? ""
+        let decodedLongSummary = try container.decodeIfPresent(String.self, forKey: .longSummary) ?? ""
+        // v1.6.2 and older books may only have the legacy synopsis populated.
+        // Present it immediately as the canonical summary even before the
+        // backend data migration runs.
+        longSummary = decodedLongSummary.isEmpty ? summary : decodedLongSummary
         stateChanges = try container.decodeIfPresent([JSONValue].self, forKey: .stateChanges) ?? []
         unresolvedItems = try container.decodeIfPresent([JSONValue].self, forKey: .unresolvedItems) ?? []
         atomicMemories = try container.decodeIfPresent([JSONValue].self, forKey: .atomicMemories) ?? []
@@ -994,7 +998,7 @@ enum ChapterTaskOutcomeStore {
             chapter.title,
             chapter.userPrompt,
             chapter.draftText,
-            chapter.summary,
+            chapter.longSummary,
             chapter.headline,
             chapter.characterLinks.map(\.characterId).sorted().joined(separator: "\u{1F}"),
             chapter.exemptedCharacterNames.sorted().joined(separator: "\u{1F}"),

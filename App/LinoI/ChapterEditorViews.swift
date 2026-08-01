@@ -531,16 +531,10 @@ private struct LinoIChapterEditor: View {
                 LinoITextField("大事记", text: chapterBinding(\.headline))
             }
             LinoIEditor(
-                title: "本章梗概",
-                text: chapterBinding(\.summary),
-                minHeight: 120,
-                placeholder: "本章梗概会作为后续章节 Memory Selector 的候选记忆。"
-            )
-            LinoIEditor(
-                title: "章节长摘要",
+                title: "章节摘要",
                 text: chapterBinding(\.longSummary),
                 minHeight: 160,
-                placeholder: "记录更完整的情节经过，供后续 Memory Selector 压缩使用。"
+                placeholder: "记录本章情节经过，供后续 Memory Selector 压缩使用。"
             )
             archiveItems("状态变化", chapter.stateChanges)
             archiveItems("未决事项", chapter.unresolvedItems)
@@ -652,7 +646,7 @@ private struct LinoIChapterEditor: View {
     }
 
     private func showExtraction(_ chapter: Chapter) -> Bool {
-        chapter.status == "finalized" || !chapter.summary.isEmpty || !chapter.headline.isEmpty
+        chapter.status == "finalized" || !chapter.longSummary.isEmpty || !chapter.headline.isEmpty
     }
 
     private func chapterBinding(_ keyPath: WritableKeyPath<Chapter, String>) -> Binding<String> {

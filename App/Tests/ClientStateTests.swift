@@ -36,6 +36,26 @@ private func makeChapter(status: String = "draft_ready") throws -> Chapter {
     return try JSONDecoder().decode(Chapter.self, from: data)
 }
 
+private func testLegacySynopsisDecodesAsCanonicalSummary() throws {
+    let object: [String: Any] = [
+        "id": "chapter-legacy",
+        "book_id": "book-1",
+        "index": 1,
+        "title": "旧章",
+        "user_prompt": "",
+        "draft_text": "正文",
+        "summary": "旧版梗概原文",
+        "headline": "",
+        "status": "finalized",
+        "source": "agent",
+        "updated_at": "2026-07-28T12:00:00.000000",
+        "character_links": [],
+    ]
+    let data = try JSONSerialization.data(withJSONObject: object)
+    let chapter = try JSONDecoder().decode(Chapter.self, from: data)
+    try expect(chapter.longSummary == "旧版梗概原文", "legacy synopsis must remain visible as the canonical summary")
+}
+
 private func makeStatus(
     phase: String,
     outcomeCurrent: Bool?
@@ -292,6 +312,7 @@ private func testFailedRegenerationKeepsVisibleDraftActions() throws {
 @main
 private struct ClientStateTestRunner {
     static func main() throws {
+        try testLegacySynopsisDecodesAsCanonicalSummary()
         try testCurrentServerFailureIsApplied()
         try testOldOrFinalizedServerFailureIsDiscarded()
         try testOldServerFailureRemainsLocalOnly()

@@ -65,13 +65,13 @@ def _validated_archive_items(
 def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:
     if not isinstance(output, dict):
         raise ExtractorValidationError("Extractor output must be an object")
-    summary = output.get("summary")
     headline = output.get("headline")
-    if not isinstance(summary, str) or not summary.strip():
-        raise ExtractorValidationError("Extractor output missing summary")
     if not isinstance(headline, str) or not headline.strip():
         raise ExtractorValidationError("Extractor output missing headline")
-    long_summary = output.get("long_summary", summary)
+    # New Extractors emit only long_summary.  Accepting the old key here keeps
+    # in-flight/legacy callers recoverable without asking the model for two
+    # semantically duplicate artifacts.
+    long_summary = output.get("long_summary", output.get("summary"))
     if not isinstance(long_summary, str) or not long_summary.strip():
         raise ExtractorValidationError("Extractor output missing long_summary")
     raw_events = output.get("character_events")
@@ -188,9 +188,9 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
             )
         )
 
-    chapter.summary = summary.strip()
+    canonical_summary = long_summary.strip()
     chapter.headline = headline.strip()
-    chapter.long_summary = long_summary.strip()
+    chapter.long_summary = canonical_summary
     chapter.state_changes = archive_values["state_changes"]
     chapter.unresolved_items = archive_values["unresolved_items"]
     chapter.atomic_memories = archive_values["atomic_memories"]

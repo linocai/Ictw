@@ -42,7 +42,7 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
             book_id=book.id,
             index=1,
             title="前章",
-            summary="上一章梗概",
+            long_summary="上一章摘要",
             headline="上一章大事",
             status="finalized",
         )
@@ -103,7 +103,7 @@ def test_memory_candidates_scope_and_budget_packing(client, auth_headers):
             book_id=first_book.id,
             index=1,
             headline="可用大事",
-            summary="可用梗概",
+            long_summary="可用摘要",
             status="finalized",
         )
         unfinished = Chapter(book_id=first_book.id, index=2, headline="未完成", status="draft")
@@ -121,6 +121,35 @@ def test_memory_candidates_scope_and_budget_packing(client, auth_headers):
     blocks = [MemoryBlock("too-big", "甲" * 700, 1), MemoryBlock("fits", "乙" * 500, 1)]
     packed = pack_selected_memories(blocks, ["too-big", "fits"], 600)
     assert [item.id for item in packed] == ["fits"]
+
+
+def test_memory_candidates_emit_one_canonical_summary_per_chapter(client, auth_headers):
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        book = Book(title="书")
+        db.add(book)
+        db.flush()
+        prior = Chapter(
+            book_id=book.id,
+            index=1,
+            long_summary="新版摘要",
+            status="finalized",
+        )
+        current = Chapter(book_id=book.id, index=2, user_prompt="继续")
+        db.add_all([prior, current])
+        db.commit()
+        db.refresh(current)
+        prior_id = prior.id
+        candidates = memory_candidates(db, current)
+    finally:
+        db.close()
+
+    summaries = [block for block in candidates if block.memory_type == "summary"]
+    assert len(summaries) == 1
+    assert summaries[0].id == f"chapter:{prior_id}:summary"
+    assert summaries[0].text == "第 1 章摘要：新版摘要"
 
 
 def test_previous_ending_uses_only_adjacent_finalized_chapter_and_preserves_source(client, auth_headers):

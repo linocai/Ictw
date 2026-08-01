@@ -343,18 +343,33 @@ def test_truncate_to_nonspace_helper():
 # --- B5 chapter patch summary/headline + version ------------------------------
 
 
-def test_chapter_patch_summary_and_headline(client, auth_headers):
+def test_chapter_patch_summary_compatibility_and_headline(client, auth_headers):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"title": "章"}).json()
     patched = client.patch(
         f"/api/v1/chapters/{chapter['id']}", headers=auth_headers, json={"summary": "新梗概", "headline": "新大事"}
     ).json()
     assert patched["summary"] == "新梗概"
+    assert patched["long_summary"] == "新梗概"
     assert patched["headline"] == "新大事"
+
+    canonical = client.patch(
+        f"/api/v1/chapters/{chapter['id']}", headers=auth_headers, json={"long_summary": "统一后的摘要"}
+    ).json()
+    assert canonical["summary"] == "统一后的摘要"
+    assert canonical["long_summary"] == "统一后的摘要"
+
+    legacy_edit = client.patch(
+        f"/api/v1/chapters/{chapter['id']}",
+        headers=auth_headers,
+        json={"summary": "旧客户端编辑", "long_summary": "统一后的摘要"},
+    ).json()
+    assert legacy_edit["summary"] == "旧客户端编辑"
+    assert legacy_edit["long_summary"] == "旧客户端编辑"
 
 
 def test_health_reports_current_version(client, auth_headers):
-    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.6.2"
+    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.6.3"
 
 
 # --- B8 migration from the production revision --------------------------------

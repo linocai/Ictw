@@ -63,10 +63,9 @@ class Chapter(Base):
     target_word_count: Mapped[int] = mapped_column(Integer, default=3000, nullable=False)
     author_note: Mapped[str] = mapped_column(Text, default="", nullable=False)
     draft_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     headline: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    # Additive v1.6 archive.  The old summary/headline fields remain populated
-    # for older clients, while these structured values power memory recall.
+    # Canonical narrative summary.  The old ``summary`` synopsis column was
+    # merged here in v1.6.3; API compatibility is handled by the router.
     long_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     state_changes: Mapped[list[dict[str, Any]]] = mapped_column(
         MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"

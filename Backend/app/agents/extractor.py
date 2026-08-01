@@ -22,10 +22,10 @@ def extractor_schema(selected_character_ids: list[str]) -> dict[str, Any]:
     return {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
         "headline": {"type": "string"},
-        # ``summary`` remains the compact legacy field.  ``long_summary`` is
-        # the v1.6 archive used by later memory recall.
+        # ``long_summary`` is the sole narrative chapter summary.  The legacy
+        # ``summary``/synopsis wire field is mirrored by the API, not generated
+        # as a second Extractor artifact.
         "long_summary": {"type": "string"},
         "state_changes": {"type": "array", "items": archive_item},
         "unresolved_items": {"type": "array", "items": archive_item},
@@ -57,7 +57,7 @@ def extractor_schema(selected_character_ids: list[str]) -> dict[str, Any]:
         },
     },
     "required": [
-        "summary", "headline", "long_summary", "state_changes", "unresolved_items", "atomic_memories",
+        "headline", "long_summary", "state_changes", "unresolved_items", "atomic_memories",
         "character_events", "dynamic_fields_patch",
     ],
     "additionalProperties": False,

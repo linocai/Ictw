@@ -1272,7 +1272,6 @@ struct ChapterPatchPayload: Encodable, Sendable {
     var title: String
     var user_prompt: String
     var draft_text: String
-    var summary: String
     var headline: String
     var long_summary: String
     var state_changes: [JSONValue]
@@ -1285,7 +1284,6 @@ struct ChapterPatchPayload: Encodable, Sendable {
         title = chapter.title
         user_prompt = chapter.userPrompt
         draft_text = chapter.draftText
-        summary = chapter.summary
         headline = chapter.headline
         long_summary = chapter.longSummary
         state_changes = chapter.stateChanges

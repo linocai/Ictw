@@ -15,7 +15,7 @@ enum MacExportSaver {
         await export(book, session: session, path: "export.txt", suffix: "", panelTitle: "导出全书")
     }
 
-    /// 导出 Extractor 记忆（大事记/梗概/人物动态字段与故事线），同一存盘通道。
+    /// 导出 Extractor 记忆（大事记/摘要/人物动态字段与故事线），同一存盘通道。
     @MainActor
     static func exportMemories(_ book: Book, session: AppSession) async {
         await export(book, session: session, path: "memories/export.txt", suffix: "·记忆", panelTitle: "导出记忆")

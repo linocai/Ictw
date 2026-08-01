@@ -98,10 +98,10 @@ def _dynamic_value_text(value: object) -> str:
 
 @router.get("/books/{book_id}/memories/export.txt")
 def export_memories(book_id: str, db: Session = Depends(get_db)) -> Response:
-    """导出 Extractor 生成的全部记忆：大事记、章节梗概、人物动态字段与故事线。
+    """导出 Extractor 生成的全部记忆：大事记、章节摘要、人物动态字段与故事线。
 
     与 `export.txt`（正文导出）互补；这里不含任何章节正文，只含记忆产物，
-    章节不限 finalized（summary/headline 可被用户手动编辑，编辑结果一并导出）。
+    章节不限 finalized（long_summary/headline 可被用户手动编辑，编辑结果一并导出）。
     """
     book = db.get(Book, book_id)
     if book is None:
@@ -129,11 +129,12 @@ def export_memories(book_id: str, db: Session = Depends(get_db)) -> Response:
     parts.extend(headline_lines or ["（暂无）"])
     parts.append("")
 
-    parts.append("【章节梗概】")
+    parts.append("【章节摘要】")
     summary_blocks: list[str] = []
     for chapter in chapters:
-        if chapter.summary.strip():
-            summary_blocks.extend([f"第 {chapter.index} 章 {chapter.title}".strip(), chapter.summary, ""])
+        canonical_summary = chapter.long_summary.strip()
+        if canonical_summary:
+            summary_blocks.extend([f"第 {chapter.index} 章 {chapter.title}".strip(), canonical_summary, ""])
     if summary_blocks:
         parts.extend(summary_blocks)
     else:

@@ -744,7 +744,7 @@ def test_memories_export_contains_headlines_summaries_and_character_memory(clien
     assert "记忆书——记忆导出" in text
     assert "【大事记】" in text
     assert "第 1 章 开端：主角出场" in text
-    assert "【章节梗概】" in text
+    assert "【章节摘要】" in text
     assert "主角在雨夜抵达小镇。" in text
     assert "冲突爆发。" in text
     assert "【人物记忆】" in text

@@ -135,22 +135,16 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     memory_type="headline",
                 )
             )
-        if item.summary.strip():
+        canonical_summary = item.long_summary.strip()
+        if canonical_summary:
             blocks.append(
                 MemoryBlock(
+                    # Preserve the stable legacy ID so saved audit/source
+                    # references remain understandable after the merge.
                     id=f"chapter:{item.id}:summary",
-                    text=f"第 {item.index} 章梗概：{item.summary.strip()}",
+                    text=f"第 {item.index} 章摘要：{canonical_summary}",
                     chapter_index=item.index,
                     memory_type="summary",
-                )
-            )
-        if item.long_summary.strip():
-            blocks.append(
-                MemoryBlock(
-                    id=f"chapter:{item.id}:long_summary",
-                    text=f"第 {item.index} 章长梗概：{item.long_summary.strip()}",
-                    chapter_index=item.index,
-                    memory_type="long_summary",
                 )
             )
         blocks.extend(_archive_memory_blocks(item))
@@ -478,7 +472,8 @@ def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
             "不得使用、复述或根据未提供的 Bible、世界观、人物卡或历史记忆补写事实。",
             "# 人物 ID 白名单（仅用于字段归属，不是事实来源）\n" + character_ids,
             (
-                "# 提取输出约束\nsummary/headline/long_summary 必填；state_changes、unresolved_items、atomic_memories "
+                "# 提取输出约束\nheadline/long_summary 必填；long_summary 是本章唯一摘要，不限制机械字数；"
+                "state_changes、unresolved_items、atomic_memories "
                 "逐项只记录正文中明确发生、明确改变或明确尚未解决的事实。人物更新以及这些数组中出现的 "
                 "character_id 只能使用上面列出的 ID；未选择人物时人物更新数组必须为空。"
                 f"每条 event_text 不超过 {CHARACTER_EVENT_MAX_CHARS} 个去空白字符。"

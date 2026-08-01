@@ -167,7 +167,13 @@ def test_v1_6_migration_preserves_notes_custom_persona_and_child_rows(tmp_path, 
             PRAGMA foreign_keys=ON;
             INSERT INTO books VALUES('b','书','世界','2026-01-01','2026-01-01',NULL);
             INSERT INTO chapters VALUES(
-                'c','b',1,'章','Bible',3000,'旧备注','正文','','','draft','agent','2026-01-01','2026-01-01'
+                'c','b',1,'章','Bible',3000,'旧备注','正文','旧版梗概','','draft','agent','2026-01-01','2026-01-01'
+            );
+            INSERT INTO chapters VALUES(
+                'c2','b',2,'章二','Bible',3000,'','正文二','不应覆盖的旧梗概','','draft','agent','2026-01-01','2026-01-01'
+            );
+            INSERT INTO chapters VALUES(
+                'c3','b',3,'章三','Bible',3000,'','正文三','空白摘要应回填','','draft','agent','2026-01-01','2026-01-01'
             );
             INSERT INTO characters VALUES(
                 'p','b','林夕','主角','设定','{}','2026-01-01','2026-01-01'
@@ -190,6 +196,14 @@ def test_v1_6_migration_preserves_notes_custom_persona_and_child_rows(tmp_path, 
     finally:
         connection.close()
 
+    command.upgrade(config, "20260801_0007")
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("UPDATE chapters SET long_summary='已经存在的新摘要' WHERE id='c2'")
+        connection.execute("UPDATE chapters SET long_summary='\n\t ' WHERE id='c3'")
+        connection.commit()
+    finally:
+        connection.close()
     command.upgrade(config, "head")
     engine = make_engine(database_url)
     with engine.connect() as migrated:
@@ -220,6 +234,10 @@ def test_v1_6_migration_preserves_notes_custom_persona_and_child_rows(tmp_path, 
         assert {"memory_context", "checker_result", "bible_sha256", "draft_fingerprint"} <= columns
         chapter_columns = {row[1] for row in migrated.exec_driver_sql("PRAGMA table_info(chapters)").fetchall()}
         assert {"long_summary", "state_changes", "unresolved_items", "atomic_memories"} <= chapter_columns
+        assert "summary" not in chapter_columns
+        assert migrated.execute(text("SELECT long_summary FROM chapters WHERE id='c'")).scalar_one() == "旧版梗概"
+        assert migrated.execute(text("SELECT long_summary FROM chapters WHERE id='c2'")).scalar_one() == "已经存在的新摘要"
+        assert migrated.execute(text("SELECT long_summary FROM chapters WHERE id='c3'")).scalar_one() == "空白摘要应回填"
         assert migrated.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
     get_settings.cache_clear()
 

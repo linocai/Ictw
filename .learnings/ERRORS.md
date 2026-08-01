@@ -699,3 +699,88 @@ When inserting a test between existing functions, inspect the complete neighbori
 ### Resolution
 - **Resolved**: 2026-08-01T13:35:00+08:00
 - **Notes**: Restored the original assertions to `test_cancelled_job_remains_current_after_chapter_restore` and reran the targeted suites.
+
+## [ERR-20260801-017] Zsh client test script invoked through Bash
+
+**Logged**: 2026-08-01T16:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The Swift client-state test launcher uses zsh path expansion and fails when its shebang is bypassed with `bash`.
+
+### Error
+`App/Tests/run_client_state_tests.sh: line 4: A: unbound variable`
+
+### Context
+- The script declares `#!/bin/zsh` and uses `${0:A:h}`.
+- Invoking it as `bash App/Tests/run_client_state_tests.sh` forced the wrong shell; application code was never compiled.
+
+### Suggested Fix
+Execute `App/Tests/run_client_state_tests.sh` directly or invoke it explicitly with `zsh`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `App/Tests/run_client_state_tests.sh`
+
+### Resolution
+- **Resolved**: 2026-08-01T16:00:00+08:00
+- **Notes**: Corrected the invocation to use the script's declared zsh runtime.
+
+## [ERR-20260801-018] Multi-file patch included context from the wrong test file
+
+**Logged**: 2026-08-01T16:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+A multi-file patch was rejected because an assertion from the migration test was accidentally placed under the prompt-test file section.
+
+### Error
+`apply_patch verification failed: Failed to find expected lines in Backend/tests/test_prompt.py`
+
+### Context
+- The rejected patch made no file changes.
+- The intended assertion belongs to `Backend/tests/test_v1_schema_and_settings.py`.
+
+### Suggested Fix
+Keep each file's hunk under its own update header and split broad multi-file patches when contexts are easy to confuse.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `Backend/tests/test_prompt.py`, `Backend/tests/test_v1_schema_and_settings.py`
+
+### Resolution
+- **Resolved**: 2026-08-01T16:05:00+08:00
+- **Notes**: Reapplied the changes with the migration assertion in the correct test file.
+
+## [ERR-20260801-019] SQLite batch drop cascaded chapter child rows
+
+**Logged**: 2026-08-01T16:10:00+08:00
+**Priority**: critical
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Alembic batch-table recreation for dropping the legacy chapter summary column caused SQLite foreign-key cascades to delete child rows.
+
+### Error
+`test_v1_6_migration_preserves_notes_custom_persona_and_child_rows: expected 1 chapter_character, found 0`
+
+### Context
+- The data backfill itself succeeded.
+- Rebuilding the parent `chapters` table with foreign keys enabled deleted related `chapter_characters` rows when the old table was dropped.
+- The migration test also protects character events and other existing child data.
+
+### Suggested Fix
+Use SQLite's native `ALTER TABLE ... DROP COLUMN` for an unconstrained legacy column, and retain explicit pre/post foreign-key checks plus child-row regression tests.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `Backend/alembic/versions/20260801_0008_merge_chapter_summaries.py`, `Backend/tests/test_v1_schema_and_settings.py`
+
+### Resolution
+- **Resolved**: 2026-08-01T16:10:00+08:00
+- **Notes**: Replaced batch-table recreation with Alembic's native drop-column operation and reran the migration suite.

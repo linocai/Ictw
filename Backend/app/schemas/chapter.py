@@ -37,6 +37,7 @@ class ChapterPatch(_AuthorNoteCompat):
     user_prompt: str | None = None
     target_word_count: int | None = Field(default=None, gt=0)
     draft_text: str | None = None
+    # Deprecated old-App wire alias; the router maps it to long_summary.
     summary: str | None = None
     headline: str | None = None
     # v1.6 additive archive fields.  Older clients neither send nor need to
@@ -78,6 +79,7 @@ class ChapterRead(ORMModel):
     # Deprecated response mirror for old App versions.
     chapter_style: str
     draft_text: str
+    # Deprecated response alias for v1.6.2 and older App builds.
     summary: str
     headline: str
     long_summary: str = ""

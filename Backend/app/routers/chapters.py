@@ -50,6 +50,7 @@ router = APIRouter(tags=["chapters"])
 
 def _chapter_read(chapter: Chapter) -> ChapterRead:
     note = chapter.author_note
+    canonical_summary = chapter.long_summary.strip()
     return ChapterRead(
         id=chapter.id,
         book_id=chapter.book_id,
@@ -60,9 +61,10 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
         author_note=note,
         chapter_style=note,
         draft_text=chapter.draft_text,
-        summary=chapter.summary,
+        # summary is a deprecated response mirror for old App builds.
+        summary=canonical_summary,
         headline=chapter.headline,
-        long_summary=chapter.long_summary,
+        long_summary=canonical_summary,
         state_changes=list(chapter.state_changes or []),
         unresolved_items=list(chapter.unresolved_items or []),
         atomic_memories=list(chapter.atomic_memories or []),
@@ -167,9 +169,32 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
-    updates = payload.model_dump(exclude_unset=True, exclude={"character_links", "author_note", "chapter_style"})
+    updates = payload.model_dump(
+        exclude_unset=True,
+        exclude={"character_links", "author_note", "chapter_style", "summary", "long_summary"},
+    )
     for key, value in updates.items():
         setattr(chapter, key, value)
+    summary_is_set = "summary" in payload.model_fields_set
+    long_summary_is_set = "long_summary" in payload.model_fields_set
+    if summary_is_set or long_summary_is_set:
+        current = chapter.long_summary
+        legacy_value = payload.summary or ""
+        canonical_value = payload.long_summary or ""
+        if summary_is_set and long_summary_is_set:
+            if legacy_value == canonical_value:
+                chosen = canonical_value
+            elif canonical_value == current:
+                # A v1.6.2 client edited its visible legacy synopsis field.
+                chosen = legacy_value
+            else:
+                # New canonical field wins when both values were edited.
+                chosen = canonical_value
+        elif long_summary_is_set:
+            chosen = canonical_value
+        else:
+            chosen = legacy_value
+        chapter.long_summary = chosen
     if "author_note" in payload.model_fields_set or "chapter_style" in payload.model_fields_set:
         _apply_author_note(chapter, payload.author_note)
     if payload.character_links is not None:

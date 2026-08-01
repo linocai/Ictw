@@ -20,7 +20,6 @@ class RecordingExtractor:
 
 def _archive_payload(character_id: str) -> dict:
     return {
-        "summary": "旧客户端可见的短梗概。",
         "headline": "关键落点。",
         "long_summary": "正文中主角在渡口交出了钥匙，并决定等候回信。",
         "state_changes": [{"text": "主角不再持有钥匙。", "kind": "possession", "character_id": character_id}],
@@ -36,6 +35,7 @@ def test_extractor_appends_fixed_protocol_and_schema_has_v16_archive_fields():
     ExtractorAgent(llm, "可编辑 Extractor 人格").extract("最终正文", ["character"])
     assert llm.system == f"可编辑 Extractor 人格\n\n{PROGRAM_PROTOCOLS['extractor']}"
     assert {"long_summary", "state_changes", "unresolved_items", "atomic_memories"} <= set(llm.schema["properties"])
+    assert "summary" not in llm.schema["properties"]
     assert extractor_schema([])["properties"]["character_events"].get("maxItems") == 0
 
 
@@ -83,7 +83,10 @@ def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
     finally:
         db.close()
     recalled = {block.id: block for block in blocks}
-    assert recalled[f"chapter:{chapter['id']}:long_summary"].memory_type == "long_summary"
+    summary_block = recalled[f"chapter:{chapter['id']}:summary"]
+    assert summary_block.memory_type == "summary"
+    assert summary_block.text.endswith(_archive_payload(character["id"])["long_summary"])
+    assert f"chapter:{chapter['id']}:long_summary" not in recalled
     assert recalled[f"chapter:{chapter['id']}:state_change:1"].chapter_index == 1
     assert recalled[f"chapter:{chapter['id']}:unresolved_item:1"].memory_type == "unresolved_item"
     assert recalled[f"chapter:{chapter['id']}:atomic_memory:1"].character_id == character["id"]

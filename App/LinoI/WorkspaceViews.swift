@@ -234,7 +234,7 @@ struct LinoIBookSettingsPane: View {
                 }
                 .buttonStyle(LinoITintButtonStyle())
                 .disabled(isExporting || session.currentBook == nil)
-                Text("把大事记、章节梗概、人物动态字段与故事线（Extractor 记忆）导出为纯文本。")
+                Text("把大事记、章节摘要、人物动态字段与故事线（Extractor 记忆）导出为纯文本。")
                     .font(.footnote)
                     .foregroundStyle(LinoTheme.muted)
                 Button {
