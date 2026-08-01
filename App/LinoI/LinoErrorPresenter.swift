@@ -184,7 +184,8 @@ enum LinoErrorPresenter {
         switch agentRole {
         case "memory_selector": return "选记忆"
         case "writer": return "写正文"
-        case "reviser": return "修订"
+        case "checker": return "Bible 检查"
+        case "reviser": return "旧版任务记录"
         case "extractor": return "提取归档"
         default: return "App↔后端"
         }
@@ -251,10 +252,10 @@ enum LinoErrorPresenter {
             return Entry(reason: "上游请求处理失败", suggestion: "请重试；若持续出现，请检查模型配置")
 
         // 写作链 / 后端
-        case "writer_expansion_failed":
-            return Entry(reason: "Writer 扩写两次后仍未达到篇幅要求", suggestion: "请调整本章剧情或目标字数后重新生成")
-        case "revision_failed":
-            return Entry(reason: "修订两次后仍未通过程序校验", suggestion: "请调整本章剧情后重新生成，或豁免涉及人物后重试")
+        case "writer_minimum_failed":
+            return Entry(reason: "Writer 两次完整写作后仍未达到最低篇幅", suggestion: "请补充本章剧情后重新生成")
+        case "checker_failed":
+            return Entry(reason: "正文已生成，但 Bible 检查未完成", suggestion: "可稍后重新检查，或明确忽略后接受")
         case "write_failed":
             return Entry(reason: "写作任务出现意外错误", suggestion: "请重试；若持续出现，请联系管理员")
         case "extract_failed":
@@ -270,7 +271,7 @@ enum LinoErrorPresenter {
         case "write_running":
             return Entry(reason: "写作正在进行中", suggestion: "请等待当前任务完成后再试")
         case "unselected_characters_in_bible":
-            return Entry(reason: "本章剧情 Bible 或作者备注出现了未选择人物", suggestion: "请勾选这些人物，或从 Bible 中移除相关描写")
+            return Entry(reason: "本章剧情 Bible 出现了未选择人物", suggestion: "请勾选这些人物，或从 Bible 中移除相关描写")
         case "ambiguous_character_name":
             return Entry(reason: "同书存在无法区分的重名人物", suggestion: "请先为重名人物改名或补充区分信息")
         case "bible_empty":
@@ -283,11 +284,11 @@ enum LinoErrorPresenter {
         case "ambiguous_character":
             return Entry(reason: "正文含重名人物", suggestion: "请先为重名人物改名或补充区分信息")
         case "word_count":
-            return Entry(reason: "正文字数不在目标区间内", suggestion: "请调整目标字数后重新生成")
+            return Entry(reason: "正文未达到最低 4000 字", suggestion: "请补充本章剧情后重新生成")
         case "empty_body":
             return Entry(reason: "正文为空", suggestion: "请重新生成")
         case "length_truncated":
-            return Entry(reason: "上游因长度限制截断了输出", suggestion: "请调小目标字数后重新生成")
+            return Entry(reason: "上游因长度限制截断了输出", suggestion: "请重新生成")
 
         // 本地合成（无后端 code=，由 401 纯串 detail 映射而来）
         case "unauthorized":

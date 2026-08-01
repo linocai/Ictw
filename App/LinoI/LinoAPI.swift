@@ -74,8 +74,20 @@ struct APIClient {
     }
 
     /// Starts the background Extractor job for a chapter's draft.
-    func accept(chapterId: String) async throws -> WriteJobStatus {
-        try await request("/chapters/\(chapterId)/accept", method: "POST")
+    func accept(chapterId: String, overrideChecker: Bool = false) async throws -> WriteJobStatus {
+        try await request("/chapters/\(chapterId)/accept", method: "POST", body: CheckerAcceptPayload(override_checker: overrideChecker))
+    }
+
+    func candidates(chapterId: String) async throws -> [DraftCandidate] {
+        try await request("/chapters/\(chapterId)/candidates")
+    }
+
+    func selectCandidate(chapterId: String, candidateId: String) async throws -> Chapter {
+        try await request("/chapters/\(chapterId)/candidates/select", method: "POST", body: CandidateSelectionPayload(candidate_id: candidateId))
+    }
+
+    func rerunChecker(chapterId: String) async throws -> DraftCandidate {
+        try await request("/chapters/\(chapterId)/check", method: "POST")
     }
 
     func cancelWrite(chapterId: String) async throws -> Chapter {
@@ -116,6 +128,9 @@ struct APIClient {
         return String(data: data, encoding: .utf8) ?? ""
     }
 }
+
+private struct CheckerAcceptPayload: Encodable, Sendable { let override_checker: Bool }
+private struct CandidateSelectionPayload: Encodable, Sendable { let candidate_id: String }
 
 struct AnyEncodable: Encodable, @unchecked Sendable {
     private let encodeBlock: (Encoder) throws -> Void

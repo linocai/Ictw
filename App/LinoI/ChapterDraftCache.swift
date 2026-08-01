@@ -59,7 +59,7 @@ struct LocalChapterDraft: Codable {
         chapterId = try container.decode(String.self, forKey: .chapterId)
         title = try container.decode(String.self, forKey: .title)
         userPrompt = try container.decode(String.self, forKey: .userPrompt)
-        targetWordCount = try container.decode(Int.self, forKey: .targetWordCount)
+        targetWordCount = try container.decodeIfPresent(Int.self, forKey: .targetWordCount) ?? 3000
         authorNote = try container.decodeIfPresent(String.self, forKey: .authorNote)
             ?? container.decodeIfPresent(String.self, forKey: .legacyChapterStyle)
             ?? ""
@@ -75,8 +75,8 @@ struct LocalChapterDraft: Codable {
         try container.encode(chapterId, forKey: .chapterId)
         try container.encode(title, forKey: .title)
         try container.encode(userPrompt, forKey: .userPrompt)
-        try container.encode(targetWordCount, forKey: .targetWordCount)
-        try container.encode(authorNote, forKey: .authorNote)
+        // v1.6 local drafts deliberately stop persisting retired writing inputs.
+        // The decoder above still reads old cache files for a safe restore.
         try container.encode(draftText, forKey: .draftText)
         try container.encode(characterLinks, forKey: .characterLinks)
         try container.encode(dirty, forKey: .dirty)

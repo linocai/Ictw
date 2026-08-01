@@ -14,10 +14,9 @@ os.environ.setdefault("KEK_SECRET", "test-kek-secret-123456")
 from app.config import get_settings
 from app.db import Base, get_db, make_engine
 from app.llm.factory import (
-    get_compressor_client,
+    get_checker_client,
     get_extractor_client,
     get_memory_selector_client,
-    get_reviser_client,
     get_writer_client,
 )
 from app.main import create_app
@@ -44,15 +43,14 @@ class FakeWriter:
         return {}
 
 
-class FakeCompressor:
-    def complete(self, *, system: str, user: str, **kwargs):
-        return "压缩后正文"
-
-    def complete_stream(self, **kwargs):
-        yield "压"
-
+class FakeSelector:
     def complete_json(self, **kwargs):
-        return {"memory_ids": []}
+        return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+
+
+class FakeChecker:
+    def complete_json(self, **kwargs):
+        return {"verdict": "passed", "issues": []}
 
 
 class FakeExtractor:
@@ -117,9 +115,8 @@ def client() -> Iterator[TestClient]:
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_writer_client] = lambda: FakeWriter()
-    app.dependency_overrides[get_compressor_client] = lambda: FakeCompressor()
-    app.dependency_overrides[get_reviser_client] = lambda: FakeCompressor()
-    app.dependency_overrides[get_memory_selector_client] = lambda: FakeCompressor()
+    app.dependency_overrides[get_memory_selector_client] = lambda: FakeSelector()
+    app.dependency_overrides[get_checker_client] = lambda: FakeChecker()
     app.dependency_overrides[get_extractor_client] = lambda: FakeExtractor()
     with TestClient(app) as test_client:
         yield test_client

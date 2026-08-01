@@ -4,7 +4,7 @@ struct LinoIAgentSettingsPane: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @State private var showingNewProfile = false
 
-    private let roles = ["memory_selector", "writer", "reviser", "extractor"]
+    private let roles = ["memory_selector", "writer", "checker", "extractor"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -12,7 +12,7 @@ struct LinoIAgentSettingsPane: View {
                 Text("Agent / 模型")
                     .font(LinoType.heading)
                     .foregroundStyle(LinoTheme.ink)
-                Text("四个 Agent 可分别绑定模型、人格与推理参数。")
+                Text("四个现役 Agent 可分别绑定模型、可编辑人格与推理参数。")
                     .font(.caption)
                     .foregroundStyle(LinoTheme.muted)
             }
@@ -532,11 +532,16 @@ private struct LinoIPersonaCard: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 12) {
                 LinoIEditor(
-                    title: "\(persona.agentRole.linoAgentName) System Prompt",
+                    title: "可编辑人格词",
                     text: $prompt,
                     minHeight: 260,
                     placeholder: "填写这个 Agent 的人格、边界和写作偏好。"
                 )
+                VStack(alignment: .leading, spacing: 5) {
+                    LinoISectionLabel("程序协议（只读，始终生效）")
+                    Text(persona.programProtocol.isEmpty ? "旧版服务未提供程序协议。" : persona.programProtocol)
+                        .font(.caption).foregroundStyle(LinoTheme.muted).fixedSize(horizontal: false, vertical: true)
+                }
                 HStack(spacing: 10) {
                     Button("恢复默认") {
                         Task { await agents.resetPersona(role: persona.agentRole) }
@@ -546,6 +551,7 @@ private struct LinoIPersonaCard: View {
                     Button("保存人格") {
                         var edited = persona
                         edited.systemPrompt = prompt
+                        edited.editablePersona = prompt
                         Task { await agents.savePersona(edited) }
                     }
                     .buttonStyle(LinoIPrimaryButtonStyle(compact: true))
@@ -569,13 +575,13 @@ private struct LinoIPersonaCard: View {
         .padding(12)
         .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onAppear { sync() }
-        .onChange(of: persona.systemPrompt) { _, _ in sync(force: true) }
+        .onChange(of: persona.editablePersona) { _, _ in sync(force: true) }
     }
 
     private func sync(force: Bool = false) {
         guard force || loadedRole != persona.agentRole else { return }
         loadedRole = persona.agentRole
-        loadedPrompt = persona.systemPrompt
-        prompt = persona.systemPrompt
+        loadedPrompt = persona.editablePersona
+        prompt = persona.editablePersona
     }
 }

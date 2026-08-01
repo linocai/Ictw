@@ -65,6 +65,18 @@ class Chapter(Base):
     draft_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     headline: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Additive v1.6 archive.  The old summary/headline fields remain populated
+    # for older clients, while these structured values power memory recall.
+    long_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    state_changes: Mapped[list[dict[str, Any]]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
+    )
+    unresolved_items: Mapped[list[dict[str, Any]]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
+    )
+    atomic_memories: Mapped[list[dict[str, Any]]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
+    )
     exempted_character_names: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
     )
@@ -174,9 +186,36 @@ class JobRun(Base):
     violations: Mapped[list | None] = mapped_column(JSON, nullable=True)
     updated_character_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     added_event_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    memory_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    checker_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    bible_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    draft_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChapterDraftCandidate(Base):
+    __tablename__ = "chapter_draft_candidates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    chapter_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chapters.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    job_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("job_runs.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    draft_text: Mapped[str] = mapped_column(Text, nullable=False)
+    non_whitespace_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    finish_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deterministic_violations: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    checker_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    bible_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    draft_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_current: Mapped[bool] = mapped_column(default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
 class LLMCallAudit(Base):

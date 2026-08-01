@@ -312,9 +312,14 @@ final class ChapterEditorStore: ObservableObject {
     @Published private(set) var writingPhase: ChapterWritingPhase = .idle
     @Published private(set) var saveState: ChapterSaveState = .synced
     @Published private(set) var pollingConnectionInterrupted = false
-    /// Latest programmatic validation explanation shown while Reviser is
-    /// running. Kept when the final revision fails so the user can see why.
+    /// Latest deterministic validation explanation. It never represents a
+    /// model edit: v1.6 preserves every candidate for the user to inspect.
     @Published private(set) var currentValidationReason: String?
+    @Published private(set) var memoryContext: MemoryContext?
+    @Published private(set) var checkerResult: CheckerResult?
+    @Published private(set) var draftCandidates: [DraftCandidate] = []
+    @Published private(set) var candidatesLoading = false
+    @Published private(set) var checkerRefreshing = false
     @Published private(set) var restoredLocalDraft = false
     /// Names the last preflight/job failure reported as unauthorized-but-present.
     /// Non-empty exactly when the editor should offer "本章豁免并重试".
@@ -349,6 +354,9 @@ final class ChapterEditorStore: ObservableObject {
         isLoading = true
         restoredLocalDraft = false
         pollingConnectionInterrupted = false
+        memoryContext = nil
+        checkerResult = nil
+        draftCandidates = []
         defer { isLoading = false }
         do {
             let remote: Chapter = try await session.api.request("/chapters/\(summary.id)")
@@ -367,6 +375,7 @@ final class ChapterEditorStore: ObservableObject {
             }
             pendingExemptionNames = []
             currentValidationReason = nil
+            await loadCandidates(chapterId: remote.id, quietly: true)
             if pollingChapterId != remote.id {
                 writingPhase = .idle
             }
@@ -393,16 +402,9 @@ final class ChapterEditorStore: ObservableObject {
         guard chapter[keyPath: keyPath] != value else { return }
         chapter[keyPath: keyPath] = value
         currentChapter = chapter
-        clearTaskOutcome(chapterID: chapter.id)
-        scheduleCacheSave()
-    }
-
-    func editTargetWordCount(_ value: Int) {
-        guard var chapter = currentChapter else { return }
-        let normalized = max(1, value)
-        guard chapter.targetWordCount != normalized else { return }
-        chapter.targetWordCount = normalized
-        currentChapter = chapter
+        if keyPath == \Chapter.userPrompt || keyPath == \Chapter.draftText {
+            markCheckerStale()
+        }
         clearTaskOutcome(chapterID: chapter.id)
         scheduleCacheSave()
     }
@@ -412,6 +414,7 @@ final class ChapterEditorStore: ObservableObject {
         guard chapter.characterLinks != links else { return }
         chapter.characterLinks = links
         currentChapter = chapter
+        markCheckerStale()
         clearTaskOutcome(chapterID: chapter.id)
         scheduleCacheSave()
     }
@@ -481,7 +484,7 @@ final class ChapterEditorStore: ObservableObject {
     /// Saves current edits, then starts the background Extractor job and
     /// returns immediately. Completion (chapter becomes `finalized`) is
     /// observed reactively via `currentChapter`.
-    func accept() async -> Chapter? {
+    func accept(overrideChecker: Bool = false) async -> Chapter? {
         guard !writingPhase.isActive else { return nil }
         guard let saved = await save() else { return nil }
         pendingExemptionNames = []
@@ -489,7 +492,7 @@ final class ChapterEditorStore: ObservableObject {
         ChapterTaskOutcomeStore.clear(chapterID: saved.id)
         writingPhase = .extracting
         do {
-            let status = try await session.api.accept(chapterId: saved.id)
+            let status = try await session.api.accept(chapterId: saved.id, overrideChecker: overrideChecker)
             applyJobStatus(status, chapterId: saved.id)
             if !Self.isTerminalPhase(status.phase) {
                 pollJob(chapterId: saved.id)
@@ -502,6 +505,60 @@ final class ChapterEditorStore: ObservableObject {
             applyStartFailure(error, chapterId: saved.id, intendedStage: .extraction)
             return nil
         }
+    }
+
+    func loadCandidates(chapterId: String? = nil, quietly: Bool = false) async {
+        guard let id = chapterId ?? currentChapter?.id else { return }
+        if !quietly { candidatesLoading = true }
+        defer { candidatesLoading = false }
+        do {
+            draftCandidates = try await session.api.candidates(chapterId: id)
+            if let current = draftCandidates.first(where: \.isCurrent) {
+                checkerResult = current.checkerResult
+            }
+        } catch where quietly {
+            // The editor remains usable offline; the normal polling/error UI
+            // explains connectivity without turning a candidate drawer into a blocker.
+        } catch {
+            session.notices.publish(error)
+        }
+    }
+
+    func selectCandidate(_ candidate: DraftCandidate) async -> Chapter? {
+        guard !writingPhase.isActive, let chapter = currentChapter else { return nil }
+        do {
+            let selected = try await session.api.selectCandidate(chapterId: chapter.id, candidateId: candidate.id)
+            currentChapter = selected
+            checkerResult = candidate.checkerResult
+            cache.saveClean(selected)
+            await loadCandidates(chapterId: selected.id, quietly: true)
+            return selected
+        } catch {
+            session.notices.publish(error)
+            return nil
+        }
+    }
+
+    func rerunChecker() async -> DraftCandidate? {
+        guard !writingPhase.isActive, let chapter = currentChapter else { return nil }
+        checkerRefreshing = true
+        defer { checkerRefreshing = false }
+        do {
+            let candidate = try await session.api.rerunChecker(chapterId: chapter.id)
+            checkerResult = candidate.checkerResult
+            await loadCandidates(chapterId: chapter.id, quietly: true)
+            return candidate
+        } catch {
+            session.notices.publish(error)
+            return nil
+        }
+    }
+
+    private func markCheckerStale() {
+        guard var result = checkerResult else { return }
+        result.status = "stale"
+        result.verdict = nil
+        checkerResult = result
     }
 
     /// Adds the names from the last unauthorized-character failure to this
@@ -737,13 +794,19 @@ final class ChapterEditorStore: ObservableObject {
     ) {
         guard currentChapter?.id == chapterId else { return }
         pollingConnectionInterrupted = false
+        if let context = status.memoryContext { memoryContext = context }
+        if let result = status.checkerResult ?? status.draftCandidate?.checkerResult { checkerResult = result }
+        if let candidate = status.draftCandidate,
+           !draftCandidates.contains(where: { $0.id == candidate.id }) {
+            draftCandidates.append(candidate)
+        }
         switch status.phase {
         case "selecting_memory":
             writingPhase = .selectingMemory
             setCurrentChapterStatus("writing", chapterId: chapterId)
         case "writing":
             if let attempt = status.attempt {
-                writingPhase = .expanding(attempt: min(max(attempt, 1), 2))
+                writingPhase = .writingAttempt(min(max(attempt, 1), 2))
                 if let reason = Self.validationReason(from: status.violations) {
                     currentValidationReason = reason
                 }
@@ -751,16 +814,24 @@ final class ChapterEditorStore: ObservableObject {
                 writingPhase = .writing
             }
             setCurrentChapterStatus("writing", chapterId: chapterId)
-        case "revising":
-            writingPhase = .revising(attempt: min(max(status.attempt ?? 1, 1), 2))
+        case "validating":
+            writingPhase = .validating
             setCurrentChapterStatus("writing", chapterId: chapterId)
             if let reason = Self.validationReason(from: status.violations) {
                 currentValidationReason = reason
             }
+        case "checking":
+            writingPhase = .checking
+            setCurrentChapterStatus("writing", chapterId: chapterId)
+        case "revising":
+            writingPhase = .legacyRevising
+            setCurrentChapterStatus("writing", chapterId: chapterId)
         case "extracting":
             writingPhase = .extracting
             setCurrentChapterStatus("extracting", chapterId: chapterId)
         case "done":
+            memoryContext = status.memoryContext ?? memoryContext
+            checkerResult = status.checkerResult ?? status.draftCandidate?.checkerResult ?? checkerResult
             if let chapter = status.chapter {
                 currentChapter = chapter
                 cache.saveClean(chapter)
@@ -774,6 +845,7 @@ final class ChapterEditorStore: ObservableObject {
             writingPhase = .idle
             pendingExemptionNames = []
             currentValidationReason = nil
+            Task { [weak self] in await self?.loadCandidates(chapterId: chapterId, quietly: true) }
         case "failed":
             applyJobFailure(status, chapterId: chapterId, announce: announceFailure)
         case "cancelled":
@@ -812,10 +884,9 @@ final class ChapterEditorStore: ObservableObject {
         )
         if let reason = Self.validationReason(from: status.violations) {
             currentValidationReason = reason
-        } else if status.errorCode != "revision_failed" && status.errorCode != "writer_expansion_failed" {
-            // A Reviser transport/provider failure is not another programmatic
-            // validation result; do not leave the previous attempt's reason on
-            // screen as though it explained the model-service failure.
+        } else if status.errorCode != "writer_minimum_failed" {
+            // A provider failure is not a deterministic validation result; do
+            // not leave a previous explanation on screen as though it caused it.
             currentValidationReason = nil
         }
         pendingExemptionNames = []
@@ -912,13 +983,13 @@ final class ChapterEditorStore: ObservableObject {
         switch status.errorContext?.agentRole {
         case "memory_selector": return .memorySelection
         case "writer": return .drafting
-        case "reviser": return .validationAndRevision
+        case "checker": return .bibleChecking
         case "extractor": return .extraction
         default:
             if status.kind == "extract" { return .extraction }
             switch status.errorCode {
-            case "revision_failed": return .validationAndRevision
-            case "writer_expansion_failed": return .drafting
+            case "checker_failed": return .bibleChecking
+            case "writer_minimum_failed": return .drafting
             default: return .drafting
             }
         }
@@ -926,7 +997,7 @@ final class ChapterEditorStore: ObservableObject {
 
     private static func isActiveJobPhase(_ phase: String) -> Bool {
         switch phase {
-        case "selecting_memory", "writing", "revising", "extracting": return true
+        case "selecting_memory", "writing", "validating", "checking", "revising", "extracting": return true
         default: return false
         }
     }
@@ -1166,7 +1237,7 @@ final class AgentSettingsStore: ObservableObject {
 
     func savePersona(_ persona: AgentPersona) async {
         do {
-            let payload = AgentPersonaPayload(system_prompt: persona.systemPrompt)
+            let payload = AgentPersonaPayload(editable_persona: persona.editablePersona)
             let saved: AgentPersona = try await session.api.request("/agent-personas/\(persona.agentRole)", method: "PATCH", body: payload)
             if let idx = personas.firstIndex(where: { $0.agentRole == saved.agentRole }) {
                 personas[idx] = saved
@@ -1201,22 +1272,26 @@ private struct ChapterCreatePayload: Encodable, Sendable {
 struct ChapterPatchPayload: Encodable, Sendable {
     var title: String
     var user_prompt: String
-    var target_word_count: Int
-    var author_note: String
     var draft_text: String
     var summary: String
     var headline: String
+    var long_summary: String
+    var state_changes: [JSONValue]
+    var unresolved_items: [JSONValue]
+    var atomic_memories: [JSONValue]
     var character_links: [ChapterLink]
     var exempted_character_names: [String]
 
     init(_ chapter: Chapter) {
         title = chapter.title
         user_prompt = chapter.userPrompt
-        target_word_count = chapter.targetWordCount
-        author_note = chapter.authorNote
         draft_text = chapter.draftText
         summary = chapter.summary
         headline = chapter.headline
+        long_summary = chapter.longSummary
+        state_changes = chapter.stateChanges
+        unresolved_items = chapter.unresolvedItems
+        atomic_memories = chapter.atomicMemories
         character_links = chapter.characterLinks
         exempted_character_names = chapter.exemptedCharacterNames
     }
@@ -1320,5 +1395,5 @@ private struct AgentBindingPayload: Encodable, Sendable {
 }
 
 private struct AgentPersonaPayload: Encodable, Sendable {
-    let system_prompt: String
+    let editable_persona: String
 }

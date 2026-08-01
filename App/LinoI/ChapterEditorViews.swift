@@ -170,6 +170,7 @@ private struct LinoIChapterEditor: View {
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var editor: ChapterEditorStore
     @State private var showingImport = false
+    @State private var confirmingCheckerOverride = false
     @State private var draftMode: DraftMode = .preview
 
     @Binding var scrollPosition: ScrollPosition
@@ -187,6 +188,12 @@ private struct LinoIChapterEditor: View {
             LinoIImportDraftSheet()
                 .presentationDetents([.large])
         }
+        .confirmationDialog("忽略 Bible 检查并接受？", isPresented: $confirmingCheckerOverride, titleVisibility: .visible) {
+            Button("确认忽略并接受", role: .destructive) { acceptTapped(overrideChecker: true) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("这会保留当前候选稿，并以你的明确决定继续提取归档。")
+        }
     }
 
     private var editingContent: some View {
@@ -200,6 +207,7 @@ private struct LinoIChapterEditor: View {
                 inputSection
                 characterSection
                 handoffSection
+                writingTransparencySection
                 if let chapter = editor.currentChapter, showExtraction(chapter) {
                     extractionSection(chapter)
                         .transition(.opacity.combined(with: .offset(y: 6)))
@@ -276,16 +284,6 @@ private struct LinoIChapterEditor: View {
                 minHeight: 220,
                 placeholder: "本章节 Bible，情节最高权威。"
             )
-            VStack(alignment: .leading, spacing: 8) {
-                LinoISectionLabel("目标字数")
-                LinoINumberField("目标字数", value: targetWordBinding)
-            }
-            LinoIEditor(
-                title: "作者对本章的备注",
-                text: chapterBinding(\.authorNote),
-                minHeight: 120,
-                placeholder: "可填写节奏、视角、氛围、禁区或其他只针对本章的要求。"
-            )
         }
         .padding(14)
         .linoGlass(cornerRadius: 20)
@@ -338,7 +336,7 @@ private struct LinoIChapterEditor: View {
 
     private var handoffSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            stageHeader(index: "3", title: "正文与交稿", subtitle: "字数不足由 Writer 扩写；超长或其他程序违规交给 Reviser。")
+            stageHeader(index: "3", title: "正文与交稿", subtitle: "Writer 一次完成整章；正文需至少 4000 字且正常结束，不设产品上限。")
             writingControlPanel
             LinoISegmented(
                 options: DraftMode.allCases,
@@ -474,8 +472,73 @@ private struct LinoIChapterEditor: View {
                 }
                 .buttonStyle(LinoISuccessButtonStyle())
                 .disabled(!canAccept)
+                if hasDraft && !editor.writingPhase.isActive && !checkerAllowsAcceptance {
+                    Button("忽略检查并接受") { confirmingCheckerOverride = true }
+                        .buttonStyle(LinoITintButtonStyle())
+                }
             }
         }
+    }
+
+    private var writingTransparencySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            DisclosureGroup("本次写作上下文") {
+                if let context = editor.memoryContext {
+                    Text(context.brief.isEmpty ? "没有采用历史记忆。" : context.brief)
+                        .font(.footnote).foregroundStyle(LinoTheme.body).fixedSize(horizontal: false, vertical: true)
+                    if !context.previousTail.isEmpty { labeledText("上一章尾段", context.previousTail) }
+                    if let count = context.characterCount { Text("实际上下文：\(count) 字符 · \(context.sources.count) 条来源").font(.caption).foregroundStyle(LinoTheme.muted) }
+                    ForEach(context.sources) { source in
+                        labeledText("来源\(source.chapterIndex.map { " · 第 \($0) 章" } ?? "")", source.excerpt ?? "来源内容不可用")
+                    }
+                    ForEach(context.conflicts) { conflict in
+                        labeledText("Bible 冲突提示", [conflict.memoryEvidence, conflict.bibleEvidence, conflict.reason].compactMap { $0 }.joined(separator: "\n"))
+                    }
+                } else { Text("等待本次生成完成后显示实际采用的记忆。") .font(.caption).foregroundStyle(LinoTheme.muted) }
+            }
+            DisclosureGroup("候选稿（\(editor.draftCandidates.count)）") {
+                if editor.candidatesLoading { ProgressView() }
+                ForEach(editor.draftCandidates) { candidate in
+                    DisclosureGroup {
+                        Text(candidate.draftText)
+                            .font(.caption)
+                            .foregroundStyle(LinoTheme.body)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !candidate.isCurrent {
+                            Button("选择这份候选稿") { Task { if let chapter = await editor.selectCandidate(candidate) { workspace.upsert(chapter) } } }
+                                .buttonStyle(LinoITintButtonStyle(compact: true))
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(candidate.displaySource) · \(candidate.nonWhitespaceCount) 字\(candidate.isCurrent ? " · 当前" : "")").font(.footnote.weight(.semibold))
+                            Text(candidate.checkerResult?.displayVerdict.checkerLabel ?? "等待检查").font(.caption).foregroundStyle(LinoTheme.muted)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                if !editor.draftCandidates.isEmpty { Button("刷新候选") { Task { await editor.loadCandidates() } }.buttonStyle(LinoITintButtonStyle(compact: true)) }
+            }
+            DisclosureGroup("Bible 检查结果") {
+                checkerPanel
+            }
+        }
+        .padding(14).linoGlass(cornerRadius: 20)
+    }
+
+    @ViewBuilder private var checkerPanel: some View {
+        let result = editor.checkerResult
+        Text((result?.displayVerdict ?? "unavailable").checkerLabel).font(.footnote.weight(.semibold)).foregroundStyle(result?.isPassed == true ? LinoTheme.success : LinoTheme.warning)
+        if let issues = result?.issues, !issues.isEmpty {
+            ForEach(issues) { issue in
+                VStack(alignment: .leading, spacing: 3) { labeledText("正文证据", issue.draftEvidence); labeledText("Bible 证据", issue.bibleEvidence); Text(issue.reason).font(.caption).foregroundStyle(LinoTheme.muted) }
+            }
+        } else { Text(result?.displayVerdict == "unavailable" ? "正文已生成，Bible 检查尚不可用。" : "Checker 只检查剧情边界，不评价文风。").font(.caption).foregroundStyle(LinoTheme.muted) }
+        HStack { Button(editor.checkerRefreshing ? "检查中" : "重新检查") { Task { _ = await editor.rerunChecker() } }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.checkerRefreshing || !hasDraft); Button("编辑后检查") { draftMode = .edit }.buttonStyle(LinoITintButtonStyle(compact: true)) }
+    }
+
+    private func labeledText(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) { Text(title).font(.caption2.weight(.semibold)).foregroundStyle(LinoTheme.muted); Text(value).font(.caption).foregroundStyle(LinoTheme.body).fixedSize(horizontal: false, vertical: true) }
     }
 
     private func extractionSection(_ chapter: Chapter) -> some View {
@@ -491,6 +554,15 @@ private struct LinoIChapterEditor: View {
                 minHeight: 120,
                 placeholder: "本章梗概会作为后续章节 Memory Selector 的候选记忆。"
             )
+            LinoIEditor(
+                title: "章节长摘要",
+                text: chapterBinding(\.longSummary),
+                minHeight: 160,
+                placeholder: "记录更完整的情节经过，供后续 Memory Selector 压缩使用。"
+            )
+            archiveItems("状态变化", chapter.stateChanges)
+            archiveItems("未决事项", chapter.unresolvedItems)
+            archiveItems("原子记忆", chapter.atomicMemories)
             Text("修改会影响后续章节的候选记忆。")
                 .font(.caption)
                 .foregroundStyle(LinoTheme.warning)
@@ -501,13 +573,27 @@ private struct LinoIChapterEditor: View {
                     }
                 }
             } label: {
-                Text(editor.isSaving ? "保存中" : "保存梗概与大事记")
+                Text(editor.isSaving ? "保存中" : "保存归档记忆")
             }
             .buttonStyle(LinoITintButtonStyle())
             .disabled(editor.writingPhase.isActive)
         }
         .padding(14)
         .linoGlass(cornerRadius: 20)
+    }
+
+    @ViewBuilder private func archiveItems(_ title: String, _ items: [JSONValue]) -> some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                LinoISectionLabel(title)
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    Text("• \(item.description)")
+                        .font(.caption)
+                        .foregroundStyle(LinoTheme.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
     private func stageHeader(index: String, title: String, subtitle: String) -> some View {
@@ -542,12 +628,13 @@ private struct LinoIChapterEditor: View {
         hasDraft ? "重新生成" : "生成"
     }
 
+    private var checkerAllowsAcceptance: Bool { editor.checkerResult?.isPassed == true }
     private var canAccept: Bool {
         guard hasDraft, !editor.writingPhase.isActive else { return false }
         if editor.writingPhase.isFailed {
             return editor.writingPhase.currentStage == .extraction
         }
-        return true
+        return checkerAllowsAcceptance
     }
 
     private var retryFailureAction: (() -> Void)? {
@@ -583,13 +670,6 @@ private struct LinoIChapterEditor: View {
         chapter.status == "finalized" || !chapter.summary.isEmpty || !chapter.headline.isEmpty
     }
 
-    private var targetWordBinding: Binding<Int> {
-        Binding(
-            get: { editor.currentChapter?.targetWordCount ?? 3000 },
-            set: { editor.editTargetWordCount($0) }
-        )
-    }
-
     private func chapterBinding(_ keyPath: WritableKeyPath<Chapter, String>) -> Binding<String> {
         Binding(
             get: { editor.currentChapter?[keyPath: keyPath] ?? "" },
@@ -618,9 +698,9 @@ private struct LinoIChapterEditor: View {
         return "\(character.name) · \(character.role)"
     }
 
-    private func acceptTapped() {
+    private func acceptTapped(overrideChecker: Bool = false) {
         Task {
-            if let chapter = await editor.accept() {
+            if let chapter = await editor.accept(overrideChecker: overrideChecker) {
                 workspace.upsert(chapter)
             }
         }

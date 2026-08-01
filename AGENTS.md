@@ -7,7 +7,7 @@
 - 仓库目录名是 `Ictw`；产品内部历史标识仍使用 `LinoI`，不要因仓库改名批量替换。
 - 客户端为 SwiftUI iOS App（target `LinoI`，Bundle ID `com.lino.linoi`）和 macOS App（target `LinoIMac`，产品名 `ICTW`，Bundle ID `com.lino.linoi.mac`）。
 - 后端位于 `Backend/`，使用 Python 3.12、FastAPI、SQLAlchemy、Alembic 与 SQLite。
-- 写作链为 Memory Selector → Writer → Reviser（按需，最多两次）→ 用户接受 → Extractor。
+- v1.6 写作链为 Memory Selector → Writer → Checker → 用户接受 → Extractor；Reviser 已移除。
 - 云端拓扑、发版、回滚和运维命令记录在仓库外的 `/Users/linotsai/Lino/hk_info.md`；运维动作后同步更新。
 - `Backend/.env`、生产数据库和 `.deploy/` 内的部署凭证不进 Git；真实数据只在云端生产库。
 
@@ -20,7 +20,7 @@
 
 - 生产表结构只允许通过 `alembic upgrade head` 变更；应用启动不得 `create_all`。
 - 任何部署或迁移前先备份生产 `linoi.db`，随后验证 SQLite integrity、foreign keys 和 Alembic head。
-- 字数按去空白字符数计算，合格区间为目标的 80%–120%；常量在 `Backend/app/services/context.py`。
+- v1.6 字数按去空白字符数计算，正文只要求不少于 4000 字且正常结束，不设产品上限；首次长度／截断失败最多从同一输入完整重写一次，常量在 `Backend/app/services/context.py`。
 - 人物选择是本章允许出现人物集合的上限；历史记忆与 Extractor 输出不会自动授权未选人物。
 - 能程序校验的约束必须程序复检，不能依赖模型自报“已修好”。
 - `thinking`/`effort` 是否发送由 `model_capabilities.py` 决定；实际非思考请求统一发送 `top_p=0.95`（包括未知模型），思考请求不发送 `top_p`。
@@ -47,6 +47,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
+- 用户已于 2026-08-01 授权一次性完成 `v1.6.0(15)` 版本号、香港现网 Backend 部署与迁移、macOS 正式 App 换装、tag 和 GitHub Release；iOS 由用户处理。
 - `v1.5.0(14)` 已于 2026-07-28 完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 香港云迁移宁波云已暂停，恢复条件、范围和顺序以 `PROJECT_PLAN.md` 的「暂停／待恢复」段落为准。
 - ICP 备案、非标准 HTTPS 端口或已备案域名的路线未确定前，只能做本地计划、只读盘点和新机离线准备，不得切 DNS 或停生产。

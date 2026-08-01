@@ -172,7 +172,7 @@ struct LinoIGenerationStatusPanel: View {
         if state.steps.allSatisfy({ $0.state == .completed }) {
             return "本章流程已完成"
         }
-        if state.steps.first(where: { $0.stage == .validationAndRevision })?.state == .completed {
+        if state.steps.first(where: { $0.stage == .bibleChecking })?.state == .completed {
             return "正文已就绪，等待接受并提取"
         }
         return "尚未开始生成"
@@ -499,6 +499,8 @@ struct LinoIPrimaryButtonStyle: ButtonStyle {
 }
 
 struct LinoISuccessButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 14, weight: .semibold))
@@ -507,7 +509,8 @@ struct LinoISuccessButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .background(LinoTheme.successGradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .opacity(configuration.isPressed ? 0.86 : 1)
+            .saturation(isEnabled ? 1 : 0)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.86 : 1) : 0.42)
     }
 }
 

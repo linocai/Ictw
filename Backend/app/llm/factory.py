@@ -38,16 +38,12 @@ def get_writer_client(db: Session = Depends(get_db)):
     return build_llm_client(db, "writer")
 
 
-def get_compressor_client(db: Session = Depends(get_db)):
-    return build_llm_client(db, "reviser")
-
-
-def get_reviser_client(db: Session = Depends(get_db)):
-    return build_llm_client(db, "reviser")
-
-
 def get_memory_selector_client(db: Session = Depends(get_db)):
     return build_llm_client(db, "memory_selector")
+
+
+def get_checker_client(db: Session = Depends(get_db)):
+    return build_llm_client(db, "checker")
 
 
 def get_extractor_client(db: Session = Depends(get_db)):

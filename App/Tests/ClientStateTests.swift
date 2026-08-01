@@ -121,9 +121,9 @@ private func testCachedFailureRestoresSafeDetails() throws {
 
     let chapter = try makeChapter()
     let phase = ChapterWritingPhase.failed(
-        code: "revision_failed",
-        message: "修订未通过",
-        stage: .validationAndRevision
+        code: "checker_failed",
+        message: "Bible 检查未完成",
+        stage: .bibleChecking
     )
     ChapterTaskOutcomeStore.save(
         phase: phase,
@@ -181,6 +181,28 @@ private func testCachedFailureInvalidatesOnAnyInputChangeOrFinalization() throws
     )
 }
 
+private func testV16ContextAndCheckerDecode() throws {
+    let object: [String: Any] = [
+        "chapter_id": "chapter-1", "kind": "write", "phase": "done",
+        "memory_context": [
+            "memory_brief": [["text": "第 1 章事实"]],
+            "previous_ending": "上一章结尾",
+            "memory_non_whitespace_count": 8,
+            "sources": [["id": "chapter:1:summary", "chapter_index": 1, "memory_type": "summary", "source_excerpt": "原始依据"]],
+            "conflicts": [["text": "历史记录与 Bible 可能不同", "source_ids": ["chapter:1:summary"]]],
+        ],
+        "checker_result": ["verdict": "suspect", "issues": [["kind": "new_plot", "draft_evidence": "正文片段", "bible_evidence": "Bible 片段", "reason": "会影响后续事实"]], "draft_fingerprint": "fingerprint"],
+    ]
+    let data = try JSONSerialization.data(withJSONObject: object)
+    let status = try JSONDecoder().decode(WriteJobStatus.self, from: data)
+    try expect(status.memoryContext?.brief == "第 1 章事实", "v1.6 memory brief must decode")
+    try expect(status.memoryContext?.previousTail == "上一章结尾", "previous ending must stay separate")
+    try expect(status.memoryContext?.sources.first?.excerpt == "原始依据", "source excerpts must decode")
+    try expect(status.checkerResult?.displayVerdict == "suspect", "checker verdict must decode")
+    try expect(status.checkerResult?.issues?.first?.bibleEvidence == "Bible 片段", "checker evidence must decode")
+    try expect(ChapterWritingPhase.legacyRevising.label == "旧版任务记录", "legacy phase must not expose Reviser")
+}
+
 @main
 private struct ClientStateTestRunner {
     static func main() throws {
@@ -190,6 +212,7 @@ private struct ClientStateTestRunner {
         try testNewerLocalInputsDiscardServerTerminal()
         try testCachedFailureRestoresSafeDetails()
         try testCachedFailureInvalidatesOnAnyInputChangeOrFinalization()
+        try testV16ContextAndCheckerDecode()
         print("Client state tests passed")
     }
 }

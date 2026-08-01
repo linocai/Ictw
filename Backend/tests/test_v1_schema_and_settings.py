@@ -16,6 +16,7 @@ from app.models import AgentModelBinding, LLMProfile
 from app.routers.settings import _sanitize_profile_bindings, patch_binding, patch_profile
 from app.schemas.settings import AgentModelBindingPatch, LLMProfilePatch
 from app.services.model_capabilities import resolve_capabilities
+from app.services.personas import DEFAULT_PERSONAS
 
 
 def test_registered_model_capabilities_are_explicit() -> None:
@@ -151,7 +152,7 @@ def test_profile_delete_sets_agent_binding_to_null(tmp_path) -> None:
         assert db.get(AgentModelBinding, "writer").llm_profile_id is None
 
 
-def test_v1_migration_preserves_notes_bindings_and_child_rows(tmp_path, monkeypatch) -> None:
+def test_v1_6_migration_preserves_notes_custom_persona_and_child_rows(tmp_path, monkeypatch) -> None:
     database_path = tmp_path / "migration.db"
     database_url = f"sqlite:///{database_path}"
     monkeypatch.setenv("DATABASE_URL", database_url)
@@ -200,11 +201,25 @@ def test_v1_migration_preserves_notes_bindings_and_child_rows(tmp_path, monkeypa
         assert migrated.execute(text("SELECT count(*) FROM chapter_characters")).scalar_one() == 1
         assert migrated.execute(text("SELECT count(*) FROM character_events")).scalar_one() == 1
         assert migrated.execute(
-            text("SELECT system_prompt FROM agent_personas WHERE agent_role='reviser'")
-        ).scalar_one() == "custom compressor"
+            text("SELECT count(*) FROM agent_personas WHERE agent_role IN ('reviser', 'compressor')")
+        ).scalar_one() == 0
+        assert migrated.execute(
+            text("SELECT system_prompt FROM agent_personas WHERE agent_role='writer'")
+        ).scalar_one() == "writer persona"
+        assert migrated.execute(
+            text("SELECT system_prompt FROM agent_personas WHERE agent_role='memory_selector'")
+        ).scalar_one() == DEFAULT_PERSONAS["memory_selector"]
         assert migrated.execute(
             text("SELECT llm_profile_id FROM agent_model_bindings WHERE agent_role='memory_selector'")
         ).scalar_one() == "lp"
+        assert migrated.execute(
+            text("SELECT llm_profile_id FROM agent_model_bindings WHERE agent_role='checker'")
+        ).scalar_one() == "lp"
+        assert migrated.execute(text("SELECT count(*) FROM chapter_draft_candidates")).scalar_one() == 0
+        columns = {row[1] for row in migrated.exec_driver_sql("PRAGMA table_info(job_runs)").fetchall()}
+        assert {"memory_context", "checker_result", "bible_sha256", "draft_fingerprint"} <= columns
+        chapter_columns = {row[1] for row in migrated.exec_driver_sql("PRAGMA table_info(chapters)").fetchall()}
+        assert {"long_summary", "state_changes", "unresolved_items", "atomic_memories"} <= chapter_columns
         assert migrated.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
     get_settings.cache_clear()
 

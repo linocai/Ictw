@@ -39,6 +39,12 @@ class ChapterPatch(_AuthorNoteCompat):
     draft_text: str | None = None
     summary: str | None = None
     headline: str | None = None
+    # v1.6 additive archive fields.  Older clients neither send nor need to
+    # decode them; hand edits become the next Selector's source material.
+    long_summary: str | None = None
+    state_changes: list[dict] | None = None
+    unresolved_items: list[dict] | None = None
+    atomic_memories: list[dict] | None = None
     exempted_character_names: list[str] | None = None
     character_links: list[ChapterCharacterLink] | None = None
 
@@ -74,6 +80,10 @@ class ChapterRead(ORMModel):
     draft_text: str
     summary: str
     headline: str
+    long_summary: str = ""
+    state_changes: list[dict] = Field(default_factory=list)
+    unresolved_items: list[dict] = Field(default_factory=list)
+    atomic_memories: list[dict] = Field(default_factory=list)
     exempted_character_names: list[str] = Field(default_factory=list)
     status: str
     source: str
@@ -84,6 +94,32 @@ class ChapterRead(ORMModel):
 
 class WriteRequest(BaseModel):
     replace_draft: bool = False
+
+
+class CheckerAcceptRequest(BaseModel):
+    # Required for an invalid/unavailable Checker state; omitted remains
+    # compatible for the normal passed path used by old clients.
+    override_checker: bool = False
+
+
+class DraftCandidateRead(ORMModel):
+    id: str
+    chapter_id: str
+    job_id: str | None = None
+    attempt: int
+    draft_text: str
+    non_whitespace_count: int
+    finish_reason: str | None = None
+    deterministic_violations: list[dict] | None = None
+    checker_result: dict | None = None
+    bible_sha256: str | None = None
+    draft_fingerprint: str | None = None
+    is_current: bool
+    created_at: datetime
+
+
+class CandidateSelectionRequest(BaseModel):
+    candidate_id: str
 
 
 class WriteJobStatus(BaseModel):
@@ -104,3 +140,6 @@ class WriteJobStatus(BaseModel):
     chapter: ChapterRead | None = None
     updated_character_ids: list[str] | None = None
     added_event_ids: list[str] | None = None
+    memory_context: dict | None = None
+    checker_result: dict | None = None
+    draft_candidate: DraftCandidateRead | None = None

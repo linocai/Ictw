@@ -1,9 +1,9 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前已发布版本为 `1.5.0`：生产 Backend 已部署，macOS App build 14 已换装并发布，iOS 安装由用户处理。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 `1.6.0(15)`；iOS 安装由用户处理。写作流程为：
 
 ```text
-Memory Selector → Writer（初稿/扩写）→ Reviser（压缩与其他违规修订）→ 用户接受 → Extractor
+Memory Selector → Writer → Checker → 用户接受 → Extractor
 ```
 
 ## 项目结构
@@ -20,17 +20,17 @@ Memory Selector → Writer（初稿/扩写）→ Reviser（压缩与其他违规
 
 ## 当前能力
 
-- 写作与提取均为后台任务：`POST /write`、`POST /accept` 立即返回 `WriteJobStatus`，通过 `GET /chapters/{id}/job` 轮询到终态；任务状态持久化到 `job_runs`，重启后非终态任务标记 failed。v1.5 客户端在加载章节时会主动对账最新任务，后端用 additive 的 `job_id` / `outcome_current` 区分当前终态与已被后续编辑、重开或成功结果取代的旧终态。
-- 字数按去空白字符计，合格区间为目标的 80%~120%；记忆预算固定为 1800 去空白字符，章节梗概装箱最多 2 条。
-- Memory Selector 从同书、已完成、早于当前章的历史块中选择工作记忆。
+- 写作与提取均为后台任务：`POST /write`、`POST /accept` 立即返回 `WriteJobStatus`，通过 `GET /chapters/{id}/job` 轮询到终态；任务状态持久化到 `job_runs`，重启后非终态任务标记 failed。客户端加载章节时会主动对账最新任务，后端用 `job_id` / `outcome_current` 区分当前终态与已失效旧结果。
+- 字数按去空白字符计，只要求正文不少于 4000 字且正常结束，不设产品上限；首次长度或截断失败最多从同一输入完整重写一次。
+- Memory Selector 从同书已完成历史中召回较多候选，再压缩成短而密集、逐条带来源的记忆简报；上一章尾段独立提供开场衔接。
 - Writer 使用人物白名单，历史记忆不会自动授予人物本章出场权限；短名校验对单字名走左边界启发式（“森林”不再误命中“林”），并支持章级豁免。
-- 字数不足或输出截断只由 Writer 扩写；超长、人物白名单和其他程序违规由 Reviser 修订，二者各最多两次，失败恢复生成前草稿。
-- Extractor 仅更新本章已选人物，章节结果和人物事件事务化提交；单条人物事件可改/删，事件文本上限 60 去空白字符。
+- Writer 每次从同一份 Bible 与记忆上下文完整生成整章，不扩写旧稿；所有候选完整保留，可在双端查看、比较和切换。
+- Checker 只举证 Bible 遗漏、矛盾和剧情越界，不修改正文或评价文风；用户可编辑后复查，或明确忽略结果后接受。
+- Extractor 只从用户接受的正文提取长摘要、状态变化、未决事项、原子记忆和已选人物更新，事务化提交并为后续记忆提供来源。
 - 每次 LLM 调用写入 `llm_call_audits`（role/model/耗时/usage/finish_reason/error_code），绝不记录 API Key、prompt 或正文。
-- 四个 Agent 可独立绑定模型、人格、思考开关与思考强度。
+- 四个现役 Agent 可独立绑定模型、可编辑人格、思考开关与思考强度；不可编辑程序协议始终生效。
 - 支持 DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash 的显式推理能力。
-- Writer 会在固定 1800 字历史预算内读取由 Memory Selector 选择起点的紧邻上一章结尾原文，作为低于本章 Bible 的开场衔接参考。
-- Reviser 工作时双端实时展示程序校验未通过的具体原因，并可接管其他客户端已经启动的章节任务。
+- 双端可展开查看实际记忆简报、上一章尾段、来源、冲突提示、候选全文和 Checker 双侧证据。
 - 支持章节删除、人物事件级联和章节序号收拢。
 - 旧 `chapter_style` wire 字段在兼容期继续可读写，内部统一为 `author_note`。
 
@@ -81,7 +81,7 @@ cd ..
 App/Tests/run_client_state_tests.sh
 ```
 
-测试覆盖数据库迁移、SQLite 外键、模型 capability、记忆筛选、人物预检、Writer/Reviser 路由与次数上限、失败恢复、任务接管、Extractor 事务、章节删除，以及客户端冷启动/跨设备终态对账与失败缓存失效等场景。
+测试覆盖数据库迁移、SQLite 外键、模型 capability、记忆压缩与来源、人物预检、Writer 单次完整重写上限、候选保留、Checker 三档结论与显式覆盖、Extractor 归档事务、章节删除，以及客户端冷启动/跨设备终态对账与失败缓存失效等场景。
 
 ## 生产部署
 
@@ -92,6 +92,6 @@ App/Tests/run_client_state_tests.sh
 3. 部署兼容后端。
 4. 执行 `.venv/bin/python -m alembic upgrade head`。
 5. 启动服务并检查 `/api/v1/health`。
-6. 完成 Memory Selector、Writer、Reviser、Extractor 烟测。
+6. 完成 Memory Selector、Writer、Checker、Extractor 烟测。
 
 生产服务器配置、`.env`、SQLite 数据和 SSH 凭证不进入仓库。

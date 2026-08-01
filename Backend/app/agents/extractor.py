@@ -3,16 +3,33 @@ from __future__ import annotations
 from typing import Any
 
 from app.llm.base import LLMClient
+from app.services.personas import compose_system_prompt
 
 
 def extractor_schema(selected_character_ids: list[str]) -> dict[str, Any]:
     character_id_schema: dict[str, Any] = {"type": "string", "enum": selected_character_ids}
     arrays_extra = {"maxItems": 0} if not selected_character_ids else {}
+    archive_item = {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string"},
+            "kind": {"type": "string"},
+            "character_id": {"anyOf": [character_id_schema, {"type": "null"}]},
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    }
     return {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
         "headline": {"type": "string"},
+        # ``summary`` remains the compact legacy field.  ``long_summary`` is
+        # the v1.6 archive used by later memory recall.
+        "long_summary": {"type": "string"},
+        "state_changes": {"type": "array", "items": archive_item},
+        "unresolved_items": {"type": "array", "items": archive_item},
+        "atomic_memories": {"type": "array", "items": archive_item},
         "character_events": {
             "type": "array",
             "items": {
@@ -39,14 +56,18 @@ def extractor_schema(selected_character_ids: list[str]) -> dict[str, Any]:
             **arrays_extra,
         },
     },
-    "required": ["summary", "headline", "character_events", "dynamic_fields_patch"],
+    "required": [
+        "summary", "headline", "long_summary", "state_changes", "unresolved_items", "atomic_memories",
+        "character_events", "dynamic_fields_patch",
+    ],
+    "additionalProperties": False,
     }
 
 
 class ExtractorAgent:
-    def __init__(self, llm: LLMClient, system_prompt: str) -> None:
+    def __init__(self, llm: LLMClient, editable_persona: str) -> None:
         self.llm = llm
-        self.system_prompt = system_prompt
+        self.system_prompt = compose_system_prompt("extractor", editable_persona)
 
     def extract(self, user_message: str, selected_character_ids: list[str] | None = None) -> dict[str, Any]:
         return self.llm.complete_json(

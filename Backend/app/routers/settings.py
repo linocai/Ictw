@@ -25,7 +25,7 @@ from app.services.model_capabilities import (
     sanitized_temperature,
     temperature_sendable,
 )
-from app.services.personas import AGENT_ROLES, DEFAULT_PERSONAS
+from app.services.personas import AGENT_ROLES, DEFAULT_PERSONAS, PROGRAM_PROTOCOLS
 
 router = APIRouter(tags=["settings"])
 
@@ -70,27 +70,40 @@ def _sanitize_profile_bindings(db: Session, profile: LLMProfile) -> None:
 
 
 @router.get("/agent-personas", response_model=list[AgentPersonaRead])
-def list_personas(db: Session = Depends(get_db)) -> list[AgentPersona]:
-    return list(db.scalars(select(AgentPersona).order_by(AgentPersona.agent_role)).all())
+def list_personas(db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    personas = {item.agent_role: item for item in db.scalars(select(AgentPersona)).all()}
+    return [_persona_response(role, personas.get(role)) for role in AGENT_ROLES]
+
+
+def _persona_response(role: str, persona: AgentPersona | None) -> dict[str, object]:
+    editable_persona = persona.system_prompt if persona is not None else DEFAULT_PERSONAS[role]
+    return {
+        "agent_role": role,
+        "system_prompt": editable_persona,
+        "editable_persona": editable_persona,
+        "default_persona": DEFAULT_PERSONAS[role],
+        "program_protocol": PROGRAM_PROTOCOLS[role],
+        "updated_at": persona.updated_at if persona is not None else None,
+    }
 
 
 @router.patch("/agent-personas/{agent_role}", response_model=AgentPersonaRead)
-def patch_persona(agent_role: str, payload: AgentPersonaPatch, db: Session = Depends(get_db)) -> AgentPersona:
+def patch_persona(agent_role: str, payload: AgentPersonaPatch, db: Session = Depends(get_db)) -> dict[str, object]:
     if agent_role not in AGENT_ROLES:
         raise HTTPException(status_code=404, detail="agent role not found")
     persona = db.get(AgentPersona, agent_role)
     if persona is None:
-        persona = AgentPersona(agent_role=agent_role, system_prompt=payload.system_prompt)
+        persona = AgentPersona(agent_role=agent_role, system_prompt=payload.value)
         db.add(persona)
     else:
-        persona.system_prompt = payload.system_prompt
+        persona.system_prompt = payload.value
     db.commit()
     db.refresh(persona)
-    return persona
+    return _persona_response(agent_role, persona)
 
 
 @router.post("/agent-personas/{agent_role}/reset", response_model=AgentPersonaRead)
-def reset_persona(agent_role: str, db: Session = Depends(get_db)) -> AgentPersona:
+def reset_persona(agent_role: str, db: Session = Depends(get_db)) -> dict[str, object]:
     if agent_role not in AGENT_ROLES:
         raise HTTPException(status_code=404, detail="agent role not found")
     persona = db.get(AgentPersona, agent_role)
@@ -101,7 +114,7 @@ def reset_persona(agent_role: str, db: Session = Depends(get_db)) -> AgentPerson
         persona.system_prompt = DEFAULT_PERSONAS[agent_role]
     db.commit()
     db.refresh(persona)
-    return persona
+    return _persona_response(agent_role, persona)
 
 
 @router.get("/llm_profiles", response_model=list[LLMProfileRead])
@@ -172,8 +185,8 @@ def test_profile(profile_id: str, db: Session = Depends(get_db)) -> dict[str, st
 
 @router.get("/agent-model-bindings", response_model=list[AgentModelBindingRead])
 def list_bindings(db: Session = Depends(get_db)) -> list[dict[str, object]]:
-    bindings = db.scalars(select(AgentModelBinding).order_by(AgentModelBinding.agent_role)).all()
-    return [_binding_response(binding, db) for binding in bindings]
+    bindings = {item.agent_role: item for item in db.scalars(select(AgentModelBinding)).all()}
+    return [_binding_response(bindings[role], db) for role in AGENT_ROLES if role in bindings]
 
 
 @router.patch("/agent-model-bindings/{agent_role}", response_model=AgentModelBindingRead)

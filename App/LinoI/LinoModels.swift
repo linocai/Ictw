@@ -105,6 +105,10 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
     var draftText: String
     var summary: String
     var headline: String
+    var longSummary: String
+    var stateChanges: [JSONValue]
+    var unresolvedItems: [JSONValue]
+    var atomicMemories: [JSONValue]
     var status: String
     var source: String
     var updatedAt: String
@@ -113,6 +117,10 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, index, title, summary, status, source, headline
+        case longSummary = "long_summary"
+        case stateChanges = "state_changes"
+        case unresolvedItems = "unresolved_items"
+        case atomicMemories = "atomic_memories"
         case bookId = "book_id"
         case userPrompt = "user_prompt"
         case targetWordCount = "target_word_count"
@@ -131,13 +139,17 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         index = try container.decode(Int.self, forKey: .index)
         title = try container.decode(String.self, forKey: .title)
         userPrompt = try container.decode(String.self, forKey: .userPrompt)
-        targetWordCount = try container.decode(Int.self, forKey: .targetWordCount)
+        targetWordCount = try container.decodeIfPresent(Int.self, forKey: .targetWordCount) ?? 3000
         authorNote = try container.decodeIfPresent(String.self, forKey: .authorNote)
             ?? container.decodeIfPresent(String.self, forKey: .legacyChapterStyle)
             ?? ""
         draftText = try container.decode(String.self, forKey: .draftText)
         summary = try container.decode(String.self, forKey: .summary)
         headline = try container.decodeIfPresent(String.self, forKey: .headline) ?? ""
+        longSummary = try container.decodeIfPresent(String.self, forKey: .longSummary) ?? ""
+        stateChanges = try container.decodeIfPresent([JSONValue].self, forKey: .stateChanges) ?? []
+        unresolvedItems = try container.decodeIfPresent([JSONValue].self, forKey: .unresolvedItems) ?? []
+        atomicMemories = try container.decodeIfPresent([JSONValue].self, forKey: .atomicMemories) ?? []
         status = try container.decode(String.self, forKey: .status)
         source = try container.decode(String.self, forKey: .source)
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
@@ -157,6 +169,10 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         try container.encode(draftText, forKey: .draftText)
         try container.encode(summary, forKey: .summary)
         try container.encode(headline, forKey: .headline)
+        try container.encode(longSummary, forKey: .longSummary)
+        try container.encode(stateChanges, forKey: .stateChanges)
+        try container.encode(unresolvedItems, forKey: .unresolvedItems)
+        try container.encode(atomicMemories, forKey: .atomicMemories)
         try container.encode(status, forKey: .status)
         try container.encode(source, forKey: .source)
         try container.encode(updatedAt, forKey: .updatedAt)
@@ -234,10 +250,25 @@ struct AgentPersona: Codable, Identifiable, Hashable, Sendable {
     var id: String { agentRole }
     var agentRole: String
     var systemPrompt: String
+    var editablePersona: String
+    var defaultPersona: String
+    var programProtocol: String
 
     enum CodingKeys: String, CodingKey {
         case agentRole = "agent_role"
         case systemPrompt = "system_prompt"
+        case editablePersona = "editable_persona"
+        case defaultPersona = "default_persona"
+        case programProtocol = "program_protocol"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agentRole = try container.decode(String.self, forKey: .agentRole)
+        systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? ""
+        editablePersona = try container.decodeIfPresent(String.self, forKey: .editablePersona) ?? systemPrompt
+        defaultPersona = try container.decodeIfPresent(String.self, forKey: .defaultPersona) ?? editablePersona
+        programProtocol = try container.decodeIfPresent(String.self, forKey: .programProtocol) ?? ""
     }
 }
 
@@ -368,7 +399,7 @@ struct JobErrorContext: Codable, Sendable {
 /// `POST /accept` and polled via `GET /chapters/{id}/job`. There is no more
 /// SSE token stream — the client polls this endpoint until `phase` reaches a
 /// terminal value (`done` / `failed` / `cancelled`).
-struct WriteJobStatus: Codable, Sendable {
+struct WriteJobStatus: Decodable, Sendable {
     var chapterId: String
     var jobId: String?
     var outcomeCurrent: Bool?
@@ -382,6 +413,9 @@ struct WriteJobStatus: Codable, Sendable {
     var chapter: Chapter?
     var updatedCharacterIds: [String]?
     var addedEventIds: [String]?
+    var memoryContext: MemoryContext? = nil
+    var checkerResult: CheckerResult? = nil
+    var draftCandidate: DraftCandidate? = nil
 
     enum CodingKeys: String, CodingKey {
         case chapterId = "chapter_id"
@@ -394,7 +428,95 @@ struct WriteJobStatus: Codable, Sendable {
         case violations, chapter
         case updatedCharacterIds = "updated_character_ids"
         case addedEventIds = "added_event_ids"
+        case memoryContext = "memory_context"
+        case checkerResult = "checker_result"
+        case draftCandidate = "draft_candidate"
     }
+}
+
+struct MemoryContext: Decodable, Hashable, Sendable {
+    struct Source: Decodable, Hashable, Sendable, Identifiable {
+        var id: String
+        var chapterIndex: Int?
+        var kind: String?
+        var excerpt: String?
+        enum CodingKeys: String, CodingKey { case id, excerpt, kind; case chapterIndex = "chapter_index"; case memoryType = "memory_type"; case sourceExcerpt = "source_excerpt" }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            chapterIndex = try container.decodeIfPresent(Int.self, forKey: .chapterIndex)
+            kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? container.decodeIfPresent(String.self, forKey: .memoryType)
+            excerpt = try container.decodeIfPresent(String.self, forKey: .excerpt) ?? container.decodeIfPresent(String.self, forKey: .sourceExcerpt)
+        }
+    }
+    struct Conflict: Decodable, Hashable, Sendable, Identifiable {
+        var id: String { (memoryEvidence ?? "") + "|" + (bibleEvidence ?? "") }
+        var memoryEvidence: String?
+        var bibleEvidence: String?
+        var reason: String?
+        enum CodingKeys: String, CodingKey { case reason, text; case memoryEvidence = "memory_evidence"; case bibleEvidence = "bible_evidence" }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let text = try container.decodeIfPresent(String.self, forKey: .text)
+            memoryEvidence = try container.decodeIfPresent(String.self, forKey: .memoryEvidence) ?? text
+            bibleEvidence = try container.decodeIfPresent(String.self, forKey: .bibleEvidence)
+            reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        }
+    }
+    var brief: String
+    var previousTail: String
+    var sources: [Source]
+    var conflicts: [Conflict]
+    var characterCount: Int?
+    enum CodingKeys: String, CodingKey { case brief, sources, conflicts, memoryBrief = "memory_brief"; case previousTail = "previous_tail"; case previousEnding = "previous_ending"; case characterCount = "character_count"; case memoryCount = "memory_non_whitespace_count" }
+    init(from decoder: Decoder) throws {
+        struct Brief: Decodable { let text: String }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let briefs = try container.decodeIfPresent([Brief].self, forKey: .memoryBrief) ?? []
+        brief = try container.decodeIfPresent(String.self, forKey: .brief) ?? briefs.map(\.text).joined(separator: "\n")
+        previousTail = try container.decodeIfPresent(String.self, forKey: .previousTail) ?? container.decodeIfPresent(String.self, forKey: .previousEnding) ?? ""
+        sources = try container.decodeIfPresent([Source].self, forKey: .sources) ?? []
+        conflicts = try container.decodeIfPresent([Conflict].self, forKey: .conflicts) ?? []
+        characterCount = try container.decodeIfPresent(Int.self, forKey: .characterCount) ?? container.decodeIfPresent(Int.self, forKey: .memoryCount)
+    }
+}
+
+struct CheckerIssue: Decodable, Hashable, Sendable, Identifiable {
+    var id: String { "\(kind)|\(draftEvidence)|\(bibleEvidence)" }
+    var kind: String
+    var draftEvidence: String
+    var bibleEvidence: String
+    var reason: String
+    enum CodingKeys: String, CodingKey { case kind, reason; case draftEvidence = "draft_evidence"; case bibleEvidence = "bible_evidence" }
+}
+
+struct CheckerResult: Decodable, Hashable, Sendable {
+    var verdict: String?
+    var status: String?
+    var draftFingerprint: String?
+    var issues: [CheckerIssue]?
+    var errorCode: String?
+    enum CodingKeys: String, CodingKey { case verdict, status, issues; case draftFingerprint = "draft_fingerprint"; case errorCode = "error_code" }
+    var displayVerdict: String { verdict ?? status ?? "unavailable" }
+    var isPassed: Bool { displayVerdict == "passed" }
+}
+
+struct DraftCandidate: Decodable, Hashable, Sendable, Identifiable {
+    var id: String
+    var chapterId: String
+    var jobId: String?
+    var attempt: Int
+    var draftText: String
+    var nonWhitespaceCount: Int
+    var finishReason: String?
+    var deterministicViolations: [Violation]?
+    var checkerResult: CheckerResult?
+    var bibleSHA256: String?
+    var draftFingerprint: String?
+    var isCurrent: Bool
+    var createdAt: String
+    var displaySource: String { finishReason == "manual_edit" ? "手动编辑" : "第 \(attempt) 次" }
+    enum CodingKeys: String, CodingKey { case id, attempt; case chapterId = "chapter_id"; case jobId = "job_id"; case draftText = "draft_text"; case nonWhitespaceCount = "non_whitespace_count"; case finishReason = "finish_reason"; case deterministicViolations = "deterministic_violations"; case checkerResult = "checker_result"; case bibleSHA256 = "bible_sha256"; case draftFingerprint = "draft_fingerprint"; case isCurrent = "is_current"; case createdAt = "created_at" }
 }
 
 enum ChapterJobReconciliationDecision: Equatable, Sendable {
@@ -415,7 +537,7 @@ enum ChapterJobReconciler {
         hasLocalInputDivergence: Bool
     ) -> ChapterJobReconciliationDecision {
         switch status.phase {
-        case "selecting_memory", "writing", "revising", "extracting":
+        case "selecting_memory", "writing", "validating", "checking", "extracting", "revising":
             return .active
         case "done":
             return hasLocalInputDivergence ? .obsoleteTerminal : .currentTerminal
@@ -442,15 +564,17 @@ enum ChapterJobReconciler {
 enum ChapterGenerationStage: Int, CaseIterable, Equatable, Sendable {
     case memorySelection
     case drafting
-    case validationAndRevision
+    case deterministicValidation
+    case bibleChecking
     case extraction
     case completed
 
     var label: String {
         switch self {
-        case .memorySelection: return "选择记忆"
-        case .drafting: return "生成正文"
-        case .validationAndRevision: return "校验与修订"
+        case .memorySelection: return "整理记忆"
+        case .drafting: return "整章写作"
+        case .deterministicValidation: return "确定性校验"
+        case .bibleChecking: return "Bible 检查"
         case .extraction: return "提取归档"
         case .completed: return "完成"
         }
@@ -475,15 +599,17 @@ enum ChapterWritingPhase: Equatable, Sendable {
     case idle
     case selectingMemory
     case writing
-    case expanding(attempt: Int)
-    case revising(attempt: Int)
+    case writingAttempt(Int)
+    case validating
+    case checking
+    case legacyRevising
     case extracting
     case failed(code: String?, message: String, stage: ChapterGenerationStage?)
     case cancelled(message: String, stage: ChapterGenerationStage?)
 
     var isActive: Bool {
         switch self {
-        case .selectingMemory, .writing, .expanding, .revising, .extracting: return true
+        case .selectingMemory, .writing, .writingAttempt, .validating, .checking, .legacyRevising, .extracting: return true
         case .idle, .failed, .cancelled: return false
         }
     }
@@ -491,17 +617,19 @@ enum ChapterWritingPhase: Equatable, Sendable {
     /// True only for write-side phases. Extraction has no cancel endpoint.
     var isGenerating: Bool {
         switch self {
-        case .selectingMemory, .writing, .expanding, .revising: return true
+        case .selectingMemory, .writing, .writingAttempt, .validating, .checking, .legacyRevising: return true
         default: return false
         }
     }
 
     var label: String? {
         switch self {
-        case .selectingMemory: return "正在选择相关记忆"
-        case .writing: return "正在生成正文"
-        case .expanding(let attempt): return "Writer 第 \(attempt)/2 次扩写"
-        case .revising(let attempt): return "Reviser 第 \(attempt)/2 次修订"
+        case .selectingMemory: return "正在整理相关记忆"
+        case .writing: return "正在整章写作（第 1/2 次）"
+        case .writingAttempt(let attempt): return "正在整章写作（第 \(attempt)/2 次）"
+        case .validating: return "正在进行确定性校验"
+        case .checking: return "正在进行 Bible 检查"
+        case .legacyRevising: return "旧版任务记录"
         case .extracting: return "Extractor 正在整理本章记忆"
         case .failed(_, let message, _), .cancelled(let message, _): return message
         case .idle: return nil
@@ -522,7 +650,7 @@ enum ChapterWritingPhase: Equatable, Sendable {
     var pillStatus: String {
         switch self {
         case .extracting: return "extracting"
-        case .selectingMemory, .writing, .expanding, .revising: return "writing"
+        case .selectingMemory, .writing, .writingAttempt, .validating, .checking, .legacyRevising: return "writing"
         case .failed: return "failed"
         case .idle, .cancelled: return "idle"
         }
@@ -536,8 +664,9 @@ enum ChapterWritingPhase: Equatable, Sendable {
     var currentStage: ChapterGenerationStage? {
         switch self {
         case .selectingMemory: return .memorySelection
-        case .writing, .expanding: return .drafting
-        case .revising: return .validationAndRevision
+        case .writing, .writingAttempt: return .drafting
+        case .validating: return .deterministicValidation
+        case .checking, .legacyRevising: return .bibleChecking
         case .extracting: return .extraction
         case .failed(_, _, let stage), .cancelled(_, let stage): return stage
         case .idle: return nil
@@ -634,12 +763,15 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
         switch phase {
         case .selectingMemory:
             states[.memorySelection] = .active
-        case .writing, .expanding:
+        case .writing, .writingAttempt:
             complete(before: .drafting)
             states[.drafting] = .active
-        case .revising:
-            complete(before: .validationAndRevision)
-            states[.validationAndRevision] = .active
+        case .validating:
+            complete(before: .deterministicValidation)
+            states[.deterministicValidation] = .active
+        case .checking, .legacyRevising:
+            complete(before: .bibleChecking)
+            states[.bibleChecking] = .active
         case .extracting:
             complete(before: .extraction)
             states[.extraction] = .active
@@ -661,7 +793,8 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
             case "draft_ready":
                 states[.memorySelection] = .completed
                 states[.drafting] = .completed
-                states[.validationAndRevision] = .completed
+                states[.deterministicValidation] = .completed
+                states[.bibleChecking] = .completed
             case "extracting":
                 complete(before: .extraction)
                 states[.extraction] = .active
@@ -684,8 +817,7 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
                 "unselected_characters_in_bible",
                 "ambiguous_character_name",
                 "llm_content_blocked",
-                "revision_failed",
-                "writer_expansion_failed",
+                "writer_minimum_failed",
             ]
             if let failureCode, requiresUserChange.contains(failureCode) {
                 recoveryAction = nil
@@ -834,8 +966,6 @@ enum ChapterTaskOutcomeStore {
         let scalarParts = [
             chapter.title,
             chapter.userPrompt,
-            String(chapter.targetWordCount),
-            chapter.authorNote,
             chapter.draftText,
             chapter.summary,
             chapter.headline,
@@ -914,6 +1044,17 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
 }
 
 extension String {
+    var checkerLabel: String {
+        switch self {
+        case "passed": return "通过"
+        case "suspect": return "存疑"
+        case "violation": return "明确越界"
+        case "stale": return "检查已失效"
+        case "unavailable": return "检查不可用"
+        default: return self
+        }
+    }
+
     var linoStatusLabel: String {
         switch self {
         case "draft": return "草稿"
@@ -930,7 +1071,7 @@ extension String {
         switch self {
         case "memory_selector": return "Memory Selector"
         case "writer": return "Writer"
-        case "reviser": return "Reviser"
+        case "checker": return "Checker"
         case "extractor": return "Extractor"
         default: return capitalized
         }

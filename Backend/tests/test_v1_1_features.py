@@ -14,14 +14,13 @@ from app.llm.base import LLMError
 from app.models import Book, Chapter, Character, JobRun, LLMCallAudit
 from app.services.context import (
     CHARACTER_EVENT_MAX_CHARS,
-    MEMORY_SUMMARY_MAX_ITEMS,
+    MIN_DRAFT_NONSPACE_CHARS,
     MemoryBlock,
     draft_violations,
     nonspace_len,
     pack_selected_memories,
     scan_known_character_names,
     truncate_to_nonspace,
-    word_count_bounds,
 )
 
 
@@ -42,15 +41,10 @@ class FixedText:
         return self.text
 
     def complete_json(self, **kwargs):
-        return {"memory_ids": []}
+        return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
 
 
-# --- B3 word count ------------------------------------------------------------
-
-
-def test_word_count_bounds_are_80_120():
-    assert word_count_bounds(100) == (80, 120)
-    assert word_count_bounds(3000) == (2400, 3600)
+# --- v1.6 deterministic draft gate -------------------------------------------
 
 
 def test_draft_violation_word_count_boundary(tmp_path):
@@ -60,15 +54,17 @@ def test_draft_violation_word_count_boundary(tmp_path):
         db.add_all([Book(id="b", title="书"), Chapter(id="c", book_id="b", index=1, target_word_count=100)])
         db.commit()
         chapter = db.get(Chapter, "c")
-        assert draft_violations(db, chapter, "字" * 80, "stop") == []
-        low = draft_violations(db, chapter, "字" * 79, "stop")
-        assert any(item["code"] == "word_count" for item in low)
+        assert not any(item["code"] == "minimum_length" for item in draft_violations(db, chapter, "字" * MIN_DRAFT_NONSPACE_CHARS, "stop"))
+        low = draft_violations(db, chapter, "字" * (MIN_DRAFT_NONSPACE_CHARS - 1), "stop")
+        assert any(item["code"] == "minimum_length" for item in low)
+        # No product upper bound remains.
+        assert not any(item["code"] == "word_count" for item in draft_violations(db, chapter, "字" * 10_000, "stop"))
 
 
 # --- B3 summary packing -------------------------------------------------------
 
 
-def test_summary_packing_caps_at_two():
+def test_memory_packing_deduplicates_without_summary_cap():
     blocks = [
         MemoryBlock("s1", "第一章梗概：一", 1, memory_type="summary"),
         MemoryBlock("s2", "第二章梗概：二", 2, memory_type="summary"),
@@ -78,8 +74,8 @@ def test_summary_packing_caps_at_two():
     ]
     packed = pack_selected_memories(blocks, ["s1", "s2", "s3", "h1", "e1"], 10_000)
     ids = [block.id for block in packed]
-    assert sum(1 for block in packed if block.memory_type == "summary") == MEMORY_SUMMARY_MAX_ITEMS
-    assert "s3" not in ids
+    assert sum(1 for block in packed if block.memory_type == "summary") == 3
+    assert "s3" in ids
     assert "h1" in ids and "e1" in ids
 
 
@@ -193,7 +189,7 @@ def test_llm_audit_records_writer_row_without_secrets(client, auth_headers, wait
         headers=auth_headers,
         json={"user_prompt": "行动", "target_word_count": 20},
     ).json()
-    client.app.dependency_overrides[get_writer_client] = lambda: FixedText("文" * 20)
+    client.app.dependency_overrides[get_writer_client] = lambda: FixedText("文" * 4000)
     assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
@@ -358,7 +354,7 @@ def test_chapter_patch_summary_and_headline(client, auth_headers):
 
 
 def test_health_reports_current_version(client, auth_headers):
-    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.5.0"
+    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.6.0"
 
 
 # --- B8 migration from the production revision --------------------------------

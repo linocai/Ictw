@@ -7,38 +7,76 @@ from app.models import AgentModelBinding, AgentPersona
 
 DEFAULT_PERSONAS: dict[str, str] = {
     "memory_selector": (
-        "你是小说写作记忆选择助手。根据本章剧情 Bible、作者备注与允许人物，"
-        "从候选历史记忆中选择真正有助于本章写作的条目，并从紧邻上一章结尾候选中"
-        "选择满足开场衔接所需的最短原文片段起点。只返回有序记忆 ID 和结尾起点 ID，"
-        "不得重写、概括或补造历史，也不得扩大摘取范围。"
+        "你是严谨的小说记忆编辑。只压缩有明确来源的既有历史事实，为本章写作提供"
+        "短而密集、可追溯的记忆简报。绝不推断人物动机、补足因果、续写事件或预测未来。"
     ),
     "writer": (
-        "你是中文小说写作者。严格以作者的本章剧情为情节最高权威，"
-        "以世界观为设定最高权威。只输出正文纯文本。"
+        "你是服从 Bible 的中文小说创作者。Bible 决定剧情；你的文学自由只用于动作、"
+        "对话、心理、环境与自然衔接等表达层，不创造新的剧情状态。"
     ),
-    "reviser": (
-        "你是中文小说修订师。严格依据违规报告修订当前正文，使人物白名单、"
-        "剧情 Bible 与目标字数同时合格，不得发明新剧情或引入未授权人物。"
-        "只输出修订后的正文纯文本。"
+    "checker": (
+        "你是克制的剧情边界审计员。只举证 Bible 的遗漏、矛盾与剧情越界，"
+        "区分合理文学延展和会改变后续事实的新剧情；不评价文风，也不修改正文。"
     ),
     "extractor": (
-        "你是中文小说章节归档助手。从最终正文中提取本章梗概、一句话大事记、"
-        "人物故事线事件和人物动态字段更新。只返回合法 JSON object。"
+        "你是忠实的小说档案管理员。只归档用户已接受正文中实际发生的内容，"
+        "区分确定事实、人物认知和未解决事项；不使用 Bible 补写正文没有发生的事实。"
     ),
 }
 
 
 AGENT_ROLES = tuple(DEFAULT_PERSONAS.keys())
 
+# These rules are deliberately separate from DEFAULT_PERSONAS.  The latter is
+# user-editable product copy; this is the program-owned contract appended by
+# each v1.6 agent implementation and exposed read-only by Settings.
+PROGRAM_PROTOCOLS: dict[str, str] = {
+    "memory_selector": (
+        "不可编辑程序协议：只可使用提供的候选来源；每条记忆简报事实必须包含 text 和"
+        "非空 source_ids。可报告 Bible 与记忆的冲突，但不得调和、推断或创造事实。"
+        "仅输出约定的 JSON 结构。"
+    ),
+    "writer": (
+        "不可编辑程序协议：原始 Bible 是最高剧情来源，必须按原文约束完成整章。"
+        "不得新增会改变后续事实的人物、线索、秘密、冲突或关系变化；只输出完整正文纯文本。"
+    ),
+    "checker": (
+        "不可编辑程序协议：只输出 JSON 检查结论 passed、suspect 或 violation，以及逐项"
+        "kind、draft_evidence、bible_evidence、reason。必须基于证据；不得修改、续写正文"
+        "或作任何文风评价。"
+    ),
+    "extractor": (
+        "不可编辑程序协议：只以用户已接受的正文为事实来源，输出约定 JSON 归档结构；"
+        "不得用 Bible 或推测补写事实，并保留章节来源。"
+    ),
+}
+
+def compose_system_prompt(role: str, editable_persona: str) -> str:
+    """Append a non-overridable protocol to the user-editable persona."""
+    return f"{editable_persona.strip()}\n\n{PROGRAM_PROTOCOLS[role]}"
+
 
 def seed_defaults(db: Session) -> None:
     changed = False
+    # Fresh/test databases may be initialized straight from ORM metadata.  Keep
+    # that path consistent with the Alembic migration without touching audits.
+    for retired_role in ("reviser", "compressor"):
+        persona = db.get(AgentPersona, retired_role)
+        binding = db.get(AgentModelBinding, retired_role)
+        if persona is not None:
+            db.delete(persona)
+            changed = True
+        if binding is not None:
+            db.delete(binding)
+            changed = True
+    if changed:
+        db.flush()
     for role, prompt in DEFAULT_PERSONAS.items():
         if db.get(AgentPersona, role) is None:
             db.add(AgentPersona(agent_role=role, system_prompt=prompt))
             changed = True
         if db.get(AgentModelBinding, role) is None:
-            writer_binding = db.get(AgentModelBinding, "writer") if role == "memory_selector" else None
+            writer_binding = db.get(AgentModelBinding, "writer") if role in {"memory_selector", "checker"} else None
             db.add(
                 AgentModelBinding(
                     agent_role=role,
@@ -53,6 +91,8 @@ def seed_defaults(db: Session) -> None:
 
 
 def get_persona(db: Session, role: str) -> str:
+    if role not in AGENT_ROLES:
+        raise KeyError(f"unknown active agent role: {role}")
     persona = db.get(AgentPersona, role)
     if persona is None:
         return DEFAULT_PERSONAS[role]

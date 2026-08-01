@@ -19,6 +19,49 @@ class UnselectedCharacterReference(ExtractorValidationError):
     pass
 
 
+ARCHIVE_LIST_FIELDS = ("state_changes", "unresolved_items", "atomic_memories")
+
+
+def _validated_archive_items(
+    raw: Any,
+    *,
+    field: str,
+    selected_ids: set[str],
+) -> list[dict[str, str]]:
+    """Normalize Extractor archive lists without inventing missing facts.
+
+    ``character_id`` is optional (a plot state or unresolved item can be
+    chapter-level), but any supplied ID must be from this chapter's whitelist.
+    Unknown IDs are discarded just like legacy character events.  A malformed
+    selected/global record is a real extraction failure, preserving the old
+    transaction rollback guarantee.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ExtractorValidationError(f"{field} must be an array")
+    result: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ExtractorValidationError(f"{field} item must be an object")
+        character_id = item.get("character_id")
+        if character_id is not None and (not isinstance(character_id, str) or character_id not in selected_ids):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ExtractorValidationError(f"{field} item text is required")
+        kind = item.get("kind")
+        if kind is not None and not isinstance(kind, str):
+            raise ExtractorValidationError(f"{field} item kind must be a string")
+        normalized: dict[str, str] = {"text": text.strip()}
+        if isinstance(kind, str) and kind.strip():
+            normalized["kind"] = kind.strip()
+        if isinstance(character_id, str):
+            normalized["character_id"] = character_id
+        result.append(normalized)
+    return result
+
+
 def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:
     if not isinstance(output, dict):
         raise ExtractorValidationError("Extractor output must be an object")
@@ -28,6 +71,9 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
         raise ExtractorValidationError("Extractor output missing summary")
     if not isinstance(headline, str) or not headline.strip():
         raise ExtractorValidationError("Extractor output missing headline")
+    long_summary = output.get("long_summary", summary)
+    if not isinstance(long_summary, str) or not long_summary.strip():
+        raise ExtractorValidationError("Extractor output missing long_summary")
     raw_events = output.get("character_events")
     raw_patches = output.get("dynamic_fields_patch")
     if not isinstance(raw_events, list):
@@ -37,6 +83,10 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
 
     character_map = {link.character_id: link.character for link in chapter.character_links}
     selected_ids = set(character_map)
+    archive_values = {
+        field: _validated_archive_items(output.get(field), field=field, selected_ids=selected_ids)
+        for field in ARCHIVE_LIST_FIELDS
+    }
 
     valid_events: list[tuple[str, str, str]] = []
     for item in raw_events:
@@ -140,5 +190,9 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
 
     chapter.summary = summary.strip()
     chapter.headline = headline.strip()
+    chapter.long_summary = long_summary.strip()
+    chapter.state_changes = archive_values["state_changes"]
+    chapter.unresolved_items = archive_values["unresolved_items"]
+    chapter.atomic_memories = archive_values["atomic_memories"]
     chapter.status = "finalized"
     return sorted(set(updated_ids)), added_event_ids

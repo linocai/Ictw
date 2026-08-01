@@ -10,18 +10,15 @@ from app.services.context import (
     memory_selector_user_message,
     pack_selected_memories,
     pack_writer_context,
-    writer_expansion_user_message,
-    writer_rewrite_user_message,
     writer_user_message,
 )
 from app.services.personas import DEFAULT_PERSONAS
 
 
-def test_default_memory_selector_persona_covers_ending_start_without_rewriting():
+def test_default_memory_selector_persona_requires_sourced_facts_without_inference():
     prompt = DEFAULT_PERSONAS["memory_selector"]
-    assert "结尾起点 ID" in prompt
-    assert "最短原文片段" in prompt
-    assert "不得重写" in prompt
+    assert "明确来源" in prompt
+    assert "绝不推断" in prompt
 
 
 def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_headers):
@@ -79,7 +76,6 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
         "# 本章允许人物白名单",
         "# 人物卡",
         "# 历史参考资料",
-        "# 作者对本章的备注",
         "# 本章剧情 Bible",
         "# 最终执行契约",
     ]
@@ -90,31 +86,8 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
     assert text.count("# 世界观") == 1
     assert "Bible 是本次写作的最高情节权威" in text
     assert "不得据此增加 Bible 未要求的剧情" in text
-    assert "达到最低字数前，不得提前进入本章结尾落点" in text
-
-
-def test_writer_rewrite_keeps_full_original_but_expansion_is_compact():
-    original = "# 本章剧情 Bible\n行动\n\n# 最终执行契约\n不得擅自增加剧情。"
-    violations = [{"code": "word_count", "message": "正文 4 字，不在目标区间 80～120 字"}]
-    rewritten = writer_rewrite_user_message(original, violations)
-    assert original in rewritten
-    assert "# Writer 重新生成任务" in rewritten
-    assert "不得续写、仿照或依赖上一轮短稿" in rewritten
-
-    book = Book(title="书", world_setting="第一人称")
-    chapter = Chapter(title="章", user_prompt="行动", author_note="克制", target_word_count=100)
-    expanded = writer_expansion_user_message(
-        book,
-        chapter,
-        "当前短稿",
-        violations,
-    )
-    assert "# 历史参考资料" not in expanded
-    assert "# 人物卡" not in expanded
-    assert "行动" in expanded and "克制" in expanded
-    assert "当前短稿" in expanded
-    assert "不要只在结尾追加内容" in expanded
-    assert "达到最低字数前不得收束结尾" in expanded
+    assert "至少 4000 个去空白字符" in text
+    assert "冷静" not in text
 
 
 def test_memory_candidates_scope_and_budget_packing(client, auth_headers):
@@ -224,4 +197,4 @@ def test_previous_ending_and_memories_share_single_budget():
     ]
     packed = pack_writer_context(blocks, ["fits", "over"], None, MEMORY_BUDGET_CHARS)
     assert len(packed.previous_ending) == 700
-    assert [block.id for block in packed.memories] == ["fits"]
+    assert [block.id for block in packed.memories] == ["fits", "over"]

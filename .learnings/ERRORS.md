@@ -38,6 +38,44 @@ POTENTIAL_SECRET_FOUND
 
 ---
 
+## [ERR-20260801-006] isolated-migration-cleanup
+
+**Logged**: 2026-08-01T11:47:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+隔离迁移校验命令因包含 `rm -rf` 临时目录清理而被安全策略拒绝。
+
+### Error
+
+```text
+Rejected: rm -f style commands are not permitted. Use a safer approach
+```
+
+### Context
+
+- 计划用 `mktemp -d` 创建一次性 SQLite，再在同一复合命令尾部删除临时目录。
+- 命令在进程创建前即被拒绝，因此没有运行迁移或删除任何文件。
+
+### Suggested Fix
+
+隔离校验使用明确的 scratchpad 路径并保留小型临时数据库，或通过系统临时目录生命周期清理；不要在验证命令中附带递归删除。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: Backend/alembic/versions/20260801_0007_v1_6_agent_foundation.py
+
+### Resolution
+
+- **Resolved**: 2026-08-01T11:47:00+08:00
+- **Notes**: 改为不含删除动作的安全临时数据库校验。
+
+---
+
 ## [ERR-20260728-006] apply_patch
 
 **Logged**: 2026-07-28T18:49:00+08:00
@@ -228,6 +266,45 @@ apply_patch verification failed: Failed to find expected lines in App/LinoI/Lino
 
 ---
 
+## [ERR-20260801-004] apply_patch
+
+**Logged**: 2026-08-01T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+计划补丁引用的精确句子与实际文档不一致，工具未写入任何部分修改。
+
+### Error
+
+```text
+apply_patch verification failed: Failed to find expected lines in archive/v1.6.0施工plan.md
+```
+
+### Context
+
+- 已建立 v1.6.0 详细施工记录后，尝试在「已确认的产品决定」中补充四个 Agent 的默认人格职责。
+- 补丁用到的原句遗漏了「只读不可覆盖协议」，导致上下文不匹配。
+
+### Suggested Fix
+
+先读取目标段的窄范围精确文本，再使用只改一处的小补丁；每次失败确认无部分修改后继续。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: archive/v1.6.0施工plan.md
+- See Also: ERR-20260728-003
+
+### Resolution
+
+- **Resolved**: 2026-08-01T00:00:00+08:00
+- **Notes**: 已按精确上下文重新定位；业务代码未受影响。
+
+---
+
 ## [ERR-20260728-002] pip-install
 
 **Logged**: 2026-07-28T15:21:00+08:00
@@ -266,3 +343,109 @@ ERROR: Could not find a version that satisfies the requirement setuptools>=68
 - **Notes**: 使用可回滚的旧环境备份完成离线路径重定位，并以入口命令和测试验证。
 
 ---
+
+## [ERR-20260801-005] pytest-command-path
+
+**Logged**: 2026-08-01T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+在 `Backend/` 工作目录内重复写入 `Backend/.venv`，导致测试解释器路径不存在。
+
+### Error
+
+```text
+zsh:1: no such file or directory: Backend/.venv/bin/python
+```
+
+### Context
+
+- 阶段 3 Extractor 变更后的定向 pytest 首次执行。
+
+### Suggested Fix
+
+进入 `Backend/` 后统一使用 `.venv/bin/python`；仓库根目录才使用 `Backend/.venv/bin/python`。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: Backend/tests
+
+### Resolution
+
+- **Resolved**: 2026-08-01T00:00:00+08:00
+- **Notes**: 已用正确路径运行定向测试，全部通过。
+
+---
+## [ERR-20260801-007] UI fixture Python heredoc newline escaping
+
+**Logged**: 2026-08-01T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: testing
+
+### Summary
+An inline Python fixture script received a literal newline inside a quoted string because JavaScript template interpolation consumed `\\n`.
+
+### Error
+`SyntaxError: unterminated string literal`
+
+### Cause and correction
+When JavaScript composes a Python heredoc, escape nested newlines twice or avoid the ambiguity by joining complete Python string literals. The failed run stopped before opening the database, so no partial fixture data was written.
+## [ERR-20260801-008] Fixture assumed undeclared ORM relationships
+
+**Logged**: 2026-08-01T00:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: testing
+
+### Summary
+The isolated UI fixture passed `chapter=`/`job=` to models that expose only `chapter_id`/`job_id` columns.
+
+### Error
+`TypeError: 'chapter' is an invalid keyword argument for ChapterDraftCandidate`
+
+### Cause and correction
+Inspect relationship declarations before composing seed fixtures. Use explicit foreign-key IDs for `JobRun` and `ChapterDraftCandidate`; the failed transaction exited before commit.
+## [ERR-20260801-009] Fixture insert order lacked ORM dependency edge
+
+**Logged**: 2026-08-01T00:10:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: testing
+
+### Summary
+The isolated fixture added a `JobRun` and a candidate referencing it in one flush, but explicit ID-only models gave SQLAlchemy no dependency edge for insert ordering.
+
+### Error
+`sqlite3.IntegrityError: FOREIGN KEY constraint failed`
+
+### Cause and correction
+Flush the parent `JobRun` before adding `ChapterDraftCandidate` rows that reference its ID. SQLite correctly rolled back the whole failed transaction.
+## [ERR-20260801-010] Compact Swift AX helper parsing
+
+**Logged**: 2026-08-01T00:15:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: testing
+
+### Summary
+A compact inline Swift accessibility helper omitted whitespace around `== .success`, which the parser interpreted as an invalid postfix operator.
+
+### Correction
+Keep normal Swift spacing in inline helpers; do not over-compress diagnostic code.
+## [ERR-20260801-011] AX scroll action constant unavailable in Swift
+
+**Logged**: 2026-08-01T00:20:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: testing
+
+### Summary
+The Swift CoreServices overlay did not expose `kAXScrollToVisibleAction`.
+
+### Correction
+Use the documented accessibility action string `"AXScrollToVisible"` when the named constant is unavailable.

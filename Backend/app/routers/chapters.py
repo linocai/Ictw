@@ -1,21 +1,23 @@
 from __future__ import annotations
 
+import hashlib
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.agents.extractor import ExtractorAgent
+from app.agents.checker import CheckerAgent
 from app.agents.memory_selector import MemorySelectorAgent
-from app.agents.reviser import ReviserAgent
 from app.agents.writer import WriterAgent
 from app.db import SessionLocal, get_db
 from app.llm.factory import (
     get_extractor_client,
+    get_checker_client,
     get_memory_selector_client,
-    get_reviser_client,
     get_writer_client,
 )
-from app.models import Book, Chapter, ChapterCharacter, Character, CharacterFieldPatch, JobRun
+from app.models import Book, Chapter, ChapterCharacter, ChapterDraftCandidate, Character, CharacterFieldPatch, JobRun
 from app.models.entities import utc_now, uuid_str
 from app.schemas.chapter import (
     ChapterCreate,
@@ -23,16 +25,21 @@ from app.schemas.chapter import (
     ChapterPatch,
     ChapterRead,
     ChapterSummary,
+    CandidateSelectionRequest,
+    CheckerAcceptRequest,
+    DraftCandidateRead,
     WriteJobStatus,
     WriteRequest,
 )
 from app.services.context import (
     CharacterPreflightError,
-    chapter_author_note,
     extractor_user_message,
+    draft_fingerprint,
+    draft_violations,
     memory_budget,
     memory_candidates,
     memory_selector_user_message,
+    nonspace_len,
     prefilter_memory_candidates,
     validate_character_preflight,
 )
@@ -43,7 +50,7 @@ router = APIRouter(tags=["chapters"])
 
 
 def _chapter_read(chapter: Chapter) -> ChapterRead:
-    note = chapter_author_note(chapter)
+    note = chapter.author_note
     return ChapterRead(
         id=chapter.id,
         book_id=chapter.book_id,
@@ -56,6 +63,10 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
         draft_text=chapter.draft_text,
         summary=chapter.summary,
         headline=chapter.headline,
+        long_summary=chapter.long_summary,
+        state_changes=list(chapter.state_changes or []),
+        unresolved_items=list(chapter.unresolved_items or []),
+        atomic_memories=list(chapter.atomic_memories or []),
         exempted_character_names=list(chapter.exempted_character_names or []),
         status=chapter.status,
         source=chapter.source,
@@ -65,7 +76,7 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
     )
 
 
-def _job_status_from_run(chapter: Chapter, run: JobRun) -> WriteJobStatus:
+def _job_status_from_run(chapter: Chapter, run: JobRun, candidate: ChapterDraftCandidate | None = None) -> WriteJobStatus:
     outcome_current = None
     if run.phase in {"done", "failed", "cancelled"}:
         outcome_current = run.finished_at is not None and run.finished_at >= chapter.updated_at
@@ -80,7 +91,11 @@ def _job_status_from_run(chapter: Chapter, run: JobRun) -> WriteJobStatus:
         error_message=run.error_message,
         error_context=run.error_context,
         violations=run.violations,
+        memory_context=run.memory_context,
+        checker_result=run.checker_result,
     )
+    if candidate is not None:
+        status_out.draft_candidate = DraftCandidateRead.model_validate(candidate)
     if run.phase == "done":
         status_out.chapter = _chapter_read(chapter)
         status_out.updated_character_ids = run.updated_character_ids
@@ -262,7 +277,7 @@ def write_chapter(
     db: Session = Depends(get_db),
     memory_selector_client=Depends(get_memory_selector_client),
     writer_client=Depends(get_writer_client),
-    reviser_client=Depends(get_reviser_client),
+    checker_client=Depends(get_checker_client),
 ) -> WriteJobStatus:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
@@ -289,11 +304,13 @@ def write_chapter(
     selected_ids = {link.character_id for link in chapter.character_links}
     candidates = prefilter_memory_candidates(candidates, chapter=chapter, selected_character_ids=selected_ids)
     budget = memory_budget()
-    selector_message = memory_selector_user_message(chapter, candidates, budget)
+    bible_snapshot = chapter.user_prompt
+    bible_sha256 = hashlib.sha256(bible_snapshot.encode()).hexdigest()
+    selector_message = memory_selector_user_message(chapter, candidates, budget, bible=bible_snapshot)
     baseline_text = chapter.draft_text
     baseline_status = "draft_ready" if baseline_text.strip() else "draft"
     job_id = uuid_str()
-    run = JobRun(id=job_id, chapter_id=chapter.id, kind="write", phase="selecting_memory")
+    run = JobRun(id=job_id, chapter_id=chapter.id, kind="write", phase="selecting_memory", bible_sha256=bible_sha256)
     db.add(run)
     job = WriteJob(
         chapter_id=chapter.id,
@@ -301,12 +318,14 @@ def write_chapter(
         kind="write",
         memory_selector=MemorySelectorAgent(memory_selector_client, get_persona(db, "memory_selector")),
         writer=WriterAgent(writer_client, get_persona(db, "writer")),
-        reviser=ReviserAgent(reviser_client, get_persona(db, "reviser")),
+        checker=CheckerAgent(checker_client, get_persona(db, "checker")),
         selector_user_message=selector_message,
         memory_candidates=candidates,
         memory_budget=budget,
         baseline_text=baseline_text,
         baseline_status=baseline_status,
+        bible_snapshot=bible_snapshot,
+        bible_sha256=bible_sha256,
     )
     try:
         write_registry.reserve(job)
@@ -349,7 +368,12 @@ def chapter_job(chapter_id: str, db: Session = Depends(get_db)) -> WriteJobStatu
         )
     if run is None:
         return WriteJobStatus(chapter_id=chapter_id, kind="write", phase="idle")
-    return _job_status_from_run(chapter, run)
+    candidate = db.scalars(
+        select(ChapterDraftCandidate)
+        .where(ChapterDraftCandidate.chapter_id == chapter_id, ChapterDraftCandidate.job_id == run.id)
+        .order_by(ChapterDraftCandidate.created_at.desc(), ChapterDraftCandidate.id.desc())
+    ).first()
+    return _job_status_from_run(chapter, run, candidate)
 
 
 @router.post("/chapters/{chapter_id}/write/cancel", response_model=ChapterRead)
@@ -375,9 +399,106 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
     return _chapter_read(chapter)
 
 
+def _candidate_fingerprint(chapter: Chapter, candidate: ChapterDraftCandidate) -> str:
+    return draft_fingerprint(chapter, candidate.draft_text)
+
+
+def _current_candidate(db: Session, chapter: Chapter) -> ChapterDraftCandidate | None:
+    return db.scalars(
+        select(ChapterDraftCandidate)
+        .where(ChapterDraftCandidate.chapter_id == chapter.id, ChapterDraftCandidate.is_current.is_(True))
+        .order_by(ChapterDraftCandidate.created_at.desc(), ChapterDraftCandidate.id.desc())
+    ).first()
+
+
+def _next_candidate_attempt(db: Session, chapter_id: str) -> int:
+    current_max = db.scalar(
+        select(func.max(ChapterDraftCandidate.attempt)).where(ChapterDraftCandidate.chapter_id == chapter_id)
+    )
+    return int(current_max or 0) + 1
+
+
+@router.get("/chapters/{chapter_id}/candidates", response_model=list[DraftCandidateRead])
+def list_draft_candidates(chapter_id: str, db: Session = Depends(get_db)) -> list[ChapterDraftCandidate]:
+    if db.get(Chapter, chapter_id) is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    return list(db.scalars(
+        select(ChapterDraftCandidate).where(ChapterDraftCandidate.chapter_id == chapter_id)
+        .order_by(ChapterDraftCandidate.created_at, ChapterDraftCandidate.id)
+    ).all())
+
+
+@router.post("/chapters/{chapter_id}/candidates/select", response_model=ChapterRead)
+def select_draft_candidate(chapter_id: str, payload: CandidateSelectionRequest, db: Session = Depends(get_db)) -> ChapterRead:
+    chapter = db.get(Chapter, chapter_id)
+    candidate = db.get(ChapterDraftCandidate, payload.candidate_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    if candidate is None or candidate.chapter_id != chapter.id:
+        raise HTTPException(status_code=404, detail="draft candidate not found")
+    db.execute(update(ChapterDraftCandidate).where(ChapterDraftCandidate.chapter_id == chapter.id).values(is_current=False))
+    candidate.is_current = True
+    chapter.draft_text, chapter.status = candidate.draft_text, "draft_ready"
+    db.commit(); db.refresh(chapter)
+    return _chapter_read(chapter)
+
+
+@router.post("/chapters/{chapter_id}/check", response_model=DraftCandidateRead)
+def rerun_checker(chapter_id: str, db: Session = Depends(get_db), checker_client=Depends(get_checker_client)) -> ChapterDraftCandidate:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    candidate = _current_candidate(db, chapter)
+    violations = draft_violations(db, chapter, chapter.draft_text, "manual_edit")
+    if violations:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "checker_preflight_failed",
+                "message": "当前正文未通过确定性校验，未调用 Bible 检查",
+                "violations": violations,
+            },
+        )
+    # A manually edited text must become a separate immutable candidate so the
+    # generated version and its original Checker evidence remain reviewable.
+    if candidate is None or candidate.draft_text != chapter.draft_text:
+        db.execute(
+            update(ChapterDraftCandidate)
+            .where(ChapterDraftCandidate.chapter_id == chapter.id)
+            .values(is_current=False)
+        )
+        candidate = ChapterDraftCandidate(
+            chapter_id=chapter.id,
+            attempt=_next_candidate_attempt(db, chapter.id),
+            draft_text=chapter.draft_text,
+            non_whitespace_count=nonspace_len(chapter.draft_text),
+            finish_reason="manual_edit",
+            deterministic_violations=[],
+            bible_sha256=hashlib.sha256(chapter.user_prompt.encode()).hexdigest(),
+            draft_fingerprint=draft_fingerprint(chapter, chapter.draft_text),
+            is_current=True,
+        )
+        db.add(candidate)
+        db.flush()
+    fingerprint = _candidate_fingerprint(chapter, candidate)
+    from app.services.context import checker_user_message
+    try:
+        raw = CheckerAgent(checker_client, get_persona(db, "checker")).check(
+            checker_user_message(chapter, chapter.draft_text, chapter.user_prompt)
+        )
+        from app.services.write_jobs import _valid_checker_result
+        candidate.checker_result = _valid_checker_result(raw, fingerprint)
+    except Exception as exc:  # Checker never changes a candidate, including upstream failures.
+        candidate.checker_result = {"status": "unavailable", "draft_fingerprint": fingerprint, "error_code": getattr(exc, "code", "checker_failed")}
+    candidate.bible_sha256 = hashlib.sha256(chapter.user_prompt.encode()).hexdigest()
+    candidate.draft_fingerprint = fingerprint
+    db.commit(); db.refresh(candidate)
+    return candidate
+
+
 @router.post("/chapters/{chapter_id}/accept", response_model=WriteJobStatus)
 def accept_chapter(
-    chapter_id: str, db: Session = Depends(get_db), extractor_client=Depends(get_extractor_client)
+    chapter_id: str, payload: CheckerAcceptRequest = CheckerAcceptRequest(), db: Session = Depends(get_db), extractor_client=Depends(get_extractor_client)
 ) -> WriteJobStatus:
     if write_registry.get_live(chapter_id) is not None:
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行，不能接受旧草稿"})
@@ -386,6 +507,21 @@ def accept_chapter(
         raise HTTPException(status_code=404, detail="chapter not found")
     if not chapter.draft_text.strip():
         raise HTTPException(status_code=409, detail="chapter has no draft text")
+    candidate = _current_candidate(db, chapter)
+    checker_current = False
+    if candidate is not None and candidate.draft_text == chapter.draft_text:
+        result = candidate.checker_result or {}
+        checker_current = (
+            candidate.bible_sha256 == hashlib.sha256(chapter.user_prompt.encode()).hexdigest()
+            and candidate.draft_fingerprint == _candidate_fingerprint(chapter, candidate)
+            and result.get("draft_fingerprint") == candidate.draft_fingerprint
+            and result.get("verdict") == "passed"
+        )
+    # Pre-v1.6 imported drafts have no candidate. Keep old wire clients able to
+    # accept those drafts, while all v1.6 candidates require a current pass or
+    # an explicit user override.
+    if candidate is not None and not checker_current and not payload.override_checker:
+        raise HTTPException(status_code=409, detail={"code": "checker_override_required", "message": "Bible 检查未通过、失效或不可用；请明确忽略后接受"})
     book = db.get(Book, chapter.book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="book not found")
@@ -393,7 +529,8 @@ def accept_chapter(
     selected_ids = [link.character_id for link in chapter.character_links]
     message = extractor_user_message(db, book, chapter)
     job_id = uuid_str()
-    run = JobRun(id=job_id, chapter_id=chapter.id, kind="extract", phase="extracting")
+    run = JobRun(id=job_id, chapter_id=chapter.id, kind="extract", phase="extracting",
+                 checker_result={"override": True} if candidate is not None and not checker_current else None)
     db.add(run)
     job = WriteJob(
         chapter_id=chapter.id,

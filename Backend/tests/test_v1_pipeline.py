@@ -11,7 +11,7 @@ from app.db import Base, make_engine
 from app.llm.base import LLMError
 from app.llm.openai_compatible import OpenAICompatibleClient, _extract_content, _http_error
 from app.models import Book, Chapter
-from app.services.context import MemoryBlock, pack_selected_memories, prefilter_memory_candidates
+from app.services.context import MemoryBlock, pack_memory_brief, pack_selected_memories, prefilter_memory_candidates
 from app.services.write_jobs import WriteJob, _restore_baseline, write_registry
 
 
@@ -34,6 +34,18 @@ def test_memory_selection_salvages_unambiguous_truncated_chapter_id():
     assert pack_selected_memories(blocks, ["chapter:xyz"], 600) == []
     # A salvaged id must not double-pack with its explicit form.
     assert pack_selected_memories(blocks, ["chapter:abc", "chapter:abc:summary"], 600) == [summary_only]
+
+
+def test_memory_brief_requires_real_deduplicated_sources_and_budget():
+    sources = [MemoryBlock("a", "来源 A", 1), MemoryBlock("b", "来源 B", 2)]
+    briefs = [
+        {"text": "可用事实", "source_ids": ["a", "a"]},
+        {"text": "可用事实", "source_ids": ["a", "a"]},
+        {"text": "伪造来源", "source_ids": ["missing"]},
+        {"text": "太长" * 100, "source_ids": ["b"]},
+    ]
+    packed = pack_memory_brief(sources, briefs, 20)
+    assert [(item.text, item.id) for item in packed] == [("可用事实", "a")]
 
 
 def test_extractor_schema_for_no_characters_forces_empty_arrays():
@@ -245,11 +257,11 @@ def test_memory_selector_retries_one_retryable_failure_only():
             self.calls += 1
             if self.calls == 1:
                 raise LLMError("rate limited", code="llm_rate_limited", retryable=True, status_code=429)
-            return {"memory_ids": []}
+            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
 
     llm = RetryOnceLLM()
     selection = MemorySelectorAgent(llm, "selector").select("input")  # type: ignore[arg-type]
-    assert selection.memory_ids == []
+    assert selection.briefs == []
     assert selection.previous_ending_start_id is None
     assert llm.calls == 2
 
@@ -260,7 +272,7 @@ def test_memory_selector_appends_fixed_contract_to_existing_custom_persona():
 
         def complete_json(self, **kwargs):
             self.system = kwargs["system"]
-            return {"memory_ids": [], "previous_ending_start_id": None}
+            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
 
     llm = CapturingLLM()
     MemorySelectorAgent(llm, "旧的自定义人格：只返回有序记忆 ID").select("input")  # type: ignore[arg-type]
@@ -278,19 +290,16 @@ def test_memory_selector_tolerates_malformed_id_payload_shapes():
             return self.payload
 
     # Mixed non-string items are filtered, not fatal.
-    agent = MemorySelectorAgent(ShapedLLM({"memory_ids": ["chapter:x:headline", 123, None]}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input").memory_ids == ["chapter:x:headline"]
-    # A bare string is salvaged as a single-item selection.
-    agent = MemorySelectorAgent(ShapedLLM({"memory_ids": "chapter:x:headline"}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input").memory_ids == ["chapter:x:headline"]
-    # Anything else degrades to the legal empty selection.
-    agent = MemorySelectorAgent(ShapedLLM({"memory_ids": {"a": 1}}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input").memory_ids == []
+    agent = MemorySelectorAgent(ShapedLLM({"briefs": [{"text": "事实", "source_ids": ["chapter:x:headline"]}, 123], "conflicts": []}), "selector")  # type: ignore[arg-type]
+    assert agent.select("input").briefs == [{"text": "事实", "source_ids": ["chapter:x:headline"]}]
+    # Invalid shapes degrade to the legal empty selection.
+    agent = MemorySelectorAgent(ShapedLLM({"briefs": {"a": 1}, "conflicts": {}}), "selector")  # type: ignore[arg-type]
+    assert agent.select("input").briefs == []
     agent = MemorySelectorAgent(ShapedLLM({}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input").memory_ids == []
+    assert agent.select("input").briefs == []
 
     selected = MemorySelectorAgent(  # type: ignore[arg-type]
-        ShapedLLM({"memory_ids": [], "previous_ending_start_id": " previous_ending:x:p2 "}),
+        ShapedLLM({"briefs": [], "conflicts": [], "previous_ending_start_id": " previous_ending:x:p2 "}),
         "selector",
     ).select("input")
     assert selected.previous_ending_start_id == "previous_ending:x:p2"

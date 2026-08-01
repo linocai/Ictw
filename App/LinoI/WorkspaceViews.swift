@@ -75,7 +75,7 @@ private struct LinoIWorkspaceHeader: View {
                     .font(LinoType.heading)
                     .foregroundStyle(LinoTheme.ink)
                     .lineLimit(1)
-                Text("Memory Selector / Writer / Reviser / Extractor")
+                Text("Memory Selector / Writer / Checker / Extractor")
                     .font(.caption)
                     .foregroundStyle(LinoTheme.muted)
             }
@@ -123,7 +123,7 @@ struct LinoIChaptersPane: View {
             if workspace.chapters.isEmpty && !workspace.isLoading {
                 LinoIEmptyCard(
                     title: "还没有章节",
-                    subtitle: "先新建一章，再填写剧情 Bible、作者备注、目标字数和允许人物。",
+                    subtitle: "先新建一章，再填写剧情 Bible 和允许人物。",
                     actionTitle: "新建章节"
                 ) {
                     Task { await workspace.createChapter() }

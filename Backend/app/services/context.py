@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -12,20 +14,44 @@ from app.models import Book, Chapter, Character, CharacterEvent
 
 
 # --- Centralized tunable constants (see PROJECT_PLAN v1.1.0) ---
-WORD_COUNT_MIN_RATIO = 0.80
-WORD_COUNT_MAX_RATIO = 1.20
-MEMORY_BUDGET_CHARS = 1800
+MIN_DRAFT_NONSPACE_CHARS = 4000
+# The final, compressed memory brief is deliberately small; the programme may
+# recall far more source material before asking Selector to compress it.
+MEMORY_BUDGET_CHARS = 2400
 PREVIOUS_ENDING_MAX_CHARS = 700
-MEMORY_SUMMARY_MAX_ITEMS = 2
 CHARACTER_EVENT_MAX_CHARS = 60
-
-
-def word_count_bounds(target: int) -> tuple[int, int]:
-    return int(target * WORD_COUNT_MIN_RATIO), int(target * WORD_COUNT_MAX_RATIO)
 
 
 def nonspace_len(text: str) -> int:
     return sum(1 for ch in text if not ch.isspace())
+
+
+def draft_fingerprint(chapter: Chapter, text: str, *, bible: str | None = None) -> str:
+    """Return the stable identity of the exact constraints checked against a draft.
+
+    This intentionally includes the writing context that can make a previous
+    Bible check unsafe to reuse.  JSON's sorted keys and compact separators
+    make equivalent JSON character state produce the same digest regardless of
+    insertion order.
+    """
+    selected = sorted((link.character for link in chapter.character_links), key=lambda character: character.id)
+    payload = {
+        "bible": chapter.user_prompt if bible is None else bible,
+        "chapter_title": chapter.title,
+        "world_setting": chapter.book.world_setting,
+        "selected_characters": [
+            {
+                "id": character.id,
+                "name": character.name,
+                "fixed_profile": character.fixed_profile,
+                "dynamic_fields": character.dynamic_fields or {},
+            }
+            for character in selected
+        ],
+        "draft_text": text,
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def truncate_to_nonspace(text: str, n: int) -> str:
@@ -45,10 +71,6 @@ def truncate_to_nonspace(text: str, n: int) -> str:
     return text[:end]
 
 
-def chapter_author_note(chapter: Chapter) -> str:
-    return str(getattr(chapter, "author_note", getattr(chapter, "chapter_style", "")) or "")
-
-
 @dataclass(frozen=True)
 class MemoryBlock:
     id: str
@@ -62,6 +84,23 @@ class MemoryBlock:
 class PackedWriterContext:
     memories: list[MemoryBlock]
     previous_ending: str = ""
+
+    def manifest(self) -> dict[str, Any]:
+        return {
+            "memory_brief": [
+                {
+                    "text": block.text,
+                    "source_ids": block.id.split("|"),
+                    "chapter_index": block.chapter_index,
+                    "memory_type": block.memory_type,
+                    "source_excerpt": block.text,
+                }
+                for block in self.memories
+            ],
+            "previous_ending": self.previous_ending,
+            "memory_non_whitespace_count": sum(nonspace_len(block.text) for block in self.memories),
+            "previous_ending_non_whitespace_count": nonspace_len(self.previous_ending),
+        }
 
 
 def memory_budget(bible: str = "") -> int:
@@ -105,6 +144,16 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     memory_type="summary",
                 )
             )
+        if item.long_summary.strip():
+            blocks.append(
+                MemoryBlock(
+                    id=f"chapter:{item.id}:long_summary",
+                    text=f"第 {item.index} 章长梗概：{item.long_summary.strip()}",
+                    chapter_index=item.index,
+                    memory_type="long_summary",
+                )
+            )
+        blocks.extend(_archive_memory_blocks(item))
     if prior:
         prior_ids = [item.id for item in prior]
         events = db.scalars(
@@ -133,6 +182,41 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
     return blocks
 
 
+def _archive_memory_blocks(chapter: Chapter) -> list[MemoryBlock]:
+    """Expose v1.6 accepted archive facts as individually traceable sources.
+
+    IDs are derived from the persisted chapter and slot, so source references
+    stay stable between Selector runs and always identify a chapter/type.
+    Malformed hand-edited values are ignored rather than turning a future write
+    into an archive-read failure.
+    """
+    blocks: list[MemoryBlock] = []
+    for memory_type, label, items in (
+        ("state_change", "状态变化", chapter.state_changes or []),
+        ("unresolved_item", "未决事项", chapter.unresolved_items or []),
+        ("atomic_memory", "原子记忆", chapter.atomic_memories or []),
+    ):
+        if not isinstance(items, list):
+            continue
+        for position, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            character_id = item.get("character_id")
+            blocks.append(
+                MemoryBlock(
+                    id=f"chapter:{chapter.id}:{memory_type}:{position}",
+                    text=f"第 {chapter.index} 章{label}：{text.strip()}",
+                    chapter_index=chapter.index,
+                    character_id=character_id if isinstance(character_id, str) else None,
+                    memory_type=memory_type,
+                )
+            )
+    return blocks
+
+
 def prefilter_memory_candidates(
     blocks: list[MemoryBlock],
     *,
@@ -143,7 +227,7 @@ def prefilter_memory_candidates(
     ordinary = [block for block in blocks if block.memory_type != "previous_ending"]
     if len(ordinary) <= 300 and sum(nonspace_len(block.text) for block in ordinary) <= 30_000:
         return blocks
-    query = normalize_text(f"{chapter.title}\n{chapter.user_prompt}\n{chapter_author_note(chapter)}")
+    query = normalize_text(f"{chapter.title}\n{chapter.user_prompt}")
     keywords = _keywords(query)
 
     def score(block: MemoryBlock) -> tuple[int, int, int, str]:
@@ -166,7 +250,9 @@ def prefilter_memory_candidates(
     return ending + chosen
 
 
-def memory_selector_user_message(chapter: Chapter, blocks: list[MemoryBlock], budget: int) -> str:
+def memory_selector_user_message(
+    chapter: Chapter, blocks: list[MemoryBlock], budget: int, *, bible: str | None = None
+) -> str:
     selected = _selected_characters(chapter)
     cards = _character_cards(selected, include_ids=True)
     ending_blocks = [block for block in blocks if block.memory_type == "previous_ending"]
@@ -175,11 +261,10 @@ def memory_selector_user_message(chapter: Chapter, blocks: list[MemoryBlock], bu
     ending = "\n\n".join(f"[{block.id}]\n{block.text}" for block in ending_blocks) or "（没有可用的紧邻上一章结尾）"
     return "\n\n".join(
         [
-            "# 本章剧情 Bible\n" + chapter.user_prompt.strip(),
-            "# 作者对本章的备注\n" + (chapter_author_note(chapter).strip() or "（无）"),
+            "# 本章剧情 Bible（原文快照）\n" + (bible if bible is not None else chapter.user_prompt).strip(),
             "# 本章允许人物及当前状态\n" + (cards or "（无已选人物）"),
-            f"# 历史上下文总预算\n上一章结尾和其他历史记忆合计最多 {budget} 个中文去空白字符。"
-            f"上一章结尾最多 {PREVIOUS_ENDING_MAX_CHARS} 字，章节梗概最多选 {MEMORY_SUMMARY_MAX_ITEMS} 条。你只负责选择，不得改写历史。",
+            f"# 历史记忆简报预算\n最终记忆简报最多 {budget} 个去空白字符；上一章结尾独立，最多 {PREVIOUS_ENDING_MAX_CHARS} 字。"
+            "只压缩有来源的历史事实，不得改写 Bible 或补足历史。",
             (
                 "# 紧邻上一章结尾候选（原文）\n" + ending + "\n\n"
                 "如有候选，请选择满足开场衔接所需的最短片段起点；只考虑时间、地点、动作、人物状态和最后落点，"
@@ -187,9 +272,10 @@ def memory_selector_user_message(chapter: Chapter, blocks: list[MemoryBlock], bu
             ),
             "# 候选记忆块\n" + candidates,
             (
-                '# 输出\n只返回 JSON object：{"memory_ids":["按重要性排序的候选ID"],'
-                '"previous_ending_start_id":"上一章结尾起点ID或null"}。memory_ids 允许空数组。'
-                "ID 必须从候选块的方括号中原样完整复制（chapter 类 ID 含 :headline 或 :summary 后缀），不得截断、改写或自造。"
+                '# 输出\n只返回 JSON object：{"briefs":[{"text":"精炼历史事实","source_ids":["候选ID"]}],'
+                '"conflicts":[{"text":"冲突说明","source_ids":["候选ID"]}],'
+                '"previous_ending_start_id":"上一章结尾起点ID或null"}。briefs/conflicts 允许空数组。'
+                "每条事实和冲突均须包含非空 source_ids；ID 必须从候选块的方括号中原样完整复制，不得自造。"
             ),
         ]
     )
@@ -215,7 +301,6 @@ def pack_selected_memories(blocks: list[MemoryBlock], selected_ids: Iterable[str
     by_id = {block.id: block for block in blocks if block.memory_type != "previous_ending"}
     result: list[MemoryBlock] = []
     used = 0
-    summary_count = 0
     seen: set[str] = set()
     for memory_id in selected_ids:
         if not isinstance(memory_id, str):
@@ -228,16 +313,11 @@ def pack_selected_memories(blocks: list[MemoryBlock], selected_ids: Iterable[str
         if block.id in seen:
             continue
         seen.add(block.id)
-        # Hard cap on chapter-summary blocks; headline/character_event unbounded.
-        if block.memory_type == "summary" and summary_count >= MEMORY_SUMMARY_MAX_ITEMS:
-            continue
         size = nonspace_len(block.text)
         if used + size > budget:
             continue
         result.append(block)
         used += size
-        if block.memory_type == "summary":
-            summary_count += 1
     return result
 
 
@@ -263,17 +343,56 @@ def pack_writer_context(
     )
 
 
+def pack_memory_brief(
+    blocks: list[MemoryBlock],
+    briefs: Iterable[dict[str, Any]],
+    budget: int,
+) -> list[MemoryBlock]:
+    """Validate Selector's compressed facts against recalled sources.
+
+    A brief is usable only when every source is a real non-ending candidate. We
+    retain the model's concise wording but keep all sources in the persisted
+    manifest (the first source is represented by the block id for old helpers).
+    """
+    by_id = {block.id: block for block in blocks if block.memory_type != "previous_ending"}
+    packed: list[MemoryBlock] = []
+    used = 0
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for item in briefs:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        source_ids = item.get("source_ids")
+        if not isinstance(text, str) or not text.strip() or not isinstance(source_ids, list):
+            continue
+        ids = tuple(dict.fromkeys(source_id.strip() for source_id in source_ids if isinstance(source_id, str) and source_id.strip()))
+        if not ids or any(source_id not in by_id for source_id in ids):
+            continue
+        key = (normalize_text(text).strip(), ids)
+        if key in seen:
+            continue
+        size = nonspace_len(text)
+        if used + size > budget:
+            continue
+        seen.add(key)
+        primary = by_id[ids[0]]
+        packed.append(MemoryBlock("|".join(ids), text.strip(), primary.chapter_index, primary.character_id, "memory_brief"))
+        used += size
+    return packed
+
+
 def writer_user_message(
     book: Book,
     chapter: Chapter,
     memories: list[MemoryBlock] | None = None,
     previous_ending: str = "",
+    *,
+    bible: str | None = None,
 ) -> str:
     characters = _selected_characters(chapter)
     allow = "、".join(character.name for character in characters) or "（没有已知人物卡；Bible 明写的临时角色仍可出现）"
     memory_text = "\n\n".join(block.text for block in (memories or [])) or "（本章不需要其他历史记忆）"
     ending_text = previous_ending.strip() or "（没有可用的紧邻上一章结尾）"
-    low_bound, high_bound = word_count_bounds(chapter.target_word_count)
     return "\n\n".join(
         [
             "# 世界观（硬约束）\n" + (book.world_setting.strip() or "（无）"),
@@ -292,74 +411,14 @@ def writer_user_message(
                 + "\n\n## 其他工作记忆\n"
                 + memory_text
             ),
-            "# 作者对本章的备注\n" + (chapter_author_note(chapter).strip() or "（无）"),
-            f"# 本章剧情 Bible（情节最高权威）\n标题：{chapter.title}\n\n{chapter.user_prompt.strip()}",
+            f"# 本章剧情 Bible（原文快照，情节最高权威）\n标题：{chapter.title}\n\n{(bible if bible is not None else chapter.user_prompt).strip()}",
             (
                 "# 最终执行契约\n"
                 "本章剧情 Bible 是本次写作的最高情节权威，决定本章发生什么、事件顺序和结尾落点。"
                 "历史参考只能帮助处理衔接与已发生事实，不得据此增加 Bible 未要求的剧情、场景、冲突或人物。"
                 "历史参考与 Bible 冲突时必须忽略冲突内容并服从 Bible。写作前在内部确认 Bible 的必要事件和结尾落点，不得输出分析过程。\n"
-                "在内部为 Bible 的必要事件分配足够篇幅；完成全部必要事件且达到最低字数前，不得提前进入本章结尾落点。\n"
-                f"目标 {chapter.target_word_count} 字，最终正文必须在 "
-                f"{low_bound}～{high_bound} 个去空白字符内。"
-                "只输出正文，不得解释、列提纲或擅自增加剧情、人物。"
-            ),
-        ]
-    )
-
-
-def writer_rewrite_user_message(
-    original_message: str,
-    violations: list[dict[str, Any]],
-) -> str:
-    return "\n\n".join(
-        [
-            original_message,
-            "# 上一轮篇幅校验\n" + "\n".join(f"- {item['message']}" for item in violations),
-            (
-                "# Writer 重新生成任务\n"
-                "上一轮输出严重不足，不能作为可扩写初稿。本次必须从头生成完整章节，不得续写、"
-                "仿照或依赖上一轮短稿；完成全部 Bible 事件并达到前述最低字数后才能收束结尾。"
-            ),
-        ]
-    )
-
-
-def writer_expansion_user_message(
-    book: Book,
-    chapter: Chapter,
-    current_text: str,
-    violations: list[dict[str, Any]],
-) -> str:
-    characters = _selected_characters(chapter)
-    allow = "、".join(character.name for character in characters) or "（无已选人物）"
-    states: list[str] = []
-    for character in characters:
-        dynamic = _format_dynamic_fields(character.dynamic_fields)
-        if dynamic == "（暂无）":
-            states.append(f"- {character.name}：无特殊动态状态")
-        else:
-            states.append(f"- {character.name}：\n{dynamic}")
-    state_text = "\n".join(states) or "（无）"
-    low_bound, high_bound = word_count_bounds(chapter.target_word_count)
-    current_chars = nonspace_len(current_text)
-    return "\n\n".join(
-        [
-            "# 世界观（硬约束）\n" + (book.world_setting.strip() or "（无）"),
-            f"# 本章剧情 Bible（最高权威）\n标题：{chapter.title}\n\n{chapter.user_prompt.strip()}",
-            "# 作者对本章的备注\n" + (chapter_author_note(chapter).strip() or "（无）"),
-            "# 本章必要约束\n允许人物：" + allow + "\n人物当前状态：\n" + state_text,
-            (
-                f"# 篇幅校验\n目标 {chapter.target_word_count} 字，合格区间 {low_bound}～{high_bound} 个去空白字符。\n"
-                f"当前正文 {current_chars} 字，尚缺至少 {max(0, low_bound - current_chars)} 字。\n"
-                + "\n".join(f"- {item['message']}" for item in violations)
-            ),
-            "# 当前正文\n" + current_text,
-            (
-                "# Writer 扩写任务\n"
-                "保持当前正文的事件、顺序、视角和结尾落点，在现有事件内部补足动作过程、场景反馈、"
-                "人物反应、心理变化和段落间过渡。优先扩展过于概括、跳跃或一笔带过的段落，不要只在"
-                "结尾追加内容。保留可用原文并返回完整正文；达到最低字数前不得收束结尾。只输出正文。"
+                "在内部为 Bible 的必要事件分配足够篇幅，完整写成一章。正文至少 4000 个去空白字符，"
+                "但没有产品字数上限。只输出正文，不得解释、列提纲或擅自增加剧情、人物。"
             ),
         ]
     )
@@ -408,42 +467,40 @@ def _truncate_from_end(text: str, n: int) -> str:
     return text[start:]
 
 
-def reviser_user_message(
-    chapter: Chapter,
-    current_text: str,
-    violations: list[dict[str, Any]],
-) -> str:
+def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
     characters = _selected_characters(chapter)
-    low_bound, high_bound = word_count_bounds(chapter.target_word_count)
+    # Do not send character cards, names, or world-setting facts to Extractor:
+    # IDs are an output-field whitelist only, not evidence for an archive fact.
+    character_ids = "\n".join(f"- {character.id}" for character in characters) or "（无已选人物）"
     return "\n\n".join(
         [
-            "# 本章剧情 Bible\n" + chapter.user_prompt.strip(),
-            "# 作者对本章的备注\n" + (chapter_author_note(chapter).strip() or "（无）"),
-            "# 允许人物\n" + ("、".join(c.name for c in characters) or "（无已知人物）"),
+            "# 事实来源（唯一）\n以下“最终接受正文”是唯一可以归档事实的材料。"
+            "不得使用、复述或根据未提供的 Bible、世界观、人物卡或历史记忆补写事实。",
+            "# 人物 ID 白名单（仅用于字段归属，不是事实来源）\n" + character_ids,
             (
-                "# 目标区间\n"
-                f"{low_bound}～{high_bound} 个去空白字符"
+                "# 提取输出约束\nsummary/headline/long_summary 必填；state_changes、unresolved_items、atomic_memories "
+                "逐项只记录正文中明确发生、明确改变或明确尚未解决的事实。人物更新以及这些数组中出现的 "
+                "character_id 只能使用上面列出的 ID；未选择人物时人物更新数组必须为空。"
+                f"每条 event_text 不超过 {CHARACTER_EVENT_MAX_CHARS} 个去空白字符。"
             ),
-            "# 程序校验违规报告\n" + "\n".join(f"- {item['message']}" for item in violations),
-            "# 当前正文\n" + current_text,
-            "# 修订契约\n只修复报告中的问题；保持 Bible 的情节、顺序和结尾落点。只输出完整修订正文。",
+            f"# 最终接受正文（原样）\n{chapter.draft_text}",
         ]
     )
 
 
-def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
+def checker_user_message(chapter: Chapter, draft_text: str, bible: str) -> str:
     characters = _selected_characters(chapter)
+    allow = "、".join(character.name for character in characters) or "（无已选人物）"
     return "\n\n".join(
         [
-            f"# 世界观\n{book.world_setting}",
-            f"# 本章剧情 Bible\n{chapter.user_prompt}",
-            "# 本章已选人物必要信息\n" + (_character_cards(characters, include_ids=True) or "（无已选人物）"),
+            "# 本章剧情 Bible（原文快照）\n" + bible,
+            "# 本章允许人物白名单\n" + allow,
+            "# 待检查正文（原样）\n" + draft_text,
             (
-                "# 提取输出约束\nsummary/headline 必填。人物更新只能使用上面列出的角色ID；"
-                "未选择人物时两个人物更新数组必须为空。"
-                f"每条 event_text 不超过 {CHARACTER_EVENT_MAX_CHARS} 个去空白字符。"
+                "# 检查任务\n只检查 Bible 必要事件遗漏、事件顺序或结果矛盾、以及会影响后续事实的新增人物、"
+                "线索、秘密、冲突或关系变化。文学性的动作、心理、环境和自然衔接不是违规。"
+                "每个 issue 必须同时引用正文和 Bible 证据；没有证据时不要报告 issue。"
             ),
-            f"# 最终正文\n{chapter.draft_text}",
         ]
     )
 
@@ -496,9 +553,7 @@ def validate_character_preflight(db: Session, chapter: Chapter) -> None:
     if not chapter.user_prompt.strip():
         raise CharacterPreflightError("bible_empty", "本章剧情 Bible 不能为空")
     known = list(db.scalars(select(Character).where(Character.book_id == chapter.book_id).order_by(Character.id)).all())
-    matched, ambiguous = scan_known_character_names(
-        f"{chapter.user_prompt}\n{chapter_author_note(chapter)}", known
-    )
+    matched, ambiguous = scan_known_character_names(chapter.user_prompt, known)
     if ambiguous:
         raise CharacterPreflightError(
             "ambiguous_character_name",
@@ -511,7 +566,7 @@ def validate_character_preflight(db: Session, chapter: Chapter) -> None:
     if unselected:
         raise CharacterPreflightError(
             "unselected_characters_in_bible",
-            "本章剧情 Bible 或作者备注出现了未选择人物",
+            "本章剧情 Bible 出现了未选择人物",
             {"names": unselected},
         )
 
@@ -527,14 +582,17 @@ class CharacterPreflightError(ValueError):
 def draft_violations(db: Session, chapter: Chapter, text: str, finish_reason: str | None) -> list[dict[str, Any]]:
     violations: list[dict[str, Any]] = []
     chars = nonspace_len(text)
-    low, high = word_count_bounds(chapter.target_word_count)
     if not text.strip():
         violations.append({"code": "empty_body", "message": "正文为空"})
-    if finish_reason in {"length", "max_tokens", "MAX_TOKENS"}:
+    # A local edit has no upstream completion record.  The check endpoint
+    # marks it explicitly as manual_edit, which is a normal local completion
+    # semantic rather than a truncated model response.
+    normal_finish_reasons = {"stop", "end_turn", "completed", "complete", "manual_edit", None, ""}
+    if finish_reason not in normal_finish_reasons:
         violations.append({"code": "length_truncated", "message": f"上游因长度截断（{finish_reason}）"})
-    if chars < low or chars > high:
+    if chars < MIN_DRAFT_NONSPACE_CHARS:
         violations.append(
-            {"code": "word_count", "message": f"正文 {chars} 字，不在目标区间 {low}～{high} 字", "current_chars": chars}
+            {"code": "minimum_length", "message": f"正文 {chars} 字，少于最低要求 {MIN_DRAFT_NONSPACE_CHARS} 字", "current_chars": chars}
         )
     known = list(db.scalars(select(Character).where(Character.book_id == chapter.book_id).order_by(Character.id)).all())
     matched, ambiguous = scan_known_character_names(text, known)

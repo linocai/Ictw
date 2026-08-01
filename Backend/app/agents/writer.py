@@ -4,12 +4,13 @@ from collections.abc import Iterator
 from threading import Event
 
 from app.llm.base import LLMClient
+from app.services.personas import compose_system_prompt
 
 
 class WriterAgent:
-    def __init__(self, llm: LLMClient, system_prompt: str) -> None:
+    def __init__(self, llm: LLMClient, editable_persona: str) -> None:
         self.llm = llm
-        self.system_prompt = system_prompt
+        self.system_prompt = compose_system_prompt("writer", editable_persona)
 
     def stream(self, user_message: str, cancel_event: Event | None = None) -> Iterator[str]:
         yield from self.llm.complete_stream(
