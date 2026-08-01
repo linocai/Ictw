@@ -7,9 +7,9 @@
 - SwiftUI iOS（`LinoI`）/macOS（`LinoIMac`）客户端，FastAPI + SQLAlchemy + Alembic + SQLite 后端；产品历史标识 `LinoI` 与 Bundle/Keychain/草稿目录兼容标识不改。
 - `v1.5.0(14)` 于 2026-07-28 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 当前工作树有用户未提交的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 改动；v1.6 施工不得覆盖、回滚或纳入无关提交。
-- `v1.6.1(16)` 已发布；用户已授权将发布后 Review 的五项修复直接作为 `v1.6.2(17)` 发布，并沿用“iOS 发包前停止”的范围。
+- `v1.6.2(17)` 已完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；按授权在 iOS 发包前停止。
 
-## 当前版本：v1.6.2(17) 候选隔离与任务原子性补丁（生产换装完成，发布收尾中）
+## 当前版本：v1.6.2(17) 候选隔离与任务原子性补丁（已发布，iOS 未发包）
 
 ### 版本目标
 
@@ -68,6 +68,8 @@
 
 **2026-08-01 v1.6.2 生产部署与 macOS 换装完成**：部署前全量备份位于 `/opt/linoi/backups/20260801-150522`，备份库与生产库 integrity／foreign keys 均通过；本补丁无新 migration，Alembic 保持 `20260801_0007`。内外网健康检查均为 `1.6.2`，服务 active、`NRestarts=0`、发布后错误标记为 0；实体数量保持 `3 books / 59 chapters / 28 characters / 215 character_events / 4 personas / 4 bindings`，无运行中章节。本机正式 App 已换装、验签并启动 `1.6.2(17)`，旧版备份位于 `/tmp/ictw-app-backup-v162.nnlPUl/ICTW-v1.6.1-build16.app`。发布包 `ICTW-1.6.2.zip` 为 3,119,531 B，SHA-256 `6c0e6d64bfea806879cd3f61e581185fd527684f332507ff7b1587462ec8a5cf`。iOS 未打包或安装；下一步只剩 tag、推送和 GitHub Release。
 
+**2026-08-01 v1.6.2 发布完成**：实现提交 `59395cd`、生产落账提交 `59a6381`；annotated tag `v1.6.2` 指向 `59a6381` 并已推送。GitHub Release `ICTW / LinoI v1.6.2` 已发布，资产 `ICTW-1.6.2.zip` 为 3,119,531 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.2>。本次按用户要求在 iOS 发包前停止，未打包或安装 iOS。
+
 ## 验收基线
 
 - 迁移前备份生产库；迁移后 `integrity_check`、`foreign_key_check`、`alembic heads` 全通过。任何生产 schema 改动只走 `alembic upgrade head`。
@@ -90,4 +92,4 @@
 - `v1.5.0(14)`：已发布，索引见 `archive/v1.5.0施工plan.md`。
 - `v1.6.0(15)`：已发布，详细执行记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.1(16)`：已发布，iOS 未发包；补丁记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.2(17)`：生产 Backend 与 macOS 换装完成，tag／GitHub Release 收尾中；记录见 `archive/v1.6.0施工plan.md`。
+- `v1.6.2(17)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
