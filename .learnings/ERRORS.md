@@ -645,3 +645,30 @@ Wait for the old application and LaunchServices registration to settle, register
 ### Resolution
 - **Resolved**: 2026-08-01T12:30:00+08:00
 - **Notes**: Added a short post-quit delay, explicit LaunchServices registration, and new-instance launch.
+## [ERR-20260801-015] Production role audit used a nonexistent column
+
+**Logged**: 2026-08-01T13:10:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The final read-only production audit queried `agent_personas.role`, but the deployed schema names the column `agent_role`.
+
+### Error
+`sqlite3: no such column: role`
+
+### Context
+- The failed statement was read-only and ran after service health, Alembic, integrity, foreign-key, and entity-count checks had passed.
+- `set -e` stopped the remaining remote audit statements; local App and GitHub checks continued independently.
+
+### Suggested Fix
+Inspect `pragma_table_info` before writing ad-hoc production SQL, or reuse a versioned verification query from the repository.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `/Users/linotsai/Lino/hk_info.md`
+
+### Resolution
+- **Resolved**: 2026-08-01T13:10:00+08:00
+- **Notes**: Confirmed the live column is `agent_role`, reran the role and remaining service checks, and observed no production error markers.
