@@ -223,20 +223,84 @@ def test_short_draft_rewrites_once_from_identical_input_and_preserves_candidates
     assert [item["attempt"] for item in candidates] == [1, 2]
 
 
-def test_checker_violation_keeps_draft_and_requires_explicit_override(client, auth_headers, wait_for_terminal):
+def test_checker_violation_stays_backend_only_and_does_not_replace_visible_draft(client, auth_headers, wait_for_terminal):
     class ViolationChecker:
         def complete_json(self, **kwargs):
             return {"verdict": "violation", "issues": [{"kind": "new_plot", "draft_evidence": "正文证据", "bible_evidence": "Bible证据", "reason": "越界"}]}
+
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}).json()
     client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("文" * 4000)
     client.app.dependency_overrides[get_checker_client] = lambda: ViolationChecker()
     client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
     status = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert status["phase"] == "failed"
+    assert status["error_code"] == "checker_rejected"
     assert status["checker_result"]["verdict"] == "violation"
-    assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 409
-    assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).status_code == 200
+    visible = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert visible["draft_text"] == ""
+    assert visible["status"] == "draft"
+    candidates = client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).json()
+    assert len(candidates) == 1
+    assert candidates[0]["draft_text"] == "文" * 4000
+    assert candidates[0]["checker_result"]["verdict"] == "violation"
+    assert candidates[0]["is_current"] is False
+
+
+def test_deterministic_failure_keeps_candidate_backend_only_and_restores_visible_baseline(
+    client, auth_headers, wait_for_terminal
+):
+    class RecordingChecker:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            return {"verdict": "passed", "issues": []}
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    allowed = client.post(
+        f"/api/v1/books/{book['id']}/characters",
+        headers=auth_headers,
+        json={"name": "许知"},
+    ).json()
+    client.post(
+        f"/api/v1/books/{book['id']}/characters",
+        headers=auth_headers,
+        json={"name": "林夕"},
+    ).raise_for_status()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "character_links": [{"character_id": allowed["id"]}]},
+    ).json()
+    checker = RecordingChecker()
+    baseline = "许知" + "文" * 3998
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM(baseline)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+
+    rejected = "林夕" + "文" * 3998
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM(rejected)
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/write",
+        headers=auth_headers,
+        json={"replace_draft": True},
+    ).raise_for_status()
+    failed = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert failed["phase"] == "failed"
+    assert failed["error_code"] == "writer_validation_failed"
+    assert {item["code"] for item in failed["violations"]} == {"unselected_character"}
+
+    visible = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert visible["draft_text"] == baseline
+    candidates = client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).json()
+    assert len(candidates) == 2
+    assert candidates[0]["draft_text"] == baseline and candidates[0]["is_current"] is True
+    assert candidates[1]["draft_text"] == rejected and candidates[1]["is_current"] is False
+    assert candidates[1]["deterministic_violations"][0]["code"] == "unselected_character"
+    assert checker.calls == 1
 
 
 def test_manual_edit_recheck_preserves_generated_candidate_and_creates_next_attempt(client, auth_headers, wait_for_terminal):

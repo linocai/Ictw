@@ -78,14 +78,6 @@ struct APIClient {
         try await request("/chapters/\(chapterId)/accept", method: "POST", body: CheckerAcceptPayload(override_checker: overrideChecker))
     }
 
-    func candidates(chapterId: String) async throws -> [DraftCandidate] {
-        try await request("/chapters/\(chapterId)/candidates")
-    }
-
-    func selectCandidate(chapterId: String, candidateId: String) async throws -> Chapter {
-        try await request("/chapters/\(chapterId)/candidates/select", method: "POST", body: CandidateSelectionPayload(candidate_id: candidateId))
-    }
-
     func rerunChecker(chapterId: String) async throws -> DraftCandidate {
         try await request("/chapters/\(chapterId)/check", method: "POST")
     }
@@ -130,7 +122,6 @@ struct APIClient {
 }
 
 private struct CheckerAcceptPayload: Encodable, Sendable { let override_checker: Bool }
-private struct CandidateSelectionPayload: Encodable, Sendable { let candidate_id: String }
 
 struct AnyEncodable: Encodable, @unchecked Sendable {
     private let encodeBlock: (Encoder) throws -> Void

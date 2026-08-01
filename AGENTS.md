@@ -22,6 +22,7 @@
 - 任何部署或迁移前先备份生产 `linoi.db`，随后验证 SQLite integrity、foreign keys 和 Alembic head。
 - v1.6 字数按去空白字符数计算，正文只要求不少于 4000 字且正常结束，不设产品上限；首次长度／截断失败最多从同一输入完整重写一次，常量在 `Backend/app/services/context.py`。
 - 人物选择是本章允许出现人物集合的上限；历史记忆与 Extractor 输出不会自动授权未选人物。
+- Writer 候选仅在后端留档；只有确定性校验和 Checker 均通过的候选才能提升为当前正文。双端不得拉取或渲染候选全文，也不得用旧正文的 Checker 结果表示新一轮生成已通过。
 - 能程序校验的约束必须程序复检，不能依赖模型自报“已修好”。
 - `thinking`/`effort` 是否发送由 `model_capabilities.py` 决定；实际非思考请求统一发送 `top_p=0.95`（包括未知模型），思考请求不发送 `top_p`。
 - 上游错误必须保留 `blockReason`/`finishReason` 的真实分类；不得把内容过滤伪装成普通失败，日志不得泄露 API Key、Prompt 或正文。

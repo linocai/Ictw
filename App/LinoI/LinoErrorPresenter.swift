@@ -19,8 +19,8 @@ enum LinoErrorPresenter {
     // MARK: - Public entry points
 
     /// Presents a terminal (`phase == "failed"`) `WriteJobStatus`. Reads
-    /// `errorCode` + `errorContext` for the environment/model/upstream
-    /// pieces, and — for `revision_failed` — folds in the
+/// `errorCode` + `errorContext` for the environment/model/upstream
+    /// pieces, and — for deterministic Writer validation failures — folds in the
     /// `unselected_character` violation's `names` so the message names the
     /// actual character(s) instead of a generic "validation failed".
     static func present(jobFailure status: WriteJobStatus) -> (message: String, critical: Bool) {
@@ -191,12 +191,12 @@ enum LinoErrorPresenter {
         }
     }
 
-    /// Only `revision_failed` gets annotated: it is the one job-failure code
-    /// whose `violations` can carry an `unselected_character` entry with a
+    /// Deterministic Writer validation failures can carry an
+    /// `unselected_character` entry with a
     /// concrete `names` list, letting the message name the actual
     /// character(s) instead of stopping at "未通过程序校验".
     private static func annotate(reason: String, code: String?, violations: [Violation]?) -> String {
-        guard code == "revision_failed",
+        guard ["revision_failed", "writer_validation_failed"].contains(code),
               let names = violations?.first(where: { $0.code == "unselected_character" })?.names,
               !names.isEmpty else { return reason }
         return "\(reason)，其中包含未获准人物：\(names.joined(separator: "、"))"
@@ -211,7 +211,7 @@ enum LinoErrorPresenter {
     /// block even if some future code path forgets to also set
     /// `llm_content_blocked`, so it is checked independently.
     private static let criticalCodes: Set<String> = [
-        "llm_content_blocked", "revision_failed", "writer_expansion_failed", "unauthorized",
+        "llm_content_blocked", "revision_failed", "writer_validation_failed", "writer_expansion_failed", "unauthorized",
     ]
 
     private static func isCritical(code: String?, blockReason: String?) -> Bool {
@@ -254,8 +254,18 @@ enum LinoErrorPresenter {
         // 写作链 / 后端
         case "writer_minimum_failed":
             return Entry(reason: "Writer 两次完整写作后仍未达到最低篇幅", suggestion: "请补充本章剧情后重新生成")
+        case "writer_validation_failed":
+            return Entry(
+                reason: "新正文未通过确定性校验",
+                suggestion: "失败稿只在后端留档，正文区仍显示生成前草稿；调整人物后请重新生成"
+            )
         case "checker_failed":
             return Entry(reason: "正文已生成，但 Bible 检查未完成", suggestion: "可稍后重新检查，或明确忽略后接受")
+        case "checker_rejected":
+            return Entry(
+                reason: "Checker 未通过这份新正文",
+                suggestion: "失败稿只在后端留档，正文区没有被替换；请调整 Bible、人物或模型后重新生成"
+            )
         case "write_failed":
             return Entry(reason: "写作任务出现意外错误", suggestion: "请重试；若持续出现，请联系管理员")
         case "extract_failed":

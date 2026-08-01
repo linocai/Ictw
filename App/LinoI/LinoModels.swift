@@ -745,6 +745,7 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
     static func make(
         phase: ChapterWritingPhase,
         chapterStatus: String?,
+        checkerVerdict: String?,
         validationReason: String?,
         saveState: ChapterSaveState,
         connectionInterrupted: Bool
@@ -794,7 +795,14 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
                 states[.memorySelection] = .completed
                 states[.drafting] = .completed
                 states[.deterministicValidation] = .completed
-                states[.bibleChecking] = .completed
+                switch checkerVerdict {
+                case "passed":
+                    states[.bibleChecking] = .completed
+                case "suspect", "violation":
+                    states[.bibleChecking] = .failed
+                default:
+                    states[.bibleChecking] = .pending
+                }
             case "extracting":
                 complete(before: .extraction)
                 states[.extraction] = .active
@@ -839,6 +847,19 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
             saveState: saveState,
             connectionInterrupted: connectionInterrupted
         )
+    }
+}
+
+/// A server refresh may replace editor state only if no local input changed
+/// while the request was in flight. This keeps a late failure reconciliation
+/// from undoing a newly selected character or edited Bible/body.
+enum ChapterRefreshReconciler {
+    static func shouldReplaceLocal(
+        startingRevision: UInt64,
+        currentRevision: UInt64,
+        hasLocalInputDivergence: Bool
+    ) -> Bool {
+        startingRevision == currentRevision && !hasLocalInputDivergence
     }
 }
 

@@ -52,7 +52,7 @@ struct MacChapterEditor: View {
         .confirmationDialog("忽略 Bible 检查并接受？", isPresented: $confirmingCheckerOverride, titleVisibility: .visible) {
             Button("确认忽略并接受", role: .destructive) { accept(overrideChecker: true) }
             Button("取消", role: .cancel) {}
-        } message: { Text("这会保留当前候选稿，并以你的明确决定继续提取归档。") }
+        } message: { Text("这会保留当前正文，并以你的明确决定继续提取归档。") }
     }
 
     // MARK: - Empty
@@ -375,7 +375,7 @@ struct MacChapterEditor: View {
                 .buttonStyle(LinoISuccessButtonStyle())
                 .disabled(!canAccept)
                 .onHover { pointer($0 && canAccept) }
-                if hasDraft && !editor.writingPhase.isActive && !checkerAllowsAcceptance {
+                if hasDraft && !editor.writingPhase.isActive && editor.checkerAppliesToVisibleDraft && !checkerAllowsAcceptance {
                     Button("忽略检查并接受") { confirmingCheckerOverride = true }
                         .buttonStyle(LinoITintButtonStyle())
                         .onHover { pointer($0) }
@@ -396,29 +396,6 @@ struct MacChapterEditor: View {
                     ForEach(context.conflicts) { conflict in labeledText("Bible 冲突提示", [conflict.memoryEvidence, conflict.bibleEvidence, conflict.reason].compactMap { $0 }.joined(separator: "\n")) }
                 } else { Text("等待本次生成完成后显示实际采用的记忆。").font(.system(size: 11)).foregroundStyle(LinoTheme.muted) }
             }
-            DisclosureGroup("候选稿（\(editor.draftCandidates.count)）") {
-                if editor.candidatesLoading { ProgressView() }
-                ForEach(editor.draftCandidates) { candidate in
-                    DisclosureGroup {
-                        Text(candidate.draftText)
-                            .font(.system(size: 11))
-                            .foregroundStyle(LinoTheme.body)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if !candidate.isCurrent {
-                            Button("选择这份候选稿") { Task { if let chapter = await editor.selectCandidate(candidate) { workspace.upsert(chapter) } } }
-                                .buttonStyle(LinoITintButtonStyle(compact: true))
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(candidate.displaySource) · \(candidate.nonWhitespaceCount) 字\(candidate.isCurrent ? " · 当前" : "")").font(.system(size: 12, weight: .semibold))
-                            Text(candidate.checkerResult?.displayVerdict.checkerLabel ?? "等待检查").font(.system(size: 11)).foregroundStyle(LinoTheme.muted)
-                        }
-                    }
-                    .padding(.vertical, 3)
-                }
-                if !editor.draftCandidates.isEmpty { Button("刷新候选") { Task { await editor.loadCandidates() } }.buttonStyle(LinoITintButtonStyle(compact: true)) }
-            }
             DisclosureGroup("Bible 检查结果") { checkerPanel }
         }
         .padding(16).linoPanelGlass(cornerRadius: LinoMacMetrics.cardRadius)
@@ -428,7 +405,13 @@ struct MacChapterEditor: View {
         let result = editor.checkerResult
         Text((result?.displayVerdict ?? "unavailable").checkerLabel).font(.system(size: 12, weight: .semibold)).foregroundStyle(result?.isPassed == true ? LinoTheme.success : LinoTheme.warning)
         if let issues = result?.issues, !issues.isEmpty { ForEach(issues) { issue in VStack(alignment: .leading, spacing: 3) { labeledText("正文证据", issue.draftEvidence); labeledText("Bible 证据", issue.bibleEvidence); Text(issue.reason).font(.system(size: 11)).foregroundStyle(LinoTheme.muted) } } } else { Text(result?.displayVerdict == "unavailable" ? "正文已生成，Bible 检查尚不可用。" : "Checker 只检查剧情边界，不评价文风。").font(.system(size: 11)).foregroundStyle(LinoTheme.muted) }
-        HStack { Button(editor.checkerRefreshing ? "检查中" : "重新检查") { Task { _ = await editor.rerunChecker() } }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.checkerRefreshing || !hasDraft); Button("编辑后检查") { draftMode = .edit }.buttonStyle(LinoITintButtonStyle(compact: true)) }
+        if editor.writingPhase.isFailed && !editor.checkerAppliesToVisibleDraft {
+            Text("这次失败稿只在后端留档，没有进入正文区。请调整输入后重新生成。")
+                .font(.system(size: 11))
+                .foregroundStyle(LinoTheme.warning)
+        } else {
+            HStack { Button(editor.checkerRefreshing ? "检查中" : "重新检查") { Task { _ = await editor.rerunChecker() } }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.checkerRefreshing || !hasDraft); Button("编辑后检查") { draftMode = .edit }.buttonStyle(LinoITintButtonStyle(compact: true)) }
+        }
     }
 
     private func labeledText(_ title: String, _ value: String) -> some View { VStack(alignment: .leading, spacing: 2) { Text(title).font(.system(size: 10, weight: .semibold)).foregroundStyle(LinoTheme.muted); Text(value).font(.system(size: 11)).foregroundStyle(LinoTheme.body).fixedSize(horizontal: false, vertical: true) } }
@@ -526,7 +509,9 @@ struct MacChapterEditor: View {
         hasDraft ? "重新生成" : "生成"
     }
 
-    private var checkerAllowsAcceptance: Bool { editor.checkerResult?.isPassed == true }
+    private var checkerAllowsAcceptance: Bool {
+        editor.checkerAppliesToVisibleDraft && editor.checkerResult?.isPassed == true
+    }
     private var canAccept: Bool {
         guard hasDraft, !editor.writingPhase.isActive else { return false }
         if editor.writingPhase.isFailed {

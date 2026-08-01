@@ -1,5 +1,81 @@
 # Errors
 
+## [ERR-20260801-017] Checker override test depended on another test's global character ID
+
+**Logged**: 2026-08-01T12:55:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+Checker 覆盖接受用例单独运行时 Extractor 失败，因为默认替身读取了其它测试写入的 `pytest.character_id`。
+
+### Error
+
+```text
+expected extract phase done, got failed
+```
+
+### Context
+
+- 全量测试按既定顺序运行时会被前置用例意外初始化，因此过去保持绿色。
+- 新增定向回归把该测试隔离运行后暴露了顺序依赖，产品运行时不使用该全局变量。
+
+### Suggested Fix
+
+不需要人物输出的用例显式注入空 Extractor，避免共享 `pytest` 全局状态；每个测试自行声明完整依赖。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: Backend/tests/test_api.py, Backend/tests/conftest.py
+
+### Resolution
+
+- **Resolved**: 2026-08-01T12:56:00+08:00
+- **Notes**: Checker 失败稿改为后端闸门后不再进入 Extractor；该用例已完全移除对默认 Extractor 和全局人物 ID 的隐式依赖，可独立运行。
+
+---
+
+## [ERR-20260801-016] Client state harness excludes error presenter dependencies
+
+**Logged**: 2026-08-01T12:52:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+在纯状态测试中加入统一错误文案断言后，测试脚本因未编译 `LinoErrorPresenter` 及其 `APIError` 依赖而链接失败。
+
+### Error
+
+```text
+cannot find 'LinoErrorPresenter' in scope
+```
+
+### Context
+
+- `run_client_state_tests.sh` 有意只编译 `LinoModels.swift` 与 `ClientStateTests.swift`。
+- 产品双端 target 本身包含 `LinoErrorPresenter.swift`；此前 iOS/macOS 构建均通过。
+
+### Suggested Fix
+
+纯状态 harness 继续只测试状态映射与刷新竞态；统一错误文案由双端 target 编译覆盖。若未来需要独立文案单测，再建立包含 `APIError` 最小依赖的专用 harness。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: App/Tests/run_client_state_tests.sh, App/LinoI/LinoErrorPresenter.swift
+
+### Resolution
+
+- **Resolved**: 2026-08-01T12:53:00+08:00
+- **Notes**: 移除越界的 harness 断言，保留产品文案修改并由双端构建验证。
+
+---
+
 ## [ERR-20260801-015] Production verification assumed non-existent job status columns
 
 **Logged**: 2026-08-01T12:34:00+08:00

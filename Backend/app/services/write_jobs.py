@@ -303,22 +303,27 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             _restore_baseline(db, job)
             code = "writer_minimum_failed" if length_only else "writer_validation_failed"
             record_job_phase(sf, job.job_id, "failed", attempt=attempt, violations=violations, error_code=code,
-                             error_message="整章生成未通过确定性校验；候选已保留", error_context={"agent_role": "writer"})
+                             error_message="整章生成未通过确定性校验；失败稿已后台留档，未替换当前正文",
+                             error_context={"agent_role": "writer"})
             job.mark_terminal("failed")
             return
         assert last_candidate is not None
         if hashlib.sha256(chapter.user_prompt.encode()).hexdigest() != job.bible_sha256 or not write_registry.is_current(job):
             _restore_baseline(db, job); job.mark_terminal(); return
-        # Make the valid candidate editable before the non-mutating Checker runs.
-        db.execute(update(ChapterDraftCandidate).where(ChapterDraftCandidate.chapter_id == chapter.id).values(is_current=False))
-        last_candidate.is_current = True
-        chapter.draft_text, chapter.status = last_candidate.draft_text, "draft_ready"
-        db.commit()
+        # Keep the candidate backend-only until Checker explicitly passes it.
+        # The visible chapter stays on its pre-generation baseline throughout
+        # checking, so rejected/unavailable output can never flash into the UI.
         fingerprint = last_candidate.draft_fingerprint
         record_job_phase(sf, job.job_id, "checking", attempt=last_candidate.attempt, draft_fingerprint=fingerprint)
         try:
             assert job.checker is not None
-            raw = _call(job, sf, "checker", job.checker.check, checker_user_message(chapter, chapter.draft_text, job.bible_snapshot))
+            raw = _call(
+                job,
+                sf,
+                "checker",
+                job.checker.check,
+                checker_user_message(chapter, last_candidate.draft_text, job.bible_snapshot),
+            )
             checker_result = _valid_checker_result(raw, fingerprint)
         except LLMError as exc:
             checker_result = {"status": "unavailable", "draft_fingerprint": fingerprint, "error_code": exc.code, "error_context": _error_context(exc)}
@@ -326,10 +331,41 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             checker_result = {"status": "unavailable", "draft_fingerprint": fingerprint, "error_code": "checker_invalid", "error_message": str(exc)}
         last_candidate.checker_result = checker_result
         db.commit()
-        record_job_phase(sf, job.job_id, "done", checker_result=checker_result, bible_sha256=job.bible_sha256,
-                         draft_fingerprint=fingerprint,
-                         error_code=checker_result.get("error_code"), error_message=checker_result.get("error_message"))
-        job.mark_terminal("done")
+        if checker_result.get("verdict") == "passed":
+            db.execute(
+                update(ChapterDraftCandidate)
+                .where(ChapterDraftCandidate.chapter_id == chapter.id)
+                .values(is_current=False)
+            )
+            last_candidate.is_current = True
+            chapter.draft_text, chapter.status = last_candidate.draft_text, "draft_ready"
+            db.commit()
+            record_job_phase(
+                sf,
+                job.job_id,
+                "done",
+                checker_result=checker_result,
+                bible_sha256=job.bible_sha256,
+                draft_fingerprint=fingerprint,
+            )
+            job.mark_terminal("done")
+        else:
+            _restore_baseline(db, job)
+            error_code = checker_result.get("error_code") or "checker_rejected"
+            error_message = checker_result.get("error_message") or "Checker 未通过；失败稿已后台留档，未替换当前正文"
+            error_context = checker_result.get("error_context") or {"agent_role": "checker"}
+            record_job_phase(
+                sf,
+                job.job_id,
+                "failed",
+                checker_result=checker_result,
+                bible_sha256=job.bible_sha256,
+                draft_fingerprint=fingerprint,
+                error_code=error_code,
+                error_message=error_message,
+                error_context=error_context,
+            )
+            job.mark_terminal("failed")
     except LLMError as exc:
         db.rollback(); _restore_baseline(db, job)
         record_job_phase(sf, job.job_id, "failed", error_code=exc.code, error_message=str(exc), error_context=_error_context(exc))

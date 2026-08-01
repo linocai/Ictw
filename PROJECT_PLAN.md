@@ -22,9 +22,9 @@
 3. Bible 原文由程序从章节快照直接传给 Selector/Writer/Checker，不被任何 Agent 改写；以 hash 与输入版本保护。当前 Bible 与历史记忆冲突时，Bible 优先。
 4. Selector 机械扩大召回后低温压缩为带来源的“本章记忆简报”；上一章尾段独立承担开场承接。无来源或无效来源的记忆不进入 Writer，实际 Writer 上下文可查看。
 5. Writer 一次生成整章，不分场景、不扩写旧稿。只要求去空白字符 `>=4000` 且正常结束；无产品字数上限。首稿不足/截断仅可从同一输入完整重写一次，第二次失败即停止；人物白名单等既有可程序验证约束仍保留。
-6. Checker 只对 Bible 的遗漏、矛盾和新增剧情举证，结论为通过/存疑/明确越界；不修改正文、不评价文风。用户可重生、编辑并复查，或明确忽略后接受。
+6. Checker 只对 Bible 的遗漏、矛盾和新增剧情举证，结论为通过/存疑/明确越界；不修改正文、不评价文风。Writer 新稿只有 Checker 明确通过后才提升为当前正文；存疑、越界或检查不可用的稿件仅在后端留档，前端显示原因和必要证据但不渲染全文。
 7. Extractor 只从已接受正文提取长摘要、状态变化、未决事项和带来源原子记忆；既有人物白名单和字段回滚约束不变。
-8. 所有候选稿保留且互不覆盖；四个现役 Agent 的默认人格词重做，双端可编辑、可恢复默认。人格词与始终生效的不可编辑程序协议分离。
+8. 所有候选稿在后端保留且互不覆盖，但双端不拉取、不展示、不切换候选全文；当前正文是唯一前端正文。四个现役 Agent 的默认人格词重做，双端可编辑、可恢复默认。人格词与始终生效的不可编辑程序协议分离。
 
 ### 非范围与兼容
 
@@ -55,6 +55,8 @@
 **2026-08-01 生产部署与 macOS 换装完成**：部署前备份位于 `/opt/linoi/backups/20260801-121924`，数据库完整性与外键检查通过；停服后代码同步并由 Alembic 升级至唯一 head `20260801_0007`。服务启动后内外网健康检查均为 `1.6.0`，实体数量保持 `3 books / 59 chapters / 28 characters / 222 character_events / 4 personas / 4 bindings`，角色为 Checker、Extractor、Memory Selector、Writer，systemd `NRestarts=0`。本机正式 App 已换装、验签并启动 `1.6.0(15)`，旧版备份位于 `/tmp/ictw-app-backup-v160.zyCPpJ`；发布包解压复验通过，SHA-256 为 `9b57c7c4ad6714bca5f241b2ef067c8cfb5b9f54a042bd0d5ec42c2bbcb4fca2`。iOS 未安装，由用户处理；下一步只剩 tag、推送和 GitHub Release。
 
 **2026-08-01 v1.6.0 发布完成**：实现提交 `011457d`、生产落账提交 `1051650`；annotated tag `v1.6.0` 指向 `1051650` 并已推送。GitHub Release `ICTW / LinoI v1.6.0` 已发布，附带 `ICTW-1.6.0.zip`（3,166,379 B；GitHub digest 与本地 SHA-256 一致）。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.0>。iOS 未安装，由用户自行处理。
+
+**2026-08-01 发布后缺陷修复完成（尚未部署）**：实测发现 Writer 因未获准人物失败后，点击人物会清除失败态，而旧正文的 Checker 结果与 `draft_ready` 机械映射使界面误画为全通过；失败后的异步刷新还可能覆盖刚选择的人物。现已在生成开始／写作失败时失效旧 Checker 状态，`draft_ready` 仅在当前 Checker 明确 passed 时完成检查步骤，并以本地编辑 revision 阻止迟到刷新覆盖输入。设计同步收口为“候选仅后端留档”：双端删除候选全文、切换和刷新入口，Writer 新稿经确定性校验与 Checker passed 后才提升为当前正文；其它稿件不进入正文区。回归覆盖未获准人物、Checker violation、可见基线保持和刷新竞态；Backend 87 项、客户端状态测试、iOS/macOS Debug、唯一 Alembic head 与 diff check 全部通过。生产 Backend 与正式 App 仍是已发布的原 `v1.6.0(15)`，本补丁未部署、未换装。
 
 ## 验收基线
 

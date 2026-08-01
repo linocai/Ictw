@@ -203,6 +203,60 @@ private func testV16ContextAndCheckerDecode() throws {
     try expect(ChapterWritingPhase.legacyRevising.label == "旧版任务记录", "legacy phase must not expose Reviser")
 }
 
+private func testDraftReadyDoesNotPretendCheckerPassed() throws {
+    let pending = ChapterEditorPresentationState.make(
+        phase: .idle,
+        chapterStatus: "draft_ready",
+        checkerVerdict: nil,
+        validationReason: nil,
+        saveState: .synced,
+        connectionInterrupted: false
+    )
+    let pendingCheck = pending.steps.first { $0.stage == .bibleChecking }
+    try expect(pendingCheck?.state == .pending, "draft_ready without a current Checker pass must stay pending")
+
+    let passed = ChapterEditorPresentationState.make(
+        phase: .idle,
+        chapterStatus: "draft_ready",
+        checkerVerdict: "passed",
+        validationReason: nil,
+        saveState: .synced,
+        connectionInterrupted: false
+    )
+    let passedCheck = passed.steps.first { $0.stage == .bibleChecking }
+    try expect(passedCheck?.state == .completed, "only an explicit current pass may complete Bible checking")
+
+    let violation = ChapterEditorPresentationState.make(
+        phase: .idle,
+        chapterStatus: "draft_ready",
+        checkerVerdict: "violation",
+        validationReason: nil,
+        saveState: .synced,
+        connectionInterrupted: false
+    )
+    let failedCheck = violation.steps.first { $0.stage == .bibleChecking }
+    try expect(failedCheck?.state == .failed, "a Checker violation must render as failed")
+}
+
+private func testLateRefreshCannotOverwriteLocalCharacterEdit() throws {
+    try expect(
+        ChapterRefreshReconciler.shouldReplaceLocal(
+            startingRevision: 8,
+            currentRevision: 8,
+            hasLocalInputDivergence: false
+        ),
+        "an unchanged synchronized editor may accept a server refresh"
+    )
+    try expect(
+        !ChapterRefreshReconciler.shouldReplaceLocal(
+            startingRevision: 8,
+            currentRevision: 9,
+            hasLocalInputDivergence: true
+        ),
+        "a late refresh must not undo a character selection made in flight"
+    )
+}
+
 @main
 private struct ClientStateTestRunner {
     static func main() throws {
@@ -213,6 +267,8 @@ private struct ClientStateTestRunner {
         try testCachedFailureRestoresSafeDetails()
         try testCachedFailureInvalidatesOnAnyInputChangeOrFinalization()
         try testV16ContextAndCheckerDecode()
+        try testDraftReadyDoesNotPretendCheckerPassed()
+        try testLateRefreshCannotOverwriteLocalCharacterEdit()
         print("Client state tests passed")
     }
 }

@@ -192,7 +192,7 @@ private struct LinoIChapterEditor: View {
             Button("确认忽略并接受", role: .destructive) { acceptTapped(overrideChecker: true) }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("这会保留当前候选稿，并以你的明确决定继续提取归档。")
+            Text("这会保留当前正文，并以你的明确决定继续提取归档。")
         }
     }
 
@@ -472,7 +472,7 @@ private struct LinoIChapterEditor: View {
                 }
                 .buttonStyle(LinoISuccessButtonStyle())
                 .disabled(!canAccept)
-                if hasDraft && !editor.writingPhase.isActive && !checkerAllowsAcceptance {
+                if hasDraft && !editor.writingPhase.isActive && editor.checkerAppliesToVisibleDraft && !checkerAllowsAcceptance {
                     Button("忽略检查并接受") { confirmingCheckerOverride = true }
                         .buttonStyle(LinoITintButtonStyle())
                 }
@@ -496,29 +496,6 @@ private struct LinoIChapterEditor: View {
                     }
                 } else { Text("等待本次生成完成后显示实际采用的记忆。") .font(.caption).foregroundStyle(LinoTheme.muted) }
             }
-            DisclosureGroup("候选稿（\(editor.draftCandidates.count)）") {
-                if editor.candidatesLoading { ProgressView() }
-                ForEach(editor.draftCandidates) { candidate in
-                    DisclosureGroup {
-                        Text(candidate.draftText)
-                            .font(.caption)
-                            .foregroundStyle(LinoTheme.body)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if !candidate.isCurrent {
-                            Button("选择这份候选稿") { Task { if let chapter = await editor.selectCandidate(candidate) { workspace.upsert(chapter) } } }
-                                .buttonStyle(LinoITintButtonStyle(compact: true))
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(candidate.displaySource) · \(candidate.nonWhitespaceCount) 字\(candidate.isCurrent ? " · 当前" : "")").font(.footnote.weight(.semibold))
-                            Text(candidate.checkerResult?.displayVerdict.checkerLabel ?? "等待检查").font(.caption).foregroundStyle(LinoTheme.muted)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                if !editor.draftCandidates.isEmpty { Button("刷新候选") { Task { await editor.loadCandidates() } }.buttonStyle(LinoITintButtonStyle(compact: true)) }
-            }
             DisclosureGroup("Bible 检查结果") {
                 checkerPanel
             }
@@ -534,7 +511,13 @@ private struct LinoIChapterEditor: View {
                 VStack(alignment: .leading, spacing: 3) { labeledText("正文证据", issue.draftEvidence); labeledText("Bible 证据", issue.bibleEvidence); Text(issue.reason).font(.caption).foregroundStyle(LinoTheme.muted) }
             }
         } else { Text(result?.displayVerdict == "unavailable" ? "正文已生成，Bible 检查尚不可用。" : "Checker 只检查剧情边界，不评价文风。").font(.caption).foregroundStyle(LinoTheme.muted) }
-        HStack { Button(editor.checkerRefreshing ? "检查中" : "重新检查") { Task { _ = await editor.rerunChecker() } }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.checkerRefreshing || !hasDraft); Button("编辑后检查") { draftMode = .edit }.buttonStyle(LinoITintButtonStyle(compact: true)) }
+        if editor.writingPhase.isFailed && !editor.checkerAppliesToVisibleDraft {
+            Text("这次失败稿只在后端留档，没有进入正文区。请调整输入后重新生成。")
+                .font(.caption)
+                .foregroundStyle(LinoTheme.warning)
+        } else {
+            HStack { Button(editor.checkerRefreshing ? "检查中" : "重新检查") { Task { _ = await editor.rerunChecker() } }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.checkerRefreshing || !hasDraft); Button("编辑后检查") { draftMode = .edit }.buttonStyle(LinoITintButtonStyle(compact: true)) }
+        }
     }
 
     private func labeledText(_ title: String, _ value: String) -> some View {
@@ -628,7 +611,9 @@ private struct LinoIChapterEditor: View {
         hasDraft ? "重新生成" : "生成"
     }
 
-    private var checkerAllowsAcceptance: Bool { editor.checkerResult?.isPassed == true }
+    private var checkerAllowsAcceptance: Bool {
+        editor.checkerAppliesToVisibleDraft && editor.checkerResult?.isPassed == true
+    }
     private var canAccept: Bool {
         guard hasDraft, !editor.writingPhase.isActive else { return false }
         if editor.writingPhase.isFailed {
