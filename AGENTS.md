@@ -47,7 +47,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
-- 用户已于 2026-08-01 授权一次性完成 `v1.6.0(15)` 版本号、香港现网 Backend 部署与迁移、macOS 正式 App 换装、tag 和 GitHub Release；iOS 由用户处理。
+- `v1.6.0(15)` 已于 2026-08-01 完成香港现网 Backend 部署与 Alembic `20260801_0007` 迁移、macOS 正式 App 换装；tag 与 GitHub Release 正在收尾，iOS 由用户处理。
 - `v1.5.0(14)` 已于 2026-07-28 完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 香港云迁移宁波云已暂停，恢复条件、范围和顺序以 `PROJECT_PLAN.md` 的「暂停／待恢复」段落为准。
 - ICP 备案、非标准 HTTPS 端口或已备案域名的路线未确定前，只能做本地计划、只读盘点和新机离线准备，不得切 DNS 或停生产。

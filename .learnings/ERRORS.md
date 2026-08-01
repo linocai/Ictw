@@ -1,5 +1,44 @@
 # Errors
 
+## [ERR-20260801-015] Production verification assumed non-existent job status columns
+
+**Logged**: 2026-08-01T12:34:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+发版后只读统计先后假设 `job_runs.status` 和 `job_runs.state` 存在，SQLite 查询失败。
+
+### Error
+
+```text
+no such column: status
+no such column: state
+```
+
+### Context
+
+- 服务、迁移与数据库均已正常，失败仅发生在补充统计查询。
+- 实际任务状态列为 `phase`，人格角色列为 `agent_role`。
+
+### Suggested Fix
+
+生产核验脚本先读取 `pragma_table_info`，或直接复用当前 SQLAlchemy 模型中的列名；终态按 `phase` 的 `done/failed/cancelled` 统计。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: Backend/app/models.py, /Users/linotsai/Lino/hk_info.md
+
+### Resolution
+
+- **Resolved**: 2026-08-01T12:35:00+08:00
+- **Notes**: 按实际 `phase` 分组复核，生产任务全部处于终态。
+
+---
+
 ## [ERR-20260728-007] staged-secret-scan
 
 **Logged**: 2026-07-28T18:52:00+08:00
@@ -449,3 +488,84 @@ The Swift CoreServices overlay did not expose `kAXScrollToVisibleAction`.
 
 ### Correction
 Use the documented accessibility action string `"AXScrollToVisible"` when the named constant is unavailable.
+## [ERR-20260801-012] Remote preflight script expanded by local shell
+
+**Logged**: 2026-08-01T12:20:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A production preflight command embedded a multi-line remote script in a locally evaluated command string; command substitutions and SQL metacharacters were expanded by the local zsh before SSH ran.
+
+### Error
+`command not found: systemctl`, local `stat`/`df` errors, and no remote execution.
+
+### Context
+- The failure occurred before connecting to or mutating the production host.
+- The script contained `$()`, SQL parentheses, and nested quotes.
+
+### Suggested Fix
+Send multi-line deployment scripts to `ssh ... bash -s` over standard input so the local shell only handles the SSH command and never parses remote script contents.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `/Users/linotsai/Lino/hk_info.md`
+
+### Resolution
+- **Resolved**: 2026-08-01T12:20:00+08:00
+- **Notes**: Switched the production workflow to a stdin-fed remote script.
+## [ERR-20260801-013] systemd active preceded backend readiness
+
+**Logged**: 2026-08-01T12:25:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The production deployment treated `systemctl is-active` as application readiness and issued one immediate health request before Uvicorn had bound port 8787.
+
+### Error
+`curl: (7) Failed to connect to 127.0.0.1 port 8787`
+
+### Context
+- Alembic migration and database checks had passed.
+- The guarded deployment automatically restored the pre-release database/code backup and restarted the old service.
+
+### Suggested Fix
+After starting systemd, poll the authenticated health endpoint with a bounded retry loop; service process state alone is not a readiness probe.
+
+### Metadata
+- Reproducible: timing-dependent
+- Related Files: `/Users/linotsai/Lino/hk_info.md`
+
+### Resolution
+- **Resolved**: 2026-08-01T12:25:00+08:00
+- **Notes**: Added bounded authenticated health polling before accepting the deployment.
+## [ERR-20260801-014] LaunchServices -609 after atomic App replacement
+
+**Logged**: 2026-08-01T12:30:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The first macOS atomic replacement passed staging and signature checks, but `open` returned LaunchServices error `-609` immediately after quitting the old app.
+
+### Error
+`_LSOpenURLsWithCompletionHandler() failed with error -609`
+
+### Context
+- The guarded installer restored `/Applications/ICTW.app` from its backup.
+- The backend deployment was already complete and unaffected.
+
+### Suggested Fix
+Wait for the old application and LaunchServices registration to settle, register the replacement explicitly, and launch a new instance with `open -n` before judging readiness.
+
+### Metadata
+- Reproducible: timing-dependent
+- Related Files: `/Applications/ICTW.app`
+
+### Resolution
+- **Resolved**: 2026-08-01T12:30:00+08:00
+- **Notes**: Added a short post-quit delay, explicit LaunchServices registration, and new-instance launch.
