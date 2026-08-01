@@ -7,9 +7,9 @@
 - SwiftUI iOS（`LinoI`）/macOS（`LinoIMac`）客户端，FastAPI + SQLAlchemy + Alembic + SQLite 后端；产品历史标识 `LinoI` 与 Bundle/Keychain/草稿目录兼容标识不改。
 - `v1.5.0(14)` 于 2026-07-28 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 当前工作树有用户未提交的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 改动；v1.6 施工不得覆盖、回滚或纳入无关提交。
-- `v1.6.0(15)` 已完成香港现网 Backend 部署、生产库 `20260801_0007` 迁移、macOS 正式 App 换装、tag 与 GitHub Release；iOS 由用户处理。
+- `v1.6.0(15)` 已发布；用户已授权将候选／Checker 状态修复作为 `v1.6.1(16)` 补丁完成 Backend、macOS、tag 与 GitHub Release，并在 iOS 发包前停止。
 
-## 当前版本：v1.6.0(15) 写作架构升级（已发布）
+## 当前版本：v1.6.1(16) 候选闸门与状态修复（发版执行中）
 
 ### 版本目标
 
@@ -58,6 +58,8 @@
 
 **2026-08-01 发布后缺陷修复完成（尚未部署）**：实测发现 Writer 因未获准人物失败后，点击人物会清除失败态，而旧正文的 Checker 结果与 `draft_ready` 机械映射使界面误画为全通过；失败后的异步刷新还可能覆盖刚选择的人物。现已在生成开始／写作失败时失效旧 Checker 状态，`draft_ready` 仅在当前 Checker 明确 passed 时完成检查步骤，并以本地编辑 revision 阻止迟到刷新覆盖输入。设计同步收口为“候选仅后端留档”：双端删除候选全文、切换和刷新入口，Writer 新稿经确定性校验与 Checker passed 后才提升为当前正文；其它稿件不进入正文区。回归覆盖未获准人物、Checker violation、可见基线保持和刷新竞态；Backend 87 项、客户端状态测试、iOS/macOS Debug、唯一 Alembic head 与 diff check 全部通过。生产 Backend 与正式 App 仍是已发布的原 `v1.6.0(15)`，本补丁未部署、未换装。
 
+**2026-08-01 v1.6.1 发版授权**：用户授权将上述修复作为补丁版发布，并要求在 iOS 发包前停止。版本更新为 `1.6.1(16)`；范围为全量验证、生产 Backend 备份与部署、macOS 正式 App 换装、tag、推送和 GitHub Release，不打包或安装 iOS。
+
 ## 验收基线
 
 - 迁移前备份生产库；迁移后 `integrity_check`、`foreign_key_check`、`alembic heads` 全通过。任何生产 schema 改动只走 `alembic upgrade head`。
@@ -79,3 +81,4 @@
 
 - `v1.5.0(14)`：已发布，索引见 `archive/v1.5.0施工plan.md`。
 - `v1.6.0(15)`：已发布，详细执行记录见 `archive/v1.6.0施工plan.md`。
+- `v1.6.1(16)`：发版执行中，补丁记录继续写入 `archive/v1.6.0施工plan.md`。
