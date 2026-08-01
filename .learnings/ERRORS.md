@@ -784,3 +784,33 @@ Use SQLite's native `ALTER TABLE ... DROP COLUMN` for an unconstrained legacy co
 ### Resolution
 - **Resolved**: 2026-08-01T16:10:00+08:00
 - **Notes**: Replaced batch-table recreation with Alembic's native drop-column operation and reran the migration suite.
+
+## [ERR-20260801-020] Expected inactive systemd state tripped errexit
+
+**Logged**: 2026-08-01T16:05:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The guarded v1.6.3 deployment stopped the backend successfully, but checking the expected inactive state with `systemctl is-active` triggered Bash `errexit` because systemd returns a nonzero status for inactive units.
+
+### Error
+`DEPLOY_FAILED status=1 line=43` followed by `ROLLBACK_SERVICE=active`
+
+### Context
+- Failure happened before the backup directory was created and before any code or database migration.
+- The rollback handler restarted the unchanged v1.6.2 service.
+- Follow-up checks confirmed Alembic `20260801_0007`, the legacy summary column, database integrity, foreign keys, and v1.6.2 health were unchanged.
+
+### Suggested Fix
+Read expected inactive state through `systemctl show -p ActiveState --value`, whose success status is independent of the unit state, instead of using `systemctl is-active` inside an errexit-sensitive command substitution.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `/Users/linotsai/Lino/hk_info.md`
+- See Also: ERR-20260801-013
+
+### Resolution
+- **Resolved**: 2026-08-01T16:05:00+08:00
+- **Notes**: Confirmed the server remained on the intact v1.6.2 state and changed the stop assertion to use `ActiveState` before retrying.

@@ -7,9 +7,9 @@
 - SwiftUI iOS（`LinoI`）/macOS（`LinoIMac`）客户端，FastAPI + SQLAlchemy + Alembic + SQLite 后端；产品历史标识 `LinoI` 与 Bundle/Keychain/草稿目录兼容标识不改。
 - `v1.5.0(14)` 于 2026-07-28 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 当前工作树有用户未提交的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 改动；v1.6 施工不得覆盖、回滚或纳入无关提交。
-- `v1.6.2(17)` 已完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；按授权在 iOS 发包前停止。
+- `v1.6.3(18)` 已完成 Backend 部署、Alembic 摘要合并迁移与 macOS 正式 App 换装；tag 与 GitHub Release 正在收尾，iOS 不在本次范围。
 
-## 当前版本：v1.6.3(18) 章节摘要合并快修（发版准备）
+## 当前版本：v1.6.3(18) 章节摘要合并快修（发布执行中）
 
 ### 版本目标
 
@@ -72,6 +72,8 @@
 
 **2026-08-01 v1.6.3 快修施工**：用户决定合并 Extractor 重复的「梗概／长摘要」，不进入正式 Planner 工作流。`long_summary` 成为唯一章节摘要且不设机械字数；Alembic 将历史 `summary` 原文回填至空摘要后物理删除旧列，已有新摘要不覆盖。Extractor 不再生成旧梗概，Selector 每章只提供一份稳定摘要来源；API 继续动态提供旧 `summary` wire 别名兼容 v1.6.2 客户端，双端只展示「章节摘要」。版本更新为 `1.6.3(18)`；Backend 89 项、客户端状态测试、iOS/macOS Debug、签名 macOS Release、唯一 Alembic head `20260801_0008` 与迁移子表保全测试均通过。生产部署、macOS 换装、tag 与 Release 尚未执行。
 
+**2026-08-01 v1.6.3 生产部署与 macOS 换装完成**：迁移前确认 59 章中 58 章仅有旧梗概、1 章已有新摘要；停服全量备份位于 `/opt/linoi/backups/20260801-160612`。Alembic 升级至唯一 head `20260801_0008`，旧 `summary` 列已删除且 59 章 `long_summary` 均非空；数据库 integrity／foreign keys、旧 App `summary` wire 别名、零活动任务和实体数量 `3 books / 59 chapters / 27 characters / 214 chapter links / 215 character events / 4 personas / 4 bindings` 全部复核通过。内外网健康检查均为 `1.6.3`，服务 active、`NRestarts=0`、错误标记为 0。本机正式 App 已换装、验签并运行 `1.6.3(18)`，旧版备份位于 `/tmp/ictw-app-backup-v163.HdZKmc`；发布包 `ICTW-1.6.3.zip` 为 3,117,944 B，SHA-256 `12c4bbcae75b580bf29fe55fa5387c54b80cee2d8322430be8aebe8f8886fc17`。iOS 未打包或安装；下一步只剩 tag、推送和 GitHub Release。
+
 ## 验收基线
 
 - 迁移前备份生产库；迁移后 `integrity_check`、`foreign_key_check`、`alembic heads` 全通过。任何生产 schema 改动只走 `alembic upgrade head`。
@@ -95,4 +97,4 @@
 - `v1.6.0(15)`：已发布，详细执行记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.1(16)`：已发布，iOS 未发包；补丁记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.2(17)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.3(18)`：摘要合并快修，发版准备中。
+- `v1.6.3(18)`：摘要合并快修，Backend 与 macOS 已部署，Release 收尾中。
