@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 `1.6.1(16)`；本次补丁发布在 iOS 发包前停止。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 [`1.6.1(16)`](https://github.com/linocai/Ictw/releases/tag/v1.6.1)；Backend、macOS App、tag 与 GitHub Release 已发布，iOS 未发包或安装。写作流程为：
 
 ```text
 Memory Selector → Writer → Checker → 用户接受 → Extractor
