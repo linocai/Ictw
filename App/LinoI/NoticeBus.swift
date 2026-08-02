@@ -39,18 +39,24 @@ struct LinoIToast: View {
         Group {
             if let notice = bus.current {
                 HStack(spacing: 9) {
+                    #if os(iOS)
+                    Circle()
+                        .fill(notice.isCritical ? LinoTheme.danger : LinoTheme.success)
+                        .frame(width: 6, height: 6)
+                    #else
                     Image(systemName: notice.isCritical ? "exclamationmark.shield.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(notice.isCritical ? LinoTheme.danger : LinoTheme.warning)
+                    #endif
                     Text(notice.message)
-                        .font(.callout)
-                        .foregroundStyle(.white)
+                        .font(LinoType.ui(13.5, .medium))
+                        .foregroundStyle(LinoTheme.bg)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                     if notice.isCritical {
                         Button { bus.dismiss() } label: {
                             Image(systemName: "xmark")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.65))
+                                .foregroundStyle(LinoTheme.bg.opacity(0.65))
                         }
                         .buttonStyle(.plain)
                     }
@@ -58,9 +64,14 @@ struct LinoIToast: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
                 .frame(maxWidth: 460, alignment: .leading)
+                #if os(iOS)
+                .background(LinoTheme.ink, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.16), radius: 12, y: 6)
+                #else
                 .background(Color.black.opacity(0.82), in: Capsule())
                 .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+                #endif
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .onAppear { scheduleDismiss(notice) }
                 .onDisappear { dismissWorkItem?.cancel() }
@@ -75,6 +86,6 @@ struct LinoIToast: View {
         guard !notice.isCritical else { return }
         let item = DispatchWorkItem { bus.dismiss() }
         dismissWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.7, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.6, execute: item)
     }
 }

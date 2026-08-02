@@ -1,116 +1,119 @@
 # ICTW PROJECT_PLAN
 
-> 本文件是唯一权威计划与状态来源。详细版本执行记录见 [`archive/v1.6.0施工plan.md`](archive/v1.6.0施工plan.md)，v1.5 完结索引见 [`archive/v1.5.0施工plan.md`](archive/v1.5.0施工plan.md)。归档与本文冲突时，以本文为准。
+> 本文件是唯一现行计划与状态来源。历史记录以 [`archive/v1.6.0施工plan.md`](archive/v1.6.0施工plan.md) 为准；归档与本文冲突时，以本文为准。
 
-## 项目与现状
+## 当前状态
 
-- SwiftUI iOS（`LinoI`）/macOS（`LinoIMac`）客户端，FastAPI + SQLAlchemy + Alembic + SQLite 后端；产品历史标识 `LinoI` 与 Bundle/Keychain/草稿目录兼容标识不改。
-- `v1.5.0(14)` 于 2026-07-28 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
-- 当前工作树有用户未提交的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 改动；v1.6 施工不得覆盖、回滚或纳入无关提交。
-- `v1.6.4(19)` 与 `v1.6.5(20)` 均已完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；iOS 未打包或安装。
+- 已发布基线：`v1.7.0(21)`（2026-08-02）；本版仅发布 iOS「纸与墨」原生 SwiftUI 视觉体系与全新 App Icon，Backend、Alembic 与 macOS App 维持 `v1.6.5(20)`，Alembic head 仍为 `20260801_0008`。
+- 当前状态：v1.7.0 阶段 0–5 全部完成；LinoI target 已升至 `1.7.0(21)`，正式 iOS Archive、tag 与 GitHub Release 均已完成，无进行中的版本施工。
+- 设计事实源：[`README.md`](design_handoff_ios_visual_upgrade/README.md) §3–§9 为尺寸与状态规格；[`02 视觉升级 · 可点原型.dc.html`](design_handoff_ios_visual_upgrade/02%20视觉升级%20·%20可点原型.dc.html) 仅用于阅读结构和交互；`screenshots/` 是逐屏验收基准。
+- 截图均为 iPhone 17 Pro `402×874 pt` 的 `804×1748 px @2x`。`05-Agent与模型.png`=`06-Agent详情.png`、`14-空态.png`=`01-书架.png`（SHA-256 相同）；这两项以 README §6.2／§6.5 和可点原型的对应状态为准，不把重复图片当作基准。
+- 工作树已有用户改动：`.learnings/ERRORS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`；以及未跟踪的 `design_handoff_ios_visual_upgrade/`。施工不得改动、暂存、覆盖或回滚它们。
+- 已使用现有 iOS 26.5 runtime 创建标准 `ICTW-v170-iPhone17Pro`（402×874 pt）Simulator；浅／暗模式、空态与全部主要动态状态均在该设备完成逐屏矩阵，不以其他机型替代 90% 门槛。
 
-## 当前版本：v1.6.5(20) 输入法与草稿保存快修（已发布，iOS 未发包）
+### 本轮施工进度（2026-08-02）
 
-### 版本目标
+- 阶段 1：iOS 动态纸墨色板、SF Pro／宋体分工、实色控件、Toast、浅暗模式与转场已落地；macOS 条件分支保持原外观。
+- 阶段 2：书架、稿件／人物／设定三段工作台、Agent＋Profile 二级／三级页已完成；所有原入口和回调保留。
+- 阶段 3：章节编辑器已改为宽松表单、四步流程、真实失败原因、人物豁免、留痕抽屉、Extractor 与吸底栏；阅读器已完成独立三主题、三字号、轻触 chrome 与原生 `Aa` 浮层。
+- 已通过 `Tests/run_client_state_tests.sh`、iOS Debug build、macOS Debug build 与 `git diff --check`；源码审计未发现 iOS WebView／HTML 移植、旧渐变调用或非阅读 Material。
+- 阶段 4：使用仅位于 `/tmp` 的本地数据库与临时 UI 测试工程，在标准 iPhone 17 Pro Simulator 完成两轮全链路交互；浅色覆盖书架、稿件、人物、人物详情、编辑器输入／流程、失败＋人物豁免、写作上下文、Checker 证据、Extractor、阅读／Aa、设定、Agent 列表／详情，暗色覆盖同一主链。两轮测试均为 `0 failures`，截图逐屏对照交接稿后未发现遮挡、溢出或低于 90% 门槛的结构性偏差；原生字体渲染与测试文案差异计入约定容差。
+- 阶段 5：**LinoI target** 已升至 `1.7.0(21)`；新 App Icon 已进入正式资源，iOS Release Archive 完成开发签名与包内版本校验，随后发布 `v1.7.0` tag 与 GitHub Release。Backend、Alembic 与 macOS 未部署、迁移或换装。
 
-让 DeepSeek 保持一次完成整章的文学性，同时把剧情控制、历史记忆和失败解释收回系统。Bible 是唯一不可改写的剧情来源；系统不自动把候选正文反复扩写、压缩或修订。
+## 目标、边界与不变量
 
-### 已确认决定
+**目标**：在不改变功能的前提下，将 iOS 从蓝色玻璃 SaaS 风升级为高保真「纸与墨」；每个指定基准屏的视觉评分不低于 90%，只允许原生控件、安全区、字体渲染、动态数据与无障碍造成的 10% 差异。
 
-1. 工作流为 **Memory Selector → Writer → Checker → 用户接受 → Extractor**；Reviser 完全删除。
-2. 用户在章节页只填写 Bible（以及标题、允许人物）。删除目标字数和本章备注输入；旧 `target_word_count`、`author_note`、`chapter_style` 仅做存储/wire 兼容，不参与 v1.6 写作。
-3. Bible 原文由程序从章节快照直接传给 Selector/Writer/Checker，不被任何 Agent 改写；以 hash 与输入版本保护。当前 Bible 与历史记忆冲突时，Bible 优先。
-4. Selector 机械扩大召回后低温压缩为带来源的“本章记忆简报”；上一章尾段独立承担开场承接。无来源或无效来源的记忆不进入 Writer，实际 Writer 上下文可查看。
-5. Writer 一次生成整章，不分场景、不扩写旧稿。只要求去空白字符 `>=4000` 且正常结束；无产品字数上限。首稿不足/截断仅可从同一输入完整重写一次，第二次失败即停止；人物白名单等既有可程序验证约束仍保留。
-6. Checker 只对 Bible 的遗漏、矛盾和新增剧情举证，结论为通过/存疑/明确越界；不修改正文、不评价文风。Writer 新稿只有 Checker 明确通过后才提升为当前正文；存疑、越界或检查不可用的稿件仅在后端留档，前端显示原因和必要证据但不渲染全文。
-7. Extractor 只从已接受正文提取唯一章节摘要、状态变化、未决事项和带来源原子记忆；既有人物白名单和字段回滚约束不变。
-8. 所有候选稿在后端保留且互不覆盖，但双端不拉取、不展示、不切换候选全文；当前正文是唯一前端正文。四个现役 Agent 的默认人格词重做，双端可编辑、可恢复默认。人格词与始终生效的不可编辑程序协议分离。
+- 仅改 iOS 前端视觉和既有 iOS 导航编排；Backend、API 契约、业务模型、Store、状态机、数据与 macOS 外观均不变。
+- 最终产物仅使用现有 Swift／SwiftUI；禁止 WebView、WebKit、HTML/CSS/JS、React、跨端容器、新依赖、新 target 或工程重构。`.dc.html` 的 class/style/演示定时器和假数据不得移植。
+- 既有按钮、字段、状态和数据入口必须可达；只能依照下方导航重组改变位置。不得硬编码交接稿的书、人物、章节或 Agent 演示文案。
+- 绝不改变 Bundle ID、target 名、Keychain 键、UserDefaults 键（包括 `linoi.reader.fontScale`、`linoi.reader.theme`）、`LinoI/ChapterDrafts`，也不改 `chapter_style`／wire 兼容。
 
-### 非范围与兼容
+### 禁止修改
 
-- 不改 Xcode target/Bundle ID/Keychain/UserDefaults/`LinoI/ChapterDrafts`；不提前收口 `chapter_style` 兼容。
-- 不改变生产写入的 Alembic 门禁、LLM 错误真实分类、日志不存 API Key/Prompt/正文的安全规则。
-- v1.6 的固定4000下限和无上限决定，取代旧版的80%–120%规则；实施同时更新相关仓库约束、测试和文案，不能新旧逻辑并存。
+| 范围 | 禁止原因 |
+| --- | --- |
+| `Backend/**`、Alembic、部署／生产库 | 本版无后端、迁移或运维范围。 |
+| `App/LinoI/LinoAPI.swift`、`LinoModels.swift`、`LinoStores.swift`、`ChapterDraftCache.swift`、`LinoErrorPresenter.swift` | 网络、模型、状态机、本地草稿与错误语义零变更。 |
+| `App/LinoIMac/**`、`App/LinoIMac/Info.plist` | macOS 暂不做视觉或功能变更。 |
+| `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` | 用户自己的未提交修改。 |
+| `design_handoff_ios_visual_upgrade/**`、`.learnings/ERRORS.md` | 设计输入／用户文件只读，不纳入产品实现。 |
+| `App/Tests/**` | 不借视觉升级修改共享行为或既有状态测试。 |
 
-## 施工计划
+`App/LinoI.xcodeproj/project.pbxproj` 在施工阶段不改；仅在所有验收通过且用户另行授权发包时，才可只改 **LinoI target** 的 Debug/Release `MARKETING_VERSION=1.7.0`、`CURRENT_PROJECT_VERSION=21`。不得触碰 LinoIMac 配置或任何 scheme。
 
-| 阶段 | 责任范围 | 完成门槛 |
+## 已确认的实现决定
+
+### 视觉系统与平台隔离
+
+- `LinoTheme.swift`、`LinoComponents.swift`、`NoticeBus.swift` 是双 target 编译的共享文件。纸墨 token、控件、Toast 和阅读玻璃仅置于 `#if os(iOS)`；现有 macOS token／圆体／渐变／glass 实现保留在 macOS 分支，`App/LinoIMac/**` 零 diff。不得以修改共享默认值影响 Mac。
+- 在 `LinoTheme.swift` 定义 iOS 专用的动态「纸与墨」token：浅色 `bg #F4F2ED / surface #FFF / ink #17181C / accent #C0472C`，暗色 `#121316 / #1B1D21 / #EDEBE6 / #E2664A`；同时落实 README §5 的 `bg2`、`surface2`、`ink2`、`muted`、`faint`、`line`、`line2`、绿／琥珀／危险及三套封面纸色。移除 iOS 所有蓝色渐变和大阴影，卡片仅 `1px line` 与 `0 1px 2px` 轻阴影。
+- iOS 专用字体 token：作者内容一律 `Songti SC`（书／章／人物名、正文、Bible、摘要、世界观、人格、封面）；系统文案使用非 rounded 的 SF Pro；URL、错误代码、Temperature 使用 SF Mono。标题／正文／标签字号、行高、页边距、圆角、56+安全区 tab bar 等逐项按 README §3、§5、§6，不以系统默认间距替代。
+- 删除 iOS 的 `.preferredColorScheme(.light)`，由系统明暗驱动上述动态 token；阅读器仍以独立的日间 `#F8F6F1`、护眼 `#F1E7D2`、夜间 `#17181A` 三主题工作，保留现有 AppStorage raw 值。
+- 非阅读页不得调用 `.glassEffect`／`Material`；仅阅读页顶栏、底部工具条、`Aa` 浮层可用规格中的原生模糊。所有圆角用 continuous：卡／列表 16、按钮 14、内块 11–12、胶囊 999。
+- 动效只用现有 `LinoMotion` 时长：换屏／tab 上浮 7pt + 淡入 `0.22s easeOut`（旧树直接移除，不交叉淡化），折叠 `0.20s`、sheet `spring(0.34, 0.86)`、按钮 `0.18s`、行按压 `0.14s`。进行中点仅在未启用“减少动态效果”时 1.1s 呼吸；主题颜色 `0.25s`，正文不参与隐式动画。
+
+### 原生导航、页面与状态
+
+`书架 → 书内 TabView（稿件／人物／设定）→ 章节编辑器 push → 阅读页 fullScreenCover`；`设定 → Agent 与模型 push → Agent 详情 push`；后端连接由书架和设定进入同一个 sheet。保留 `WorkspaceTab.agents` 数据兼容，但 iOS TabView 仅渲染前三项，若遗留 UI 选中 `.agents` 则仅在 View 层归位到 `.settings`；不得改 Model／Store。
+
+| 页面／组件 | 原生落地与必须保留的行为 |
+| --- | --- |
+| 书架 | 等分两列、稳定 book-id 种子轮换三种纸封；竖排宋体书名、书脊／压边框、虚线新建书、连接胶囊。计数／日期仅用现有 `Book` 数据。 |
+| 稿件／人物／设定 | 章节为单卡多行 60pt、状态点保留 `linoStatusLabel`；人物改 58pt 竖行＋详情卡、动态字段分组和故事线；设定为书／导出／模型连接三组。 |
+| Agent | 将当前绑定／人格堆页拆为 Agent＋Profile 列表与单 Agent 详情；保留绑定、思考、强度、Temperature、人格恢复／保存、Profile 新增／编辑／测试／删除及现有 capability 禁用逻辑。 |
+| 编辑器 | 自绘 46pt 顶栏仍调用现有保存／删除；保留草稿恢复、Bible、人物、四步、预览／编辑、导入、重试／停止／豁免／接受／阅读和 Extractor。两个 DisclosureGroup 合为「留痕」两行抽屉，数据仍取现有 context／visible checker 字段；底部 48pt 操作栏不遮挡输入。 |
+| 阅读器／系统反馈 | `Aa` Menu 改原生浮层，点正文收起／展开 chrome；三档字号仍为 16／19／22、行高约字号 2 倍，短横分隔。小／大 sheet、原生 destructive confirmationDialog、读取中／失败、空态、正常／critical Toast 均按 README §6.7–§8 重画，语义、回调与自动消失时长不变。 |
+
+## 分阶段施工计划
+
+| 阶段 | 文件边界与顺序 | 完成门槛 |
 | --- | --- | --- |
-| 1. 数据/角色底座 | Alembic、四角色 persona/binding、Checker、旧 Reviser 配置删除、API 模型 | 单一 head；旧数据/自定义 persona 兼容；没有可配置或 Settings/API 可达的 Reviser |
-| 2. 写作闭环 | Selector 压缩、Bible快照、一次整写、4000门禁、候选持久化、Checker | 自动测试证明不扩写、最多一次整写、正文不被 Checker 改写 |
-| 3. 归档闭环 | 新 Extractor schema、记忆召回与来源链 | 仅接受稿产生可检索的新记忆，人物约束/回滚回归通过 |
-| 4. 双端体验 | 共享模型/API/状态、章节页、透明抽屉、候选与检查决策、Agent设置 | iOS/macOS 无旧字数/备注/Reviser入口；冷启动/断网/取消可解释 |
-| 5. 验收发版 | 全量测试、双端构建、隔离手测、版本/部署/Release | 详见版本执行记录；用户授权后才部署和发版 |
+| 0. 施工护栏 | 只读确认 handoff、git diff 与 iOS target；不建文件、不改项目设置。 | 记录禁止范围；确认没有把用户 scheme／交接稿纳入 diff。 |
+| 1. iOS 纸墨底座 | `LinoTheme.swift`（iOS 条件 token／字体／阅读 palette／动效）、`LinoComponents.swift`（iOS 条件卡、字段、按钮、状态点、小节、空态、流程）、`NoticeBus.swift`（iOS Toast）、`LinoIApp.swift`（解除强制浅色、根背景／转场）。 | 浅暗切换、字体分工、无蓝渐变／rounded、非阅读玻璃清零；共享文件 macOS 编译通过且 macOS 源码零改动。 |
+| 2. 工作台与导航 | `ShelfViews.swift` → `WorkspaceViews.swift` → `CharactersViews.swift` → `SettingsViews.swift`。先书架和三段 TabView，再章节／人物／设定，最后 Agent 列表／详情及复用连接 sheet。 | 原四 tab 中 Agent 完整迁至设定二级页；所有建书、建章、人物、导出、连接、Agent／Profile 操作仍可达。 |
+| 3. 写作与阅读 | `ChapterEditorViews.swift`：顶栏、宽松表单、流程／失败、留痕、Extractor、吸底栏；`ReadingViews.swift`：独立主题、chrome 轻触、Aa 浮层、阅读比例。 | 真实 Store 驱动的加载、恢复、生成／取消／失败／豁免、checker、归档和翻章均只改外观。 |
+| 4. 逐屏收口 | 只回改上述 iOS 视觉文件；逐屏捕获、对照和修正 token、基线、间距、长文／长标题、暗色及减少动态效果。 | 16 项视觉矩阵全过，自动与手动回归全过，工作树只含允许文件。 |
+| 5. 发版（已完成） | 仅 iOS target 版本号升至 `1.7.0(21)`，生成正式 Archive，提交并发布 tag／GitHub Release。 | Release Archive、签名、包内版本、双端编译与客户端状态测试通过；Backend、Alembic、macOS 均无发布动作。 |
 
-**推荐首个施工切片**：阶段1的 migration、Persona/Binding 角色替换与 Settings API；它先建立四角色的事实来源和可见配置，再接入写作闭环，避免 UI 和后端同时猜测 Checker/Reviser 状态。
+## 验收与回归门禁
 
-**2026-08-01 阶段1–3完成**：`20260801_0007` 建立任务／候选元数据和 Extractor 归档字段；后端已实现 Bible SHA-256 快照、带来源记忆简报、一次整章与单次同输入重写、不可覆盖候选、Checker 三档举证及候选／复查／显式覆盖 API。Extractor 以接受稿为唯一事实输入，落库长摘要、状态变化、未决事项和原子记忆，并以稳定章节／类型来源回召；人物白名单、动态字段回滚和失败回滚保持。Reviser/Compressor 运行时、factory、DI、调用和替身已物理删除。Backend `pytest -q`、唯一 Alembic head、隔离库升级与 diff check 通过；当前下一步为阶段4 双端体验。
+### 自动与边界门禁
 
-**2026-08-01 阶段4完成**：共享客户端接入记忆上下文、候选、Checker 与新 Extractor 字段；iOS/macOS 均移除目标字数、本章备注和 Reviser 入口，新增可展开的实际写作上下文、候选正文、Bible 证据检查及覆盖接受确认。四个 Agent 的可编辑人格词、只读程序协议与恢复默认已双端落地；旧字段和旧任务仍可兼容解码。阶段5复核补齐手动编辑后复查与完整上下文指纹后，主会话最终复验 Backend 86 项、客户端状态测试、iOS Debug、macOS Debug、唯一 Alembic head 与 diff check 全绿。下一步为隔离库端到端手测与发版准备；部署、换装、版本号、tag 和 Release 尚未授权执行。
+每阶段结束运行受影响 iOS Debug build；阶段 1 触及共享文件时额外运行 macOS Debug build，仅验证编译和未回归，不做 macOS 视觉升级。阶段 4 必须全部通过：
 
-**2026-08-01 阶段5隔离体验验收完成**：以全新临时 SQLite 和替代 Bundle ID 的调试包验证 4988 字长正文、两份候选（通过首稿／明确越界的当前手动稿）、实际记忆简报／上一章尾段／两条来源／冲突提示、Checker 正文与 Bible 双证据、显式覆盖入口及四角色人格卡。iOS 发现 Checker 未通过时“接受本章”虽不可点击却仍显示绿色，已在共享按钮样式中补齐清晰灰色禁用态并复核双端；临时自动导航钩子已移除，本地服务与测试 App 已停止。撤钩后的最终回归为 Backend 86 项、客户端状态测试、iOS Debug、macOS Debug、唯一 Alembic head 与 diff check 全绿。下一步进入发版准备；版本号、生产迁移、部署、换装、tag 和 Release 仍须用户另行授权。
+```bash
+cd App && Tests/run_client_state_tests.sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project App/LinoI.xcodeproj -scheme LinoI -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project App/LinoI.xcodeproj -scheme LinoIMac -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+git diff --check
+```
 
-**2026-08-01 发版授权与候选完成**：用户明确授权一口气完成版本号、香港现网 Backend 部署与迁移、macOS 正式 App 换装、tag 和 GitHub Release，iOS 由用户处理。双 target 已更新为 `1.6.0(15)`，Backend health 版本为 `1.6.0`；带正式版本号的 Backend 86 项、客户端状态测试、iOS/macOS Debug、唯一 Alembic head 与 diff check 全绿，macOS Release 使用 Apple Development 签名构建成功，待生产前置检查与执行。
+- 复核 diff：禁止范围无变动；`App/LinoIMac/**`、用户 scheme、`Backend/**` 为零 diff；若触及 `.pbxproj`，发布前不得存在且最终仅允许两组 LinoI target 版本值。
+- 源码审计：无 `WebKit`／`WKWebView`／HTML／JS／CSS／React／新 package；iOS 仅阅读三处使用 Material／glass；无 `.rounded` 或 `coverGradient`／旧蓝渐变残留在 iOS 视图路径。
+- 不为截图加 demo 开关、mock Store、假定时器或后端分支；用可丢弃的本地开发数据和既有交互进入状态，截图不含生产文本、Token 或密钥。
 
-**2026-08-01 生产部署与 macOS 换装完成**：部署前备份位于 `/opt/linoi/backups/20260801-121924`，数据库完整性与外键检查通过；停服后代码同步并由 Alembic 升级至唯一 head `20260801_0007`。服务启动后内外网健康检查均为 `1.6.0`，实体数量保持 `3 books / 59 chapters / 28 characters / 222 character_events / 4 personas / 4 bindings`，角色为 Checker、Extractor、Memory Selector、Writer，systemd `NRestarts=0`。本机正式 App 已换装、验签并启动 `1.6.0(15)`，旧版备份位于 `/tmp/ictw-app-backup-v160.zyCPpJ`；发布包解压复验通过，SHA-256 为 `9b57c7c4ad6714bca5f241b2ef067c8cfb5b9f54a042bd0d5ec42c2bbcb4fca2`。iOS 未安装，由用户处理；下一步只剩 tag、推送和 GitHub Release。
+### 90% 视觉验收
 
-**2026-08-01 v1.6.0 发布完成**：实现提交 `011457d`、生产落账提交 `1051650`；annotated tag `v1.6.0` 指向 `1051650` 并已推送。GitHub Release `ICTW / LinoI v1.6.0` 已发布，附带 `ICTW-1.6.0.zip`（3,166,379 B；GitHub digest 与本地 SHA-256 一致）。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.0>。iOS 未安装，由用户自行处理。
+1. 在标准文字大小、Display Zoom 默认、浅／暗模式的 iPhone 17 Pro 运行 iOS Debug；每屏通过 `xcrun simctl io <udid> screenshot` 捕获，必要时用 `sips -z 1748 804` 统一为 `804×1748`，不得裁切安全区。
+2. 对 `01–16` 同名基准逐张叠图检查；重复的 05／06、14 按本计划「当前状态」的 README／原型定义补拍 Agent 详情与章节空态。真实数据仅可导致文案不同，不能改变层级、控件、位置或状态样式。
+3. 每屏按几何／安全区 30、色板／表面 20、字体／行高 20、导航／控件 20、状态呈现 10 评分；每屏和平均均须 `≥90/100`。10 分容差仅用于已声明的原生差异，不可用于遗漏页面或功能。
+4. 另做交互走查：三 tab、Agent／Profile／连接、所有 sheet／确认、空态、读取中／失败、草稿恢复、生成中／停止、失败＋豁免、两种留痕展开、Extractor、阅读三主题／三字号／chrome、Toast、浅暗切换与减少动态效果。长标题、长人物名、长 Bible 和 VoiceOver／Dynamic Type 不得溢出或遮挡吸底栏。
 
-**2026-08-01 发布后缺陷修复完成（尚未部署）**：实测发现 Writer 因未获准人物失败后，点击人物会清除失败态，而旧正文的 Checker 结果与 `draft_ready` 机械映射使界面误画为全通过；失败后的异步刷新还可能覆盖刚选择的人物。现已在生成开始／写作失败时失效旧 Checker 状态，`draft_ready` 仅在当前 Checker 明确 passed 时完成检查步骤，并以本地编辑 revision 阻止迟到刷新覆盖输入。设计同步收口为“候选仅后端留档”：双端删除候选全文、切换和刷新入口，Writer 新稿经确定性校验与 Checker passed 后才提升为当前正文；其它稿件不进入正文区。回归覆盖未获准人物、Checker violation、可见基线保持和刷新竞态；Backend 87 项、客户端状态测试、iOS/macOS Debug、唯一 Alembic head 与 diff check 全部通过。生产 Backend 与正式 App 仍是已发布的原 `v1.6.0(15)`，本补丁未部署、未换装。
+## 风险、回滚与待办
 
-**2026-08-01 v1.6.1 发版授权**：用户授权将上述修复作为补丁版发布，并要求在 iOS 发包前停止。版本更新为 `1.6.1(16)`；范围为全量验证、生产 Backend 备份与部署、macOS 正式 App 换装、tag、推送和 GitHub Release，不打包或安装 iOS。
+| 风险 | 控制／回滚 |
+| --- | --- |
+| 共享 Theme／组件意外改变 macOS | 仅 iOS 条件分支、macOS build 和零源码 diff；失败即回退该 iOS 分支，不改 Mac 文件。 |
+| 视觉重排误接 Store 或失去入口 | 逐项对照现有回调，阶段 2／3 交互走查；发现即回退该 View 的布局提交，数据／API 从未迁移。 |
+| 动态色、长文本或安全区偏离基准 | 以真机型截图和 90 分评分收口；未达标不得进入版本号／发包阶段。 |
+| 基准 Simulator 缺失 | 安装 iPhone 17 Pro runtime 后再启动视觉验收；在此之前可以实现和构建，但不能声明 v1.7.0 验收完成。 |
 
-**2026-08-01 v1.6.1 生产部署与 macOS 换装完成**：带正式版本号的 Backend 87 项、客户端状态测试、iOS/macOS Debug 与签名 macOS Release 构建均通过；唯一 Alembic head 保持 `20260801_0007`，本补丁无新迁移。部署前全量备份位于 `/opt/linoi/backups/20260801-130105`，备份库与生产库完整性、外键检查均通过；服务内外网健康检查为 `1.6.1`，`NRestarts=0`，实体数量保持 `3 books / 59 chapters / 28 characters / 222 character_events / 4 personas / 4 bindings`。本机正式 App 已换装、验签并启动 `1.6.1(16)`，旧版备份位于 `/tmp/ictw-app-backup-v161.q1AFVw/ICTW-v1.6.0-build15.app`。发布包 `ICTW-1.6.1.zip` 为 3,129,059 B，SHA-256 `955322bd257aa9aeaa34d28dafe5177e66f99fa9700396e9440c45d5dc5607d9`。iOS 未打包或安装；下一步只剩 tag、推送和 GitHub Release。
+- 回滚不涉及数据库、迁移、Backend 或本地数据：revert v1.7.0 的允许 iOS UI 改动并重新构建 LinoI；不得清理 Keychain、UserDefaults 或草稿目录。
+- 无用户网页操作。App Store Connect 上传与设备安装未执行；如需分发，由用户通过已生成 Archive 继续操作。
 
-**2026-08-01 v1.6.1 发布完成**：实现提交 `3fce69f`、版本提交 `89437c0`、生产落账提交 `5cf238c`；annotated tag `v1.6.1` 指向 `5cf238c` 并已推送。GitHub Release `ICTW / LinoI v1.6.1` 已发布，资产 `ICTW-1.6.1.zip` 为 3,129,059 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.1>。本次按用户要求在 iOS 发包前停止，未打包或安装 iOS。
+## 里程碑与 Backlog
 
-**2026-08-01 v1.6.2 Review 修复与发版授权**：独立 Review 确认旧 Checker 在取消／替换任务后仍可能提升旧候选、旧客户端候选 API 可提升未通过稿、失败重生成会锁住旧正文、`/job` 仍下发候选全文，以及正文提升与 JobRun 终态不原子。现已将取消／完成纳入同一任务所有权临界区，正文／候选／JobRun 在同一事务完成；候选列表和选择端点退出公开 API，`/job` 不再返回候选，复查仅返回空正文兼容壳与 Checker 元数据。双端恢复旧可见正文自己的 Checker 状态，允许失败后复查／接受，并以本地 revision 拒绝迟到复查结果。版本更新为 `1.6.2(17)`；Backend 88 项、客户端状态测试、iOS/macOS Debug、签名 macOS Release 和唯一 Alembic head `20260801_0007` 已通过，本补丁无新 migration。用户授权直接发布 Backend、macOS、tag 与 GitHub Release；按上一版边界不打包或安装 iOS。
-
-**2026-08-01 v1.6.2 生产部署与 macOS 换装完成**：部署前全量备份位于 `/opt/linoi/backups/20260801-150522`，备份库与生产库 integrity／foreign keys 均通过；本补丁无新 migration，Alembic 保持 `20260801_0007`。内外网健康检查均为 `1.6.2`，服务 active、`NRestarts=0`、发布后错误标记为 0；实体数量保持 `3 books / 59 chapters / 28 characters / 215 character_events / 4 personas / 4 bindings`，无运行中章节。本机正式 App 已换装、验签并启动 `1.6.2(17)`，旧版备份位于 `/tmp/ictw-app-backup-v162.nnlPUl/ICTW-v1.6.1-build16.app`。发布包 `ICTW-1.6.2.zip` 为 3,119,531 B，SHA-256 `6c0e6d64bfea806879cd3f61e581185fd527684f332507ff7b1587462ec8a5cf`。iOS 未打包或安装；下一步只剩 tag、推送和 GitHub Release。
-
-**2026-08-01 v1.6.2 发布完成**：实现提交 `59395cd`、生产落账提交 `59a6381`；annotated tag `v1.6.2` 指向 `59a6381` 并已推送。GitHub Release `ICTW / LinoI v1.6.2` 已发布，资产 `ICTW-1.6.2.zip` 为 3,119,531 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.2>。本次按用户要求在 iOS 发包前停止，未打包或安装 iOS。
-
-**2026-08-01 v1.6.3 快修施工**：用户决定合并 Extractor 重复的「梗概／长摘要」，不进入正式 Planner 工作流。`long_summary` 成为唯一章节摘要且不设机械字数；Alembic 将历史 `summary` 原文回填至空摘要后物理删除旧列，已有新摘要不覆盖。Extractor 不再生成旧梗概，Selector 每章只提供一份稳定摘要来源；API 继续动态提供旧 `summary` wire 别名兼容 v1.6.2 客户端，双端只展示「章节摘要」。版本更新为 `1.6.3(18)`；Backend 89 项、客户端状态测试、iOS/macOS Debug、签名 macOS Release、唯一 Alembic head `20260801_0008` 与迁移子表保全测试均通过。生产部署、macOS 换装、tag 与 Release 尚未执行。
-
-**2026-08-01 v1.6.3 生产部署与 macOS 换装完成**：迁移前确认 59 章中 58 章仅有旧梗概、1 章已有新摘要；停服全量备份位于 `/opt/linoi/backups/20260801-160612`。Alembic 升级至唯一 head `20260801_0008`，旧 `summary` 列已删除且 59 章 `long_summary` 均非空；数据库 integrity／foreign keys、旧 App `summary` wire 别名、零活动任务和实体数量 `3 books / 59 chapters / 27 characters / 214 chapter links / 215 character events / 4 personas / 4 bindings` 全部复核通过。内外网健康检查均为 `1.6.3`，服务 active、`NRestarts=0`、错误标记为 0。本机正式 App 已换装、验签并运行 `1.6.3(18)`，旧版备份位于 `/tmp/ictw-app-backup-v163.HdZKmc`；发布包 `ICTW-1.6.3.zip` 为 3,117,944 B，SHA-256 `12c4bbcae75b580bf29fe55fa5387c54b80cee2d8322430be8aebe8f8886fc17`。iOS 未打包或安装；下一步只剩 tag、推送和 GitHub Release。
-
-**2026-08-01 v1.6.3 发布完成**：实现提交 `0b62f13`、生产落账提交 `c9b3ebf`；annotated tag `v1.6.3` 指向 `c9b3ebf` 并已推送。GitHub Release `ICTW / LinoI v1.6.3` 已发布，资产 `ICTW-1.6.3.zip` 为 3,117,944 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.3>。iOS 未打包或安装，由用户自行处理。
-
-**2026-08-02 v1.6.4 快修授权与施工**：生产只读核查确认 Selector 虽正常调用，却在真实多章数据上出现“35 个摘要来源几乎全选”与“0 条记忆”两个极端；Checker 具体 issues 与 reason 已由后端保存，但客户端固定文案和旧正文状态隔离共同吞掉了失败候选解释。快修将每章大事记／摘要收口为单一历史来源，候选按相关性排序，Selector 固定协议限制最多 8 条简报、4 条冲突、16 个来源并对逐章复述规模自动退回一次；Writer 实际简报和审计来源分层展示并修正字符统计。Checker 失败候选元数据与旧可见正文状态分离，前端展示具体原因和必要证据但不返回候选全文。版本更新为 `1.6.4(19)`；Backend 93 项、客户端状态测试、iOS/macOS Debug、签名 macOS Release、唯一 Alembic head `20260801_0008` 与 diff check 全绿，发布 ZIP 为 3,140,891 B、SHA-256 `f8258b0c96af7740ca736abc7795dd105ea6fd3aa674eaa59ee67ebe39602842`。用户授权完成香港 Backend 部署、macOS 换装、tag、推送与 GitHub Release，延续约定不打包或安装 iOS。
-
-**2026-08-02 v1.6.4 生产部署与 macOS 换装完成**：停服前确认现网 `1.6.3`、零活动任务／章节、数据库 integrity／foreign keys 与 Alembic `20260801_0008` 正常；停服全量备份位于 `/opt/linoi/backups/20260802-095737`。本补丁无新 migration，部署后内外网健康检查均为 `1.6.4`，服务 active、`NRestarts=0`、发布后错误标记为 0；数据库大小保持 2,170,880 B，实体数量保持 `3 books / 61 chapters / 27 characters / 222 chapter links / 221 character events / 4 personas / 4 bindings`。本机正式 App 已验签、换装并运行 `1.6.4(19)`，旧版备份位于 `/tmp/ictw-app-backup-v164.IQYjZ1/ICTW-v1.6.3-build18.app`。发布 ZIP 为 3,140,891 B，SHA-256 `f8258b0c96af7740ca736abc7795dd105ea6fd3aa674eaa59ee67ebe39602842`。iOS 未打包或安装；下一步只剩 tag、推送和 GitHub Release。
-
-**2026-08-02 v1.6.4 发布完成**：实现提交 `657cbf5`、生产落账提交 `36438d0`；annotated tag `v1.6.4` 指向 `36438d0` 并已推送。GitHub Release `ICTW / LinoI v1.6.4` 已发布，资产 `ICTW-1.6.4.zip` 为 3,140,891 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.4>。iOS 未打包或安装，由用户自行处理。
-
-**2026-08-02 v1.6.5 快修授权与施工**：用户实测输入期间频繁本地草稿保存会打断中文输入法。核查确认双端共享 Store 每次文字变化都会调度 450ms 后的整章 JSON 原子写入，并在主线程更新保存状态。快修取消文字变化触发磁盘写入，编辑期间仅保留内存状态；只在退出编辑、切换章节、App 进入后台／失焦、窗口离开及手动保存时落盘，并区分“更改尚未保存”与“已保存到本机”。版本更新为 `1.6.5(20)`；Backend 93 项、客户端状态测试、iOS/macOS Debug、签名通用架构 macOS Release、唯一 Alembic head `20260801_0008` 与 diff check 全绿。发布 ZIP 为 3,148,623 B、SHA-256 `e7b480dcdd0a7a4ad0f8d5b44207b592759163e204d2a5cb03333c659d23d2c9`；本补丁无 schema 变化，iOS 不打包或安装。
-
-**2026-08-02 v1.6.5 生产部署与 macOS 换装完成**：首次部署包因 macOS 扩展属性生成 `._*.py` AppleDouble 文件，被 Alembic 门禁在执行迁移前拒绝；保护脚本立即恢复 v1.6.4 代码／数据库并确认服务健康，失败尝试备份为 `/opt/linoi/backups/20260802-145428`。改用 `git archive` 纯跟踪文件包并在目标机离线通过零 AppleDouble、全量 Python 编译和 Alembic heads 后重新停服，成功备份位于 `/opt/linoi/backups/20260802-145655`。本补丁无新 migration，部署后内外网健康均为 `1.6.5`，数据库 integrity／foreign keys 正常，大小保持 2,170,880 B，实体数量保持 `2 books / 60 chapters / 21 characters / 221 chapter links / 220 character events / 4 personas / 4 bindings`，零活动任务、`NRestarts=0`、零错误标记。本机正式 App 已验签、换装并运行 `1.6.5(20)`，旧版备份位于 `/tmp/ictw-app-backup-v165.K1I3lD/ICTW-v1.6.4-build19.app`；iOS 未打包或安装，下一步只剩 tag、推送和 GitHub Release。
-
-**2026-08-02 v1.6.5 发布完成**：实现提交 `8b00d36`、生产落账提交 `eb358b1`；annotated tag `v1.6.5` 指向 `eb358b1` 并已推送。GitHub Release `ICTW / LinoI v1.6.5` 已发布，资产 `ICTW-1.6.5.zip` 为 3,148,623 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.5>。iOS 未打包或安装，由用户自行处理。
-
-## 验收基线
-
-- 迁移前备份生产库；迁移后 `integrity_check`、`foreign_key_check`、`alembic heads` 全通过。任何生产 schema 改动只走 `alembic upgrade head`。
-- Backend pytest、Alembic heads、iOS Debug、macOS Debug 按 `AGENTS.md` 命令通过；共享客户端改动默认双端构建。
-- 固定测试覆盖：候选不足后的单次整写、截断、无上限正常长文、人物白名单、Selector 来源、Bible hash、Checker三结论/失败、手动编辑后的复查、明确覆盖接受及 Extractor 只读接受稿。
-- 发布前以隔离数据完成 iOS/macOS 手测；真实文本和密钥不进入日志/截图。部署、tag、Release 必须另获用户明确授权。
-
-## 暂停／待恢复：宁波云迁移
-
-香港现网服务器到期与宁波迁移仍暂停。恢复前用户须基于当时官方 ICP/接入规则明确合规路线；在此之前仅允许本地计划、只读盘点和离线准备，不切 DNS、不停生产、不传送生产库或秘密。恢复时另写替换式执行计划，先备份并确保旧服务停止后再切换，避免双写。
-
-## Backlog
-
-- v1.6 完成后，基于真实使用记录评估记忆简报预算、Selector temperature 与 DeepSeek 模型配置；不将评估结果预设为产品规则。
-- 阅读器书签、朗读、翻页动效等增强不纳入 v1.6。
-- 云迁移路线待用户恢复并提供合规决策后再立项。
-
-## 里程碑索引
-
-- `v1.5.0(14)`：已发布，索引见 `archive/v1.5.0施工plan.md`。
-- `v1.6.0(15)`：已发布，详细执行记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.1(16)`：已发布，iOS 未发包；补丁记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.2(17)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.3(18)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.4(19)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.5(20)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
+- `v1.5.0(14)`、`v1.6.0(15)` 至 `v1.6.5(20)`：均已发布；完整部署、发布和 iOS 未发包记录见 [`archive/v1.6.0施工plan.md`](archive/v1.6.0施工plan.md)。
+- `v1.7.0(21)`：iOS 视觉施工、全状态逐屏验收、全新 App Icon、正式 Archive、tag 与 GitHub Release 已完成；Backend 与 macOS 不在本版升级范围。
+- 宁波云迁移、阅读器功能增强和 v1.6 记忆参数评估继续保留为非本版本 Backlog；云迁移仍受既有 ICP／DNS／停服门禁约束。

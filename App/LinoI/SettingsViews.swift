@@ -1,93 +1,188 @@
 import SwiftUI
 
 struct LinoIAgentSettingsPane: View {
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var agents: AgentSettingsStore
     @State private var showingNewProfile = false
 
     private let roles = ["memory_selector", "writer", "checker", "extractor"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Agent / 模型")
-                    .font(LinoType.heading)
-                    .foregroundStyle(LinoTheme.ink)
-                Text("四个现役 Agent 可分别绑定模型、可编辑人格与推理参数。")
-                    .font(.caption)
-                    .foregroundStyle(LinoTheme.muted)
-            }
+        VStack(spacing: 0) {
+            LinoISecondaryHeader(title: "Agent 与模型", dismiss: dismiss.callAsFunction)
 
-            LinoIConnectionSettingsSection()
-            profilesSection
-            bindingsSection
-            personasSection
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    section("四个现役 AGENT") {
+                        VStack(spacing: 0) {
+                            ForEach(Array(roles.enumerated()), id: \.element) { offset, role in
+                                NavigationLink {
+                                    LinoIAgentDetailView(role: role)
+                                } label: {
+                                    agentRow(role)
+                                }
+                                .buttonStyle(.plain)
+                                if offset != roles.count - 1 {
+                                    Divider().overlay(LinoTheme.line).padding(.leading, 14)
+                                }
+                            }
+                        }
+                    }
+
+                    section("LLM PROFILE") {
+                        VStack(spacing: 0) {
+                            if agents.profiles.isEmpty {
+                                Text("还没有模型 Profile。第一版使用 OpenAI-compatible 协议。")
+                                    .font(LinoType.ui(12))
+                                    .foregroundStyle(LinoTheme.faint)
+                                    .padding(14)
+                            } else {
+                                ForEach(Array(agents.profiles.enumerated()), id: \.element.id) { offset, profile in
+                                    LinoIProfileRow(profile: profile)
+                                    if offset != agents.profiles.count - 1 {
+                                        Divider().overlay(LinoTheme.line).padding(.leading, 14)
+                                    }
+                                }
+                            }
+                            Divider().overlay(LinoTheme.line).padding(.leading, 14)
+                            Button { showingNewProfile = true } label: {
+                                Label("新增 Profile", systemImage: "plus")
+                                    .font(LinoType.ui(15, .medium))
+                                    .foregroundStyle(LinoTheme.accent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .frame(height: 52)
+                                    .padding(.horizontal, 14)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(16)
+                .padding(.bottom, 24)
+            }
         }
-        .padding(.top, 8)
+        .background(LinoTheme.bg.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .task { await agents.load() }
         .sheet(isPresented: $showingNewProfile) {
             LinoIProfileEditorSheet(profile: nil)
                 .presentationDetents([.large])
+                .presentationCornerRadius(20)
         }
     }
 
-    private var profilesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                LinoISectionLabel("LLM PROFILE")
-                Spacer()
-                Button {
-                    showingNewProfile = true
-                } label: {
-                    Label("Profile", systemImage: "plus")
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(LinoITintButtonStyle(compact: true))
-            }
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LinoISectionLabel(title)
+                .padding(.horizontal, 6)
+            content()
+                .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(LinoTheme.line, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
 
-            if agents.profiles.isEmpty {
-                Text("还没有模型 Profile。第一版使用 OpenAI-compatible 协议。")
-                    .font(.footnote)
-                    .foregroundStyle(LinoTheme.faint)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            } else {
-                VStack(spacing: 10) {
-                    ForEach(agents.profiles) { profile in
-                        LinoIProfileRow(profile: profile)
+    private func agentRow(_ role: String) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(role.linoAgentName)
+                    .font(LinoType.ui(15, .medium))
+                    .foregroundStyle(LinoTheme.ink)
+                Text(profileDescription(role))
+                    .font(LinoType.caption)
+                    .foregroundStyle(LinoTheme.muted)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Text(thinkingDescription(role))
+                .font(LinoType.caption)
+                .foregroundStyle(LinoTheme.faint)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(LinoTheme.faint)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 62)
+        .contentShape(Rectangle())
+    }
+
+    private func profileDescription(_ role: String) -> String {
+        guard let binding = agents.bindings.first(where: { $0.agentRole == role }),
+              let id = binding.llmProfileId,
+              let profile = agents.profiles.first(where: { $0.id == id }) else {
+            return "未绑定模型"
+        }
+        return "\(profile.name) · \(profile.modelName)"
+    }
+
+    private func thinkingDescription(_ role: String) -> String {
+        guard let binding = agents.bindings.first(where: { $0.agentRole == role }) else { return "模型默认" }
+        let enabled = binding.effectiveThinkingEnabled ?? binding.thinkingEnabled
+        guard enabled == true else { return enabled == false ? "思考 关" : "模型默认" }
+        let effort = binding.effectiveReasoningEffort ?? binding.reasoningEffort
+        return effort.map { "思考 \(effortName($0))" } ?? "思考 开"
+    }
+}
+
+private struct LinoISecondaryHeader: View {
+    let title: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Button(action: dismiss) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 18, weight: .medium))
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LinoTheme.ink)
+            Text(title)
+                .font(LinoType.ui(16, .semibold))
+                .foregroundStyle(LinoTheme.ink)
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 46)
+        .overlay(alignment: .bottom) { Rectangle().fill(LinoTheme.line).frame(height: 1) }
+    }
+}
+
+private struct LinoIAgentDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var agents: AgentSettingsStore
+    let role: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LinoISecondaryHeader(title: role.linoAgentName, dismiss: dismiss.callAsFunction)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LinoISectionLabel("模型与推理").padding(.horizontal, 6)
+                        LinoIAgentBindingCard(role: role)
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        LinoISectionLabel("人格").padding(.horizontal, 6)
+                        if let persona = agents.personas.first(where: { $0.agentRole == role }) {
+                            LinoIAgentPersonaEditor(persona: persona)
+                        } else {
+                            Text("当前服务未返回人格配置。")
+                                .font(LinoType.ui(12))
+                                .foregroundStyle(LinoTheme.faint)
+                                .padding(14)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .linoCard(cornerRadius: 16)
+                        }
                     }
                 }
+                .padding(16)
+                .padding(.bottom, 24)
             }
         }
-        .padding(14)
-        .linoGlass(cornerRadius: 20)
+        .background(LinoTheme.bg.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
     }
-
-    private var bindingsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LinoISectionLabel("AGENT 模型绑定")
-            ForEach(roles, id: \.self) { role in
-                LinoIAgentBindingCard(role: role)
-            }
-        }
-        .padding(14)
-        .linoGlass(cornerRadius: 20)
-    }
-
-    private var personasSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LinoISectionLabel("Agent 人格")
-            ForEach(personasInRoleOrder) { persona in
-                LinoIPersonaCard(persona: persona)
-            }
-        }
-        .padding(14)
-        .linoGlass(cornerRadius: 20)
-    }
-
-    private var personasInRoleOrder: [AgentPersona] {
-        roles.compactMap { role in agents.personas.first(where: { $0.agentRole == role }) }
-    }
-
 }
 
 private struct LinoIAgentBindingCard: View {
@@ -97,153 +192,143 @@ private struct LinoIAgentBindingCard: View {
     let role: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(role.linoAgentName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(LinoTheme.ink)
-                    Text(profileDescription)
-                        .font(.caption)
-                        .foregroundStyle(LinoTheme.muted)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Picker(role.linoAgentName, selection: profileSelection) {
+        VStack(spacing: 0) {
+            row("绑定模型") {
+                Picker("绑定模型", selection: profileSelection) {
                     Text("未绑定").tag("")
-                    ForEach(agents.profiles) { profile in
-                        Text(profile.name).tag(profile.id)
-                    }
+                    ForEach(agents.profiles) { profile in Text(profile.name).tag(profile.id) }
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
-                .frame(maxWidth: 150)
+                .tint(LinoTheme.muted)
             }
-
-            Divider().overlay(LinoTheme.hairline)
-
-            Toggle("启用思考", isOn: thinkingSelection)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(LinoTheme.body)
-                .disabled(!canToggleThinking)
-
-            HStack {
-                Text("思考强度")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(LinoTheme.body)
-                Spacer()
-                Picker("思考强度", selection: effortSelection) {
-                    Text("模型默认").tag("")
-                    ForEach(capabilities.reasoningEffortLevels, id: \.self) { level in
-                        Text(effortName(level)).tag(level)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .disabled(!canChooseEffort)
+            Divider().overlay(LinoTheme.line).padding(.leading, 14)
+            row("启用思考") {
+                Toggle("", isOn: thinkingSelection)
+                    .labelsHidden()
+                    .tint(LinoTheme.accent)
+                    .disabled(!canToggleThinking)
             }
+            Divider().overlay(LinoTheme.line).padding(.leading, 14)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Temperature")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(LinoTheme.body)
+                    Text("思考强度").font(LinoType.ui(15)).foregroundStyle(LinoTheme.ink)
+                    Spacer()
+                    if capabilities.reasoningEffortLevels.isEmpty {
+                        Text("模型默认").font(LinoType.caption).foregroundStyle(LinoTheme.faint)
+                    }
+                }
+                if !capabilities.reasoningEffortLevels.isEmpty {
+                    HStack(spacing: 2) {
+                        ForEach(capabilities.reasoningEffortLevels, id: \.self) { effort in
+                            let selected = (binding?.reasoningEffort ?? binding?.effectiveReasoningEffort) == effort
+                            Button {
+                                Task {
+                                    await agents.configureThinking(
+                                        role: role,
+                                        enabled: binding?.thinkingEnabled ?? effectiveThinking,
+                                        effort: effort
+                                    )
+                                }
+                            } label: {
+                                Text(effortName(effort))
+                                    .font(LinoType.ui(12.5, .medium))
+                                    .foregroundStyle(selected ? LinoTheme.ink : LinoTheme.muted)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 28)
+                                    .background(selected ? LinoTheme.surface : Color.clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(2)
+                    .background(LinoTheme.bg2, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .disabled(!canChooseEffort)
+                }
+            }
+            .padding(14)
+            Divider().overlay(LinoTheme.line).padding(.leading, 14)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Temperature").font(LinoType.ui(15)).foregroundStyle(LinoTheme.ink)
                     Spacer()
                     Text(temperatureValueLabel)
-                        .font(.footnote.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(canAdjustTemperature ? LinoTheme.accentDeep : LinoTheme.faint)
+                        .font(.system(size: 14, weight: .semibold).monospaced())
+                        .foregroundStyle(canAdjustTemperature ? LinoTheme.accent : LinoTheme.faint)
                     if binding?.temperature != nil {
                         Button("默认") {
                             temperatureDraft = nil
                             Task { await agents.configureTemperature(role: role, temperature: nil) }
                         }
-                        .font(.caption.weight(.semibold))
+                        .font(LinoType.ui(12, .medium))
                         .buttonStyle(.plain)
-                        .foregroundStyle(LinoTheme.accentDeep)
+                        .foregroundStyle(LinoTheme.muted)
                     }
                 }
-                Slider(
-                    value: temperatureSelection,
-                    in: 0.0...2.0,
-                    step: 0.05
-                ) { editing in
-                    if !editing {
-                        Task { await agents.configureTemperature(role: role, temperature: temperatureDraft) }
-                    }
+                Slider(value: temperatureSelection, in: 0...2, step: 0.05) { editing in
+                    if !editing { Task { await agents.configureTemperature(role: role, temperature: temperatureDraft) } }
                 }
+                .tint(LinoTheme.accent)
                 .disabled(!canAdjustTemperature)
+                Text(capabilityDescription)
+                    .font(LinoType.ui(11.5))
+                    .foregroundStyle(LinoTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Text(capabilityDescription)
-                .font(.caption2)
-                .foregroundStyle(LinoTheme.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            .padding(14)
         }
-        .padding(12)
-        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onChange(of: binding?.temperature) { _, _ in
-            temperatureDraft = nil
+        .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(LinoTheme.line, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onChange(of: binding?.temperature) { _, _ in temperatureDraft = nil }
+    }
+
+    private func row<Content: View>(_ title: String, @ViewBuilder trailing: () -> Content) -> some View {
+        HStack(spacing: 10) {
+            Text(title).font(LinoType.ui(15)).foregroundStyle(LinoTheme.ink)
+            Spacer()
+            trailing()
         }
+        .padding(.horizontal, 14)
+        .frame(height: 54)
     }
 
-    private var binding: AgentBinding? {
-        agents.bindings.first(where: { $0.agentRole == role })
-    }
-
-    private var capabilities: ModelCapabilities {
-        binding?.capabilities ?? .unsupported
-    }
-
-    private var effectiveThinking: Bool {
-        binding?.effectiveThinkingEnabled
-            ?? binding?.thinkingEnabled
-            ?? capabilities.thinkingRequired
-    }
-
+    private var binding: AgentBinding? { agents.bindings.first(where: { $0.agentRole == role }) }
+    private var capabilities: ModelCapabilities { binding?.capabilities ?? .unsupported }
+    private var effectiveThinking: Bool { binding?.effectiveThinkingEnabled ?? binding?.thinkingEnabled ?? capabilities.thinkingRequired }
     private var canToggleThinking: Bool {
-        binding?.llmProfileId != nil &&
-        capabilities.thinkingToggleSupported &&
-        capabilities.thinkingCanDisable &&
-        !capabilities.thinkingRequired
+        binding?.llmProfileId != nil && capabilities.thinkingToggleSupported && capabilities.thinkingCanDisable && !capabilities.thinkingRequired
     }
-
-    private var canAdjustTemperature: Bool {
-        binding?.llmProfileId != nil && (binding?.temperatureAdjustable ?? false)
+    private var canChooseEffort: Bool {
+        binding?.llmProfileId != nil && effectiveThinking && !capabilities.reasoningEffortLevels.isEmpty
     }
-
+    private var canAdjustTemperature: Bool { binding?.llmProfileId != nil && (binding?.temperatureAdjustable ?? false) }
     private var temperatureValueLabel: String {
-        if let value = temperatureDraft ?? binding?.temperature {
-            return String(format: "%.2f", value)
-        }
-        return "模型默认"
+        if let value = temperatureDraft ?? binding?.temperature { return String(format: "%.2f", value) }
+        return "默认"
     }
-
     private var temperatureSelection: Binding<Double> {
+        Binding(get: { temperatureDraft ?? binding?.temperature ?? 0.7 }, set: { temperatureDraft = ($0 * 100).rounded() / 100 })
+    }
+    private var profileSelection: Binding<String> {
         Binding(
-            get: { temperatureDraft ?? binding?.temperature ?? 0.7 },
-            set: { temperatureDraft = ($0 * 100).rounded() / 100 }
+            get: { binding?.llmProfileId ?? "" },
+            set: { value in Task { await agents.bind(role: role, profileId: value.isEmpty ? nil : value) } }
         )
     }
-
-    private var canChooseEffort: Bool {
-        binding?.llmProfileId != nil &&
-        effectiveThinking &&
-        !capabilities.reasoningEffortLevels.isEmpty
+    private var thinkingSelection: Binding<Bool> {
+        Binding(
+            get: { effectiveThinking },
+            set: { value in
+                Task { await agents.configureThinking(role: role, enabled: value, effort: value ? binding?.reasoningEffort : nil) }
+            }
+        )
     }
-
-    private var profileDescription: String {
-        guard let id = binding?.llmProfileId,
-              let profile = agents.profiles.first(where: { $0.id == id }) else {
-            return "未绑定模型"
-        }
-        return "\(profile.name) · \(profile.modelName)"
-    }
-
     private var capabilityDescription: String {
         guard binding?.llmProfileId != nil else { return "绑定模型后可查看推理能力。" }
-        if capabilities.thinkingRequired {
-            return "此模型锁定开启思考；当前实际生效：开启\(effectiveEffortText)。"
-        }
+        if capabilities.thinkingRequired { return "此模型锁定开启思考；当前实际生效：开启\(effectiveEffortText)。" }
         if !capabilities.thinkingToggleSupported && capabilities.reasoningEffortLevels.isEmpty {
             return "此模型未声明可调思考参数，后端不会发送额外参数。"
         }
@@ -251,99 +336,82 @@ private struct LinoIAgentBindingCard: View {
             return "当前实际生效：模型默认；后端不发送额外思考参数。"
         }
         let state = effectiveThinking ? "开启" : "关闭"
-        let temperatureNote = effectiveThinking && !capabilities.temperatureEffectiveWhenThinking
-            ? "；开启思考时 temperature 不生效"
-            : ""
-        return "当前实际生效：\(state)\(effectiveEffortText)\(temperatureNote)。"
+        let note = effectiveThinking && !capabilities.temperatureEffectiveWhenThinking ? "；开启思考时 temperature 不生效" : ""
+        return "当前实际生效：\(state)\(effectiveEffortText)\(note)。"
     }
-
     private var effectiveEffortText: String {
         guard let effort = binding?.effectiveReasoningEffort, !effort.isEmpty else { return "" }
         return " / \(effortName(effort))"
     }
+}
 
-    private var profileSelection: Binding<String> {
-        Binding(
-            get: { binding?.llmProfileId ?? "" },
-            set: { value in
-                Task { await agents.bind(role: role, profileId: value.isEmpty ? nil : value) }
+private struct LinoIAgentPersonaEditor: View {
+    @EnvironmentObject private var agents: AgentSettingsStore
+    @State private var prompt = ""
+    @State private var loadedPrompt = ""
+    let persona: AgentPersona
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 9) {
+                LinoISectionLabel("可编辑人格词")
+                TextEditor(text: $prompt)
+                    .scrollContentBackground(.hidden)
+                    .font(LinoType.serif(14))
+                    .lineSpacing(12)
+                    .foregroundStyle(LinoTheme.ink2)
+                    .frame(minHeight: 210)
             }
-        )
-    }
-
-    private var thinkingSelection: Binding<Bool> {
-        Binding(
-            get: { effectiveThinking },
-            set: { value in
-                Task {
-                    await agents.configureThinking(
-                        role: role,
-                        enabled: value,
-                        effort: value ? binding?.reasoningEffort : nil
-                    )
+            .padding(14)
+            Divider().overlay(LinoTheme.line)
+            VStack(alignment: .leading, spacing: 9) {
+                Label("程序协议 · 只读，始终生效", systemImage: "lock")
+                    .font(LinoType.ui(10.5, .semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(LinoTheme.faint)
+                Text(persona.programProtocol.isEmpty ? "旧版服务未提供程序协议。" : persona.programProtocol)
+                    .font(LinoType.ui(12.5))
+                    .lineSpacing(7)
+                    .foregroundStyle(LinoTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .background(LinoTheme.surface2)
+            Divider().overlay(LinoTheme.line)
+            HStack(spacing: 10) {
+                Button("恢复默认") { Task { await agents.resetPersona(role: persona.agentRole) } }
+                    .buttonStyle(LinoITintButtonStyle(compact: true))
+                Spacer()
+                Button("保存人格") {
+                    var edited = persona
+                    edited.systemPrompt = prompt
+                    edited.editablePersona = prompt
+                    Task { await agents.savePersona(edited) }
                 }
+                .buttonStyle(LinoIPrimaryButtonStyle(compact: true))
+                .disabled(prompt == loadedPrompt)
             }
-        )
-    }
-
-    private var effortSelection: Binding<String> {
-        Binding(
-            get: { binding?.reasoningEffort ?? "" },
-            set: { value in
-                Task {
-                    await agents.configureThinking(
-                        role: role,
-                        enabled: binding?.thinkingEnabled ?? effectiveThinking,
-                        effort: value.isEmpty ? nil : value
-                    )
-                }
-            }
-        )
-    }
-
-    private func effortName(_ effort: String) -> String {
-        switch effort {
-        case "minimal": return "极低"
-        case "low": return "低"
-        case "medium": return "中"
-        case "high": return "高"
-        case "max": return "最高"
-        default: return effort
+            .padding(12)
         }
+        .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(LinoTheme.line, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onAppear { sync() }
+        .onChange(of: persona.editablePersona) { _, _ in sync() }
+    }
+
+    private func sync() {
+        loadedPrompt = persona.editablePersona
+        prompt = persona.editablePersona
     }
 }
 
 struct LinoIConnectionSettingsSection: View {
-    @EnvironmentObject private var session: AppSession
-    @State private var baseURL = ""
-    @State private var token = ""
-
+    @State private var showingConnection = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LinoISectionLabel("连接")
-            LinoITextField("后端地址", text: $baseURL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            LinoISecureField("Bearer Token", text: $token)
-            HStack {
-                Text("Token 保存到 Keychain；本地调试也可通过 LINOI_DEBUG_TOKEN 注入。")
-                    .font(.caption)
-                    .foregroundStyle(LinoTheme.muted)
-                Spacer()
-                Button("保存") {
-                    session.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                    session.token = token.trimmingCharacters(in: .whitespacesAndNewlines)
-                    session.saveConnection()
-                }
-                .buttonStyle(LinoITintButtonStyle(compact: true))
-            }
-        }
-        .padding(14)
-        .linoGlass(cornerRadius: 20)
-        .onAppear {
-            baseURL = session.baseURL
-            token = session.token
-        }
+        Button("打开后端连接设置") { showingConnection = true }
+            .buttonStyle(LinoITintButtonStyle())
+            .sheet(isPresented: $showingConnection) { LinoIConnectionSheet().presentationDetents([.height(360)]) }
     }
 }
 
@@ -361,34 +429,26 @@ struct LinoIConnectionSheet: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 LinoISecureField("Bearer Token", text: $token)
-                Text("保存后会重新读取书架。")
-                    .font(.footnote)
+                Text("Token 保存到 Keychain，保存后会重新读取书架。")
+                    .font(LinoType.ui(12))
                     .foregroundStyle(LinoTheme.muted)
                 Spacer()
                 Button("保存连接") {
                     session.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     session.token = token.trimmingCharacters(in: .whitespacesAndNewlines)
                     session.saveConnection()
-                    Task {
-                        await bookshelf.load()
-                        dismiss()
-                    }
+                    Task { await bookshelf.load(); dismiss() }
                 }
                 .buttonStyle(LinoIPrimaryButtonStyle())
             }
             .padding(18)
-            .navigationTitle("连接设置")
+            .navigationTitle("后端连接")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.foregroundStyle(LinoTheme.accent) }
             }
-            .background(LinoTheme.background.ignoresSafeArea())
-            .onAppear {
-                baseURL = session.baseURL
-                token = session.token
-            }
+            .background(LinoTheme.bg.ignoresSafeArea())
+            .onAppear { baseURL = session.baseURL; token = session.token }
         }
     }
 }
@@ -397,54 +457,38 @@ private struct LinoIProfileRow: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @State private var editing = false
     @State private var confirmingDelete = false
-
     let profile: LLMProfile
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "cpu")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(LinoTheme.accentDeep)
-                .frame(width: 34, height: 34)
-                .background(LinoTheme.accentSoft, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 5) {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(profile.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(LinoType.ui(15, .medium))
                     .foregroundStyle(LinoTheme.ink)
-                Text(profile.modelName)
-                    .font(.caption)
-                    .foregroundStyle(LinoTheme.accentDeep)
-                Text(profile.baseURL)
-                    .font(.caption2)
+                Text("\(profile.modelName) · \(profile.baseURL)")
+                    .font(LinoType.caption)
                     .foregroundStyle(LinoTheme.muted)
                     .lineLimit(1)
             }
             Spacer()
             Menu {
-                Button("测试连接", systemImage: "bolt.horizontal") {
-                    Task { await agents.testProfile(profile) }
-                }
+                Button("测试连接", systemImage: "bolt.horizontal") { Task { await agents.testProfile(profile) } }
                 Button("编辑", systemImage: "pencil") { editing = true }
                 Button("删除", systemImage: "trash", role: .destructive) { confirmingDelete = true }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 34, height: 34)
+                    .frame(width: 32, height: 32)
+                    .foregroundStyle(LinoTheme.muted)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(LinoTheme.muted)
         }
-        .padding(12)
-        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 14)
+        .frame(height: 62)
         .sheet(isPresented: $editing) {
-            LinoIProfileEditorSheet(profile: profile)
-                .presentationDetents([.large])
+            LinoIProfileEditorSheet(profile: profile).presentationDetents([.large]).presentationCornerRadius(20)
         }
         .confirmationDialog("删除这个 Profile？", isPresented: $confirmingDelete, titleVisibility: .visible) {
-            Button("删除", role: .destructive) {
-                Task { await agents.deleteProfile(profile) }
-            }
+            Button("删除", role: .destructive) { Task { await agents.deleteProfile(profile) } }
             Button("取消", role: .cancel) {}
         }
     }
@@ -457,7 +501,6 @@ private struct LinoIProfileEditorSheet: View {
     @State private var baseURL = ""
     @State private var apiKey = ""
     @State private var modelName = ""
-
     let profile: LLMProfile?
 
     var body: some View {
@@ -465,37 +508,23 @@ private struct LinoIProfileEditorSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     LinoITextField("Profile 名称", text: $name)
-                    LinoITextField("Base URL", text: $baseURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    LinoITextField("Model Name", text: $modelName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    LinoITextField("Base URL", text: $baseURL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    LinoITextField("Model Name", text: $modelName).textInputAutocapitalization(.never).autocorrectionDisabled()
                     LinoISecureField(profile == nil ? "API Key" : "新 API Key（不填则不替换）", text: $apiKey)
                     Text("协议固定为 OpenAI-compatible。编辑 Profile 时，密钥不会从后端回显。")
-                        .font(.footnote)
-                        .foregroundStyle(LinoTheme.muted)
-                    Button(profile == nil ? "创建 Profile" : "保存 Profile") {
-                        Task { await save() }
-                    }
-                    .buttonStyle(LinoIPrimaryButtonStyle())
-                    .disabled(!canSave)
+                        .font(LinoType.ui(12)).foregroundStyle(LinoTheme.muted)
+                    Button(profile == nil ? "创建 Profile" : "保存 Profile") { Task { await save() } }
+                        .buttonStyle(LinoIPrimaryButtonStyle()).disabled(!canSave)
                 }
                 .padding(18)
             }
             .navigationTitle(profile == nil ? "新增 Profile" : "编辑 Profile")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
-            }
-            .background(LinoTheme.background.ignoresSafeArea())
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+            .background(LinoTheme.bg.ignoresSafeArea())
             .onAppear {
                 guard let profile else { return }
-                name = profile.name
-                baseURL = profile.baseURL
-                modelName = profile.modelName
+                name = profile.name; baseURL = profile.baseURL; modelName = profile.modelName
             }
         }
     }
@@ -506,12 +535,9 @@ private struct LinoIProfileEditorSheet: View {
         !modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (profile != nil || !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
-
     private func save() async {
         if var profile {
-            profile.name = name
-            profile.baseURL = baseURL
-            profile.modelName = modelName
+            profile.name = name; profile.baseURL = baseURL; profile.modelName = modelName
             await agents.updateProfile(profile, apiKey: apiKey)
         } else {
             await agents.createProfile(name: name, baseURL: baseURL, apiKey: apiKey, model: modelName)
@@ -520,68 +546,13 @@ private struct LinoIProfileEditorSheet: View {
     }
 }
 
-private struct LinoIPersonaCard: View {
-    @EnvironmentObject private var agents: AgentSettingsStore
-    @State private var prompt = ""
-    @State private var loadedRole = ""
-    @State private var loadedPrompt = ""
-
-    let persona: AgentPersona
-
-    var body: some View {
-        DisclosureGroup {
-            VStack(alignment: .leading, spacing: 12) {
-                LinoIEditor(
-                    title: "可编辑人格词",
-                    text: $prompt,
-                    minHeight: 260,
-                    placeholder: "填写这个 Agent 的人格、边界和写作偏好。"
-                )
-                VStack(alignment: .leading, spacing: 5) {
-                    LinoISectionLabel("程序协议（只读，始终生效）")
-                    Text(persona.programProtocol.isEmpty ? "旧版服务未提供程序协议。" : persona.programProtocol)
-                        .font(.caption).foregroundStyle(LinoTheme.muted).fixedSize(horizontal: false, vertical: true)
-                }
-                HStack(spacing: 10) {
-                    Button("恢复默认") {
-                        Task { await agents.resetPersona(role: persona.agentRole) }
-                    }
-                    .buttonStyle(LinoITintButtonStyle(compact: true))
-                    Spacer()
-                    Button("保存人格") {
-                        var edited = persona
-                        edited.systemPrompt = prompt
-                        edited.editablePersona = prompt
-                        Task { await agents.savePersona(edited) }
-                    }
-                    .buttonStyle(LinoIPrimaryButtonStyle(compact: true))
-                    .disabled(prompt == loadedPrompt)
-                }
-            }
-            .padding(.top, 12)
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(persona.agentRole.linoAgentName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(LinoTheme.ink)
-                    Text(prompt.isEmpty ? "未设置人格" : "\(prompt.count) 字")
-                        .font(.caption)
-                        .foregroundStyle(LinoTheme.muted)
-                }
-                Spacer()
-            }
-        }
-        .padding(12)
-        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onAppear { sync() }
-        .onChange(of: persona.editablePersona) { _, _ in sync(force: true) }
-    }
-
-    private func sync(force: Bool = false) {
-        guard force || loadedRole != persona.agentRole else { return }
-        loadedRole = persona.agentRole
-        loadedPrompt = persona.editablePersona
-        prompt = persona.editablePersona
+private func effortName(_ effort: String) -> String {
+    switch effort {
+    case "minimal": return "极低"
+    case "low": return "低"
+    case "medium": return "中"
+    case "high": return "高"
+    case "max": return "最高"
+    default: return effort
     }
 }

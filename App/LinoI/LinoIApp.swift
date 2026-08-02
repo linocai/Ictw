@@ -25,7 +25,6 @@ struct LinoIApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .preferredColorScheme(.light)
                 .environmentObject(notices)
                 .environmentObject(session)
                 .environmentObject(bookshelfStore)
@@ -56,10 +55,16 @@ struct RootView: View {
                 Group {
                     if session.currentBook == nil {
                         LinoIShelfView()
-                            .transition(.opacity)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .offset(y: 7)),
+                                removal: .identity
+                            ))
                     } else {
                         LinoIWorkspaceView()
-                            .transition(.opacity)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .offset(y: 7)),
+                                removal: .identity
+                            ))
                     }
                 }
                 .linoAnimation(LinoMotion.containerSwap, value: session.currentBook?.id)

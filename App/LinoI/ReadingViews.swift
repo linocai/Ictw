@@ -31,21 +31,11 @@ enum ReaderFontScale: String, CaseIterable, Identifiable {
         }
     }
 
-    var lineSpacing: CGFloat {
-        switch self {
-        case .small: return 10
-        case .medium: return 13
-        case .large: return 16
-        }
-    }
+    /// SwiftUI's lineSpacing is additive. Matching the type size produces the
+    /// airy, approximately 2× reading rhythm used by the handoff.
+    var lineSpacing: CGFloat { bodySize }
 
-    var titleSize: CGFloat {
-        switch self {
-        case .small: return 22
-        case .medium: return 25
-        case .large: return 28
-        }
-    }
+    var titleSize: CGFloat { 25 }
 
     var label: String {
         switch self {
@@ -56,19 +46,8 @@ enum ReaderFontScale: String, CaseIterable, Identifiable {
     }
 }
 
-/// Distraction-free reading surface for a finalized chapter: day/sepia/night
-/// themes (shared `LinoReadingTheme`, persisted), serif type, generous
-/// line/paragraph spacing, and in-place prev/next navigation across adjacent
-/// finalized chapters.
-///
-/// Self-draws its own top bar because the parent screen hides the system
-/// nav bar while in reading mode (`.toolbar(.hidden, for: .navigationBar)`
-/// in `LinoIChapterEditorScreen`) — under the app-wide locked-light-mode
-/// constraint a system nav bar would stay bright even when the night theme
-/// is active, which is exactly the "阴阳脸" this is meant to avoid. Structure
-/// (back + title + reading-settings menu) mirrors macOS
-/// `MacReaderView.topBar`; the menu keeps iOS's existing 3-level 小/中/大
-/// semantics instead of porting Mac's continuous ladder.
+/// Native SwiftUI reading surface. Its three palettes intentionally stay
+/// independent from the app's light/dark appearance.
 struct LinoIReadingView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var workspace: WorkspaceStore
@@ -81,6 +60,8 @@ struct LinoIReadingView: View {
     @State private var latestMetrics = ReaderScrollMetrics(offset: 0, maximumOffset: 0)
     @State private var positionSaveTask: Task<Void, Never>?
     @State private var positionContext: ReaderPositionContext?
+    @State private var chromeVisible = true
+    @State private var readerPanel = false
 
     let chapter: Chapter
     let onExit: () -> Void
@@ -97,53 +78,40 @@ struct LinoIReadingView: View {
     private var bookTitle: String { session.currentBook?.title ?? "" }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    header
-                    Rectangle()
-                        .fill(theme.hairline)
-                        .frame(height: 0.5)
-                        .padding(.bottom, 22)
-                    paragraphsView
-                        // 正文排除出隐式动画（同 Mac，v1.4.1 性能修复）：整章
-                        // 段落逐帧插值文字颜色/重排代价高，主题渐变只留 chrome。
-                        .transaction { $0.animation = nil }
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                if chromeVisible {
+                    topBar
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
-                .padding(.horizontal, 22)
-                .padding(.top, 18)
-                .padding(.bottom, 130)
-            }
-            .safeAreaInset(edge: .bottom) {
-                controlBar
-            }
-            .id(chapter.id)
-            .scrollPosition($scrollPosition)
-            .onScrollGeometryChange(for: ReaderScrollMetrics.self) { geometry in
-                ReaderScrollMetrics(
-                    offset: geometry.contentOffset.y,
-                    maximumOffset: max(geometry.contentSize.height - geometry.containerSize.height, 0)
-                )
-            } action: { _, metrics in
-                latestMetrics = metrics
-                if let pendingRestoreOffset, metrics.maximumOffset > 0 {
-                    self.pendingRestoreOffset = nil
-                    scrollPosition.scrollTo(y: CGFloat(pendingRestoreOffset) * metrics.maximumOffset)
-                } else {
-                    schedulePositionSave(metrics)
+
+                readingScrollView
+
+                if chromeVisible {
+                    controlBar
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
-            .transition(.opacity)
-            .linoAnimation(LinoMotion.reader, value: chapter.id)
+
+            if readerPanel {
+                settingsPanel
+                    .padding(.horizontal, 14)
+                    .padding(.top, 53)
+                    .transition(.opacity.combined(with: .offset(y: -7)))
+                    .zIndex(2)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.background.ignoresSafeArea())
         .linoAnimation(LinoMotion.reader, value: theme)
+        .linoAnimation(LinoMotion.reader, value: chromeVisible)
+        .linoAnimation(LinoMotion.drawer, value: readerPanel)
         .onAppear {
             preparePositionRestore()
         }
         .onChange(of: chapter.id) { _, _ in
+            readerPanel = false
+            chromeVisible = true
             preparePositionRestore()
         }
         .onDisappear {
@@ -152,86 +120,108 @@ struct LinoIReadingView: View {
         }
     }
 
-    // MARK: - Top bar（自绘，替代隐藏的系统 nav 栏；结构对齐 Mac topBar）
+    private var readingScrollView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                paragraphsView
+                    // Whole-chapter text never participates in theme animation.
+                    // This preserves the v1.4.1 reading performance fix.
+                    .transaction { $0.animation = nil }
+            }
+            .padding(.horizontal, 26)
+            .padding(.top, 26)
+            .padding(.bottom, 54)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            chromeVisible.toggle()
+            readerPanel = false
+        }
+        .id(chapter.id)
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: ReaderScrollMetrics.self) { geometry in
+            ReaderScrollMetrics(
+                offset: geometry.contentOffset.y,
+                maximumOffset: max(geometry.contentSize.height - geometry.containerSize.height, 0)
+            )
+        } action: { _, metrics in
+            latestMetrics = metrics
+            if let pendingRestoreOffset, metrics.maximumOffset > 0 {
+                self.pendingRestoreOffset = nil
+                scrollPosition.scrollTo(y: CGFloat(pendingRestoreOffset) * metrics.maximumOffset)
+            } else {
+                schedulePositionSave(metrics)
+            }
+        }
+        .transition(.opacity)
+        .linoAnimation(LinoMotion.reader, value: chapter.id)
+    }
 
     private var topBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button(action: onExit) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 44, height: 44)
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 38, height: 38)
             }
             .buttonStyle(.plain)
             .foregroundStyle(theme.text)
-            .background(theme.chipBackground, in: Circle())
+            .accessibilityLabel("返回编辑器")
 
             Text("\(bookTitle) · 第 \(chapter.index) 章")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(theme.secondary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            Menu {
-                Section("阅读主题") {
-                    ForEach(LinoReadingTheme.allCases) { candidate in
-                        Button {
-                            storedTheme = candidate.rawValue
-                        } label: {
-                            Label(
-                                candidate.label,
-                                systemImage: candidate == theme ? "checkmark.circle.fill" : "circle"
-                            )
-                        }
-                    }
-                }
-                Section("字号") {
-                    ForEach(ReaderFontScale.allCases) { scale in
-                        Button {
-                            storedFontScale = scale.rawValue
-                        } label: {
-                            Label(
-                                scale.label,
-                                systemImage: scale == fontScale ? "checkmark.circle.fill" : "circle"
-                            )
-                        }
-                    }
-                }
+            Button {
+                readerPanel.toggle()
             } label: {
-                Image(systemName: "textformat.size")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 44, height: 44)
+                HStack(alignment: .firstTextBaseline, spacing: 1) {
+                    Text("A").font(.system(size: 15, weight: .semibold))
+                    Text("A").font(.system(size: 11, weight: .semibold))
+                }
+                .frame(width: 38, height: 38)
             }
             .buttonStyle(.plain)
             .foregroundStyle(theme.text)
-            .background(theme.chipBackground, in: Circle())
             .accessibilityLabel("阅读设置")
             .accessibilityHint("调整阅读主题和字号")
         }
-        .padding(.horizontal, 16)
-        .frame(height: 52)
-        .background(theme.barBackground.background(.ultraThinMaterial))
+        .padding(.horizontal, 12)
+        .frame(height: 48)
+        .background {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay(theme.barBackground)
+        }
         .overlay(alignment: .bottom) {
-            Rectangle().fill(theme.hairline).frame(height: 0.5)
+            Rectangle().fill(theme.hairline).frame(height: 1)
         }
     }
 
-    // MARK: - Body content
-
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("第 \(chapter.index) 章")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 11.5))
+                .tracking(1.4)
                 .foregroundStyle(theme.secondary)
             Text(chapter.title.isEmpty ? "第 \(chapter.index) 章" : chapter.title)
                 .font(.custom("Songti SC", size: fontScale.titleSize).weight(.bold))
                 .foregroundStyle(theme.text)
+                .padding(.top, 10)
+            Rectangle()
+                .fill(theme.rule)
+                .frame(width: 38, height: 1.5)
+                .padding(.top, 20)
+                .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, 20)
     }
 
     private var paragraphsView: some View {
-        VStack(alignment: .leading, spacing: fontScale.lineSpacing + 8) {
+        VStack(alignment: .leading, spacing: 22) {
             if paragraphs.isEmpty {
                 Text("本章还没有正文。")
                     .font(.custom("Songti SC", size: fontScale.bodySize))
@@ -246,6 +236,119 @@ struct LinoIReadingView: View {
                 }
             }
         }
+    }
+
+    private var settingsPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("阅读主题")
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(theme.secondary)
+
+            HStack(spacing: 10) {
+                ForEach(LinoReadingTheme.allCases) { candidate in
+                    Button {
+                        storedTheme = candidate.rawValue
+                    } label: {
+                        VStack(spacing: 7) {
+                            Text("文")
+                                .font(.custom("Songti SC", size: 17))
+                                .foregroundStyle(candidate.text)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 52)
+                                .background(candidate.swatchFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(candidate == theme ? candidate.text : candidate.hairline, lineWidth: candidate == theme ? 2 : 1)
+                                )
+                            Text(candidate.label)
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(candidate == theme ? theme.text : theme.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.top, 11)
+
+            Text("字号")
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(theme.secondary)
+                .padding(.top, 16)
+
+            HStack(spacing: 8) {
+                ForEach(ReaderFontScale.allCases) { scale in
+                    Button {
+                        storedFontScale = scale.rawValue
+                    } label: {
+                        Text(scale.label)
+                            .font(.custom("Songti SC", size: scale.bodySize))
+                            .foregroundStyle(scale == fontScale ? theme.text : theme.secondary)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                            .background(scale == fontScale ? theme.chipBackground : Color.clear, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .stroke(scale == fontScale ? theme.rule : theme.hairline, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 11)
+        }
+        .padding(16)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(theme.barBackground)
+                )
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(theme.hairline, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.16), radius: 18, y: 14)
+    }
+
+    private var controlBar: some View {
+        HStack(spacing: 14) {
+            Text("读到 \(readingPercent)%")
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            navButton(
+                target: adjacentSummary(direction: -1),
+                systemImage: "chevron.left",
+                accessibilityLabel: "上一章"
+            )
+            navButton(
+                target: adjacentSummary(direction: 1),
+                systemImage: "chevron.right",
+                accessibilityLabel: "下一章"
+            )
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .frame(height: 48)
+        .background {
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(Capsule().fill(theme.barBackground))
+        }
+        .overlay(Capsule().stroke(theme.hairline, lineWidth: 1))
+        .padding(.horizontal, 20)
+        .padding(.bottom, 30)
+        .padding(.top, 8)
+    }
+
+    private var readingPercent: Int {
+        Int((latestMetrics.relativeOffset * 100).rounded())
     }
 
     private var paragraphs: [String] {
@@ -292,33 +395,6 @@ struct LinoIReadingView: View {
         )
     }
 
-    // MARK: - Bottom control bar（翻章）
-
-    private var controlBar: some View {
-        HStack {
-            Spacer()
-            HStack(spacing: 14) {
-                navButton(
-                    target: adjacentSummary(direction: -1),
-                    systemImage: "chevron.left",
-                    accessibilityLabel: "上一章"
-                )
-                navButton(
-                    target: adjacentSummary(direction: 1),
-                    systemImage: "chevron.right",
-                    accessibilityLabel: "下一章"
-                )
-            }
-            .padding(10)
-            .background(theme.barBackground, in: Capsule())
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().stroke(theme.hairline, lineWidth: 0.5))
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
-    }
-
     private func navButton(
         target: ChapterSummary?,
         systemImage: String,
@@ -329,12 +405,11 @@ struct LinoIReadingView: View {
             onSwitchChapter(target)
         } label: {
             Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 44, height: 44)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 36, height: 36)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(target == nil ? theme.secondary.opacity(0.5) : theme.text)
-        .background(theme.chipBackground, in: Capsule())
+        .foregroundStyle(target == nil ? theme.secondary.opacity(0.45) : theme.text)
         .disabled(target == nil || editor.isLoading)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(target == nil ? "不可用" : "可用")

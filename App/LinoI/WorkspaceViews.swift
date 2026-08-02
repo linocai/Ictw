@@ -9,37 +9,37 @@ struct LinoIWorkspaceView: View {
     var body: some View {
         VStack(spacing: 0) {
             LinoIWorkspaceHeader()
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 8)
-
-            LinoIWorkspaceSegment()
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
 
             ScrollView {
-                // tab 内容瞬时切换（同 MacRightPanel，v1.4.1 性能修复）：交叉淡化
-                // 期间两个 tab 的玻璃卡并存掉帧，动效由分段 pill 滑动承担。
                 Group {
                     switch session.selectedTab {
                     case .chapters:
                         LinoIChaptersPane()
                     case .characters:
                         LinoICharactersPane()
-                    case .settings:
+                    case .settings, .agents:
                         LinoIBookSettingsPane()
-                    case .agents:
-                        LinoIAgentSettingsPane()
                     }
                 }
+                .id(session.selectedTab)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .offset(y: 7)),
+                    removal: .identity
+                ))
+                .linoAnimation(LinoMotion.content, value: session.selectedTab)
                 .padding(.horizontal, 16)
-                .padding(.bottom, 34)
+                .padding(.top, 8)
+                .padding(.bottom, 26)
             }
-            .refreshable {
-                await reload()
-            }
+            .refreshable { await reload() }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            LinoIWorkspaceTabBar()
         }
         .task(id: session.currentBook?.id) {
+            if session.selectedTab == .agents {
+                session.selectedTab = .settings
+            }
             await reload()
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -57,42 +57,78 @@ private struct LinoIWorkspaceHeader: View {
     @EnvironmentObject private var session: AppSession
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 7) {
             Button {
                 session.closeBook()
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 44, height: 44)
+                    .font(.system(size: 18, weight: .medium))
+                    .frame(width: 38, height: 38)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(LinoTheme.accentDeep)
-            .background(Color.white.opacity(0.72), in: Circle())
-            .overlay(Circle().stroke(LinoTheme.hairline, lineWidth: 0.5))
+            .foregroundStyle(LinoTheme.ink)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.currentBook?.title.isEmpty == false ? session.currentBook?.title ?? "未命名书籍" : "未命名书籍")
-                    .font(LinoType.heading)
-                    .foregroundStyle(LinoTheme.ink)
-                    .lineLimit(1)
-                Text("Memory Selector / Writer / Checker / Extractor")
-                    .font(.caption)
-                    .foregroundStyle(LinoTheme.muted)
-            }
+            Text(bookTitle)
+                .font(LinoType.bookTitle)
+                .foregroundStyle(LinoTheme.ink)
+                .lineLimit(1)
+
             Spacer()
+
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(LinoTheme.muted)
+                .frame(width: 38, height: 38)
         }
+        .padding(.horizontal, 8)
+        .frame(height: 46)
+    }
+
+    private var bookTitle: String {
+        guard let title = session.currentBook?.title, !title.isEmpty else { return "未命名书籍" }
+        return title
     }
 }
 
-private struct LinoIWorkspaceSegment: View {
+private struct LinoIWorkspaceTabBar: View {
     @EnvironmentObject private var session: AppSession
 
+    private let tabs: [(WorkspaceTab, String)] = [
+        (.chapters, "doc.text"),
+        (.characters, "person.2"),
+        (.settings, "gearshape"),
+    ]
+
     var body: some View {
-        LinoISegmented(
-            options: WorkspaceTab.allCases,
-            label: { $0.rawValue },
-            selection: $session.selectedTab
-        )
+        HStack(spacing: 0) {
+            ForEach(tabs, id: \.0) { tab, icon in
+                Button {
+                    session.selectedTab = tab
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: icon)
+                            .font(.system(size: 20, weight: .regular))
+                            .frame(height: 23)
+                        Text(tabLabel(tab))
+                            .font(LinoType.ui(10.5, .medium))
+                    }
+                    .foregroundStyle(session.selectedTab == tab ? LinoTheme.accent : LinoTheme.muted)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(session.selectedTab == tab ? "已选择" : "未选择")
+            }
+        }
+        .background(LinoTheme.bg)
+        .overlay(alignment: .top) {
+            Rectangle().fill(LinoTheme.line).frame(height: 1)
+        }
+    }
+
+    private func tabLabel(_ tab: WorkspaceTab) -> String {
+        tab == .chapters ? "稿件" : tab.rawValue
     }
 }
 
@@ -101,24 +137,29 @@ struct LinoIChaptersPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("章节")
-                        .font(LinoType.heading)
+            HStack(alignment: .bottom, spacing: 10) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("稿件")
+                        .font(LinoType.paneTitle)
                         .foregroundStyle(LinoTheme.ink)
-                    Text("按顺序推进正文、接受后自动提取本章结果。")
-                        .font(.caption)
+                    Text(chapterSummary)
+                        .font(LinoType.ui(12))
                         .foregroundStyle(LinoTheme.muted)
                 }
                 Spacer()
                 Button {
                     Task { await workspace.createChapter() }
                 } label: {
-                    Label("章节", systemImage: "plus")
-                        .labelStyle(.iconOnly)
+                    Label("新章", systemImage: "plus")
+                        .font(LinoType.ui(12.5, .semibold))
+                        .foregroundStyle(LinoTheme.accentText)
+                        .padding(.horizontal, 13)
+                        .frame(height: 32)
+                        .background(LinoTheme.accent, in: Capsule())
                 }
-                .buttonStyle(LinoITintButtonStyle(compact: true))
+                .buttonStyle(.plain)
             }
+            .padding(.horizontal, 4)
 
             if workspace.chapters.isEmpty && !workspace.isLoading {
                 LinoIEmptyCard(
@@ -129,18 +170,32 @@ struct LinoIChaptersPane: View {
                     Task { await workspace.createChapter() }
                 }
             } else {
-                VStack(spacing: 10) {
-                    ForEach(workspace.chapters) { chapter in
+                VStack(spacing: 0) {
+                    ForEach(Array(workspace.chapters.enumerated()), id: \.element.id) { offset, chapter in
                         NavigationLink(value: chapter) {
                             LinoIChapterRow(chapter: chapter)
                         }
-                        .buttonStyle(LinoICardButtonStyle())
+                        .buttonStyle(.plain)
+                        if offset != workspace.chapters.count - 1 {
+                            Divider()
+                                .overlay(LinoTheme.line)
+                                .padding(.leading, 54)
+                        }
                     }
                 }
+                .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(LinoTheme.line, lineWidth: 1))
+                .shadow(color: LinoTheme.hex(0x17181C, opacity: 0.04), radius: 2, y: 1)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .linoAnimation(LinoMotion.listItem, value: workspace.chapters.map(\.id))
             }
         }
-        .padding(.top, 8)
+    }
+
+    private var chapterSummary: String {
+        let completed = workspace.chapters.filter { $0.status == "finalized" }.count
+        let awaiting = workspace.chapters.filter { $0.status == "draft_ready" }.count
+        return "\(workspace.chapters.count) 章 · 已完成 \(completed) · 待接受 \(awaiting)"
     }
 }
 
@@ -148,29 +203,47 @@ private struct LinoIChapterRow: View {
     let chapter: ChapterSummary
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(spacing: 0) {
-                Text("\(chapter.index)")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 42, height: 50)
-            .background(LinoTheme.coverGradient(chapter.id), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        HStack(spacing: 13) {
+            Text("\(chapter.index)")
+                .font(LinoType.serif(15))
+                .foregroundStyle(LinoTheme.faint)
+                .frame(width: 26)
 
-            HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(chapter.title.isEmpty ? "第 \(chapter.index) 章" : chapter.title)
                     .font(LinoType.cardTitle)
                     .foregroundStyle(LinoTheme.ink)
                     .lineLimit(1)
-                LinoIStatusPill(text: chapter.status.linoStatusLabel, status: chapter.status)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 5, height: 5)
+                    Text(chapter.status.linoStatusLabel)
+                        .font(LinoType.caption)
+                        .foregroundStyle(statusColor)
+                    Text(chapter.updatedAt.linoShortDate)
+                        .font(LinoType.caption)
+                        .foregroundStyle(LinoTheme.faint)
+                }
             }
-            Spacer()
+            Spacer(minLength: 8)
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(LinoTheme.faint)
         }
-        .padding(12)
-        .linoCard(cornerRadius: 17)
+        .padding(.horizontal, 14)
+        .frame(height: 60)
+        .contentShape(Rectangle())
+    }
+
+    private var statusColor: Color {
+        switch chapter.status {
+        case "finalized": return LinoTheme.success
+        case "draft_ready", "extracting": return LinoTheme.warning
+        case "writing": return LinoTheme.accent
+        case "failed": return LinoTheme.danger
+        default: return LinoTheme.muted
+        }
     }
 }
 
@@ -178,84 +251,164 @@ struct LinoIBookSettingsPane: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var agents: AgentSettingsStore
     @State private var title = ""
     @State private var world = ""
     @State private var loadedBookId: String?
     @State private var isExporting = false
     @State private var exportURL: URL?
     @State private var showingShare = false
+    @State private var showingConnection = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text("设定")
-                    .font(LinoType.heading)
+                    .font(LinoType.paneTitle)
                     .foregroundStyle(LinoTheme.ink)
-                Text("世界观设定会进入 Writer 的硬约束区。")
-                    .font(.caption)
+                Text("世界观进入 Writer 的硬约束区")
+                    .font(LinoType.ui(12))
                     .foregroundStyle(LinoTheme.muted)
             }
+            .padding(.horizontal, 4)
 
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 9) {
-                    LinoISectionLabel("书名")
-                    LinoITextField("书名", text: $title)
-                }
-                LinoIEditor(
-                    title: "世界观设定",
-                    text: $world,
-                    minHeight: 260,
-                    placeholder: "全局世界观、硬设定、不能违背的事实。"
-                )
-                Button {
-                    Task {
-                        await workspace.saveBook(title: title, world: world)
-                        if let book = session.currentBook {
-                            bookshelf.upsert(book)
-                        }
+            settingsSection("书") {
+                VStack(alignment: .leading, spacing: 0) {
+                    settingsTextEditor(label: "书名", text: $title, minHeight: 44, font: LinoType.serif(17, .semibold))
+                    Divider().overlay(LinoTheme.line)
+                    settingsTextEditor(label: "世界观设定", text: $world, minHeight: 150, font: LinoType.serif(14))
+                    Divider().overlay(LinoTheme.line)
+                    Button {
+                        saveBook()
+                    } label: {
+                        Text(workspace.isLoading ? "保存中" : "保存书籍设定")
+                            .font(LinoType.ui(13, .semibold))
+                            .foregroundStyle(LinoTheme.accent)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(height: 48)
+                            .padding(.horizontal, 14)
                     }
-                } label: {
-                    Text(workspace.isLoading ? "保存中" : "保存设定")
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(LinoIPrimaryButtonStyle())
             }
-            .padding(14)
-            .linoGlass(cornerRadius: 20)
 
-            VStack(alignment: .leading, spacing: 10) {
-                LinoISectionLabel("导出")
-                Text("把全书已完成章节导出为纯文本，方便备份或投稿。")
-                    .font(.footnote)
-                    .foregroundStyle(LinoTheme.muted)
-                Button {
-                    Task { await exportBook() }
-                } label: {
-                    Text(isExporting ? "正在导出" : "导出全书")
+            settingsSection("导出") {
+                VStack(spacing: 0) {
+                    settingsActionRow("导出全书", detail: ".txt") { Task { await exportBook() } }
+                    Divider().overlay(LinoTheme.line).padding(.leading, 14)
+                    settingsActionRow("导出记忆", detail: ".txt") { Task { await exportMemories() } }
                 }
-                .buttonStyle(LinoITintButtonStyle())
-                .disabled(isExporting || session.currentBook == nil)
-                Text("把大事记、章节摘要、人物动态字段与故事线（Extractor 记忆）导出为纯文本。")
-                    .font(.footnote)
-                    .foregroundStyle(LinoTheme.muted)
-                Button {
-                    Task { await exportMemories() }
-                } label: {
-                    Text(isExporting ? "正在导出" : "导出记忆")
-                }
-                .buttonStyle(LinoITintButtonStyle())
-                .disabled(isExporting || session.currentBook == nil)
             }
-            .padding(14)
-            .linoGlass(cornerRadius: 20)
+
+            settingsSection("模型与连接") {
+                VStack(spacing: 0) {
+                    NavigationLink {
+                        LinoIAgentSettingsPane()
+                            .toolbar(.hidden, for: .tabBar)
+                    } label: {
+                        settingsNavigationRow(
+                            title: "Agent 与模型",
+                            subtitle: "4 个 Agent · \(agents.profiles.count) 个 Profile",
+                            showsConnectionDot: false
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    Divider().overlay(LinoTheme.line).padding(.leading, 14)
+                    Button { showingConnection = true } label: {
+                        settingsNavigationRow(
+                            title: "后端连接",
+                            subtitle: connectionSubtitle,
+                            showsConnectionDot: !session.token.isEmpty
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
-        .padding(.top, 8)
         .onAppear(perform: sync)
         .onChange(of: session.currentBook?.id) { _, _ in sync() }
         .sheet(isPresented: $showingShare) {
-            if let exportURL {
-                ActivityView(items: [exportURL])
-            }
+            if let exportURL { ActivityView(items: [exportURL]) }
         }
+        .sheet(isPresented: $showingConnection) {
+            LinoIConnectionSheet()
+                .presentationDetents([.height(360)])
+                .presentationCornerRadius(20)
+        }
+    }
+
+    private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LinoISectionLabel(title)
+                .padding(.horizontal, 6)
+            content()
+                .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(LinoTheme.line, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+
+    private func settingsTextEditor(label: String, text: Binding<String>, minHeight: CGFloat, font: Font) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LinoISectionLabel(label)
+            TextEditor(text: text)
+                .scrollContentBackground(.hidden)
+                .font(font)
+                .lineSpacing(label == "世界观设定" ? 11 : 2)
+                .foregroundStyle(LinoTheme.ink2)
+                .frame(minHeight: minHeight)
+        }
+        .padding(14)
+    }
+
+    private func settingsActionRow(_ title: String, detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(LinoType.ui(15))
+                    .foregroundStyle(LinoTheme.ink)
+                Spacer()
+                Text(detail)
+                    .font(LinoType.ui(12))
+                    .foregroundStyle(LinoTheme.faint)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LinoTheme.faint)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 52)
+        }
+        .buttonStyle(.plain)
+        .disabled(isExporting)
+    }
+
+    private func settingsNavigationRow(title: String, subtitle: String, showsConnectionDot: Bool) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(LinoType.ui(15))
+                    .foregroundStyle(LinoTheme.ink)
+                Text(subtitle)
+                    .font(LinoType.ui(11.5))
+                    .foregroundStyle(LinoTheme.muted)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if showsConnectionDot {
+                Circle().fill(LinoTheme.success).frame(width: 6, height: 6)
+            }
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(LinoTheme.faint)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 62)
+        .contentShape(Rectangle())
+    }
+
+    private var connectionSubtitle: String {
+        if session.baseURL.isEmpty { return "尚未配置" }
+        return "\(session.baseURL) · Token 已存 Keychain"
     }
 
     private func sync() {
@@ -265,13 +418,15 @@ struct LinoIBookSettingsPane: View {
         world = book.worldSetting
     }
 
-    private func exportBook() async {
-        await export(path: "export.txt", suffix: "")
+    private func saveBook() {
+        Task {
+            await workspace.saveBook(title: title, world: world)
+            if let book = session.currentBook { bookshelf.upsert(book) }
+        }
     }
 
-    private func exportMemories() async {
-        await export(path: "memories/export.txt", suffix: "·记忆")
-    }
+    private func exportBook() async { await export(path: "export.txt", suffix: "") }
+    private func exportMemories() async { await export(path: "memories/export.txt", suffix: "·记忆") }
 
     private func export(path: String, suffix: String) async {
         guard let book = session.currentBook else { return }

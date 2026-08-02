@@ -7,14 +7,14 @@ struct LinoIShelfView: View {
     @State private var showingConnection = false
 
     private let columns = [
-        GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 14, alignment: .top)
+        GridItem(.flexible(), spacing: 18, alignment: .top),
+        GridItem(.flexible(), spacing: 18, alignment: .top),
     ]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 26) {
                 header
-                connectionStrip
 
                 if bookshelf.books.isEmpty && !bookshelf.isLoading {
                     LinoIEmptyCard(
@@ -25,90 +25,90 @@ struct LinoIShelfView: View {
                         showingNewBook = true
                     }
                 } else {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 22) {
                         ForEach(bookshelf.books) { book in
                             LinoIBookCard(book: book) {
                                 Task { await bookshelf.open(book) }
                             }
                         }
+
                         Button {
                             showingNewBook = true
                         } label: {
-                            VStack(spacing: 10) {
+                            VStack(spacing: 9) {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 20, weight: .semibold))
+                                    .font(.system(size: 20, weight: .regular))
                                 Text("新建书")
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(LinoType.ui(13, .semibold))
                             }
+                            .foregroundStyle(LinoTheme.muted)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 178)
+                            .aspectRatio(3 / 4, contentMode: .fit)
                         }
                         .buttonStyle(LinoIDashedButtonStyle())
                     }
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, 34)
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 36)
         }
         .refreshable { await bookshelf.load() }
         .sheet(isPresented: $showingNewBook) {
             LinoINewBookSheet()
-                .presentationDetents([.height(220)])
+                .presentationDetents([.height(250)])
+                .presentationCornerRadius(20)
         }
         .sheet(isPresented: $showingConnection) {
             LinoIConnectionSheet()
-                .presentationDetents([.height(340)])
+                .presentationDetents([.height(360)])
+                .presentationCornerRadius(20)
         }
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 13) {
-            LinoIAvatar(name: "LinoI", size: 52, rounded: true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("LinoI")
-                    .font(LinoType.display)
-                    .foregroundStyle(LinoTheme.ink)
-                Text("单人小说写作工作台")
-                    .font(.subheadline)
-                    .foregroundStyle(LinoTheme.muted)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .bottom, spacing: 12) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("LINOI")
+                        .font(LinoType.ui(11.5, .medium))
+                        .tracking(1.6)
+                        .foregroundStyle(LinoTheme.muted)
+                    Text("书架")
+                        .font(LinoType.display)
+                        .foregroundStyle(LinoTheme.ink)
+                }
+                Spacer()
+                Button {
+                    showingConnection = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(session.token.isEmpty ? LinoTheme.warning : LinoTheme.success)
+                            .frame(width: 6, height: 6)
+                        Text(session.token.isEmpty ? "未连接" : "已连接")
+                            .font(LinoType.ui(13, .medium))
+                    }
+                    .foregroundStyle(LinoTheme.ink2)
+                    .padding(.horizontal, 13)
+                    .frame(height: 34)
+                    .background(LinoTheme.surface, in: Capsule())
+                    .overlay(Capsule().stroke(LinoTheme.line, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("打开后端连接设置")
             }
-            Spacer()
-            Button {
-                showingConnection = true
-            } label: {
-                Image(systemName: "server.rack")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.borderless)
-            .background(Color.white.opacity(0.68), in: Circle())
-            .overlay(Circle().stroke(LinoTheme.hairline, lineWidth: 0.5))
-            .foregroundStyle(LinoTheme.accentDeep)
+
+            Text(shelfSummary)
+                .font(LinoType.ui(12))
+                .foregroundStyle(LinoTheme.muted)
         }
     }
 
-    private var connectionStrip: some View {
-        HStack(spacing: 10) {
-            Image(systemName: session.token.isEmpty ? "lock.open.trianglebadge.exclamationmark" : "lock.shield")
-                .foregroundStyle(session.token.isEmpty ? LinoTheme.warning : LinoTheme.success)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.baseURL.isEmpty ? "后端未配置" : session.baseURL)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(LinoTheme.ink)
-                Text(session.token.isEmpty ? "需要 Bearer Token 才能读取项目" : "Bearer Token 已保存到 Keychain")
-                    .font(.caption)
-                    .foregroundStyle(LinoTheme.muted)
-            }
-            Spacer()
-            if bookshelf.isLoading {
-                ProgressView()
-                    .controlSize(.small)
-            }
-        }
-        .padding(13)
-        .linoGlass(cornerRadius: 18)
+    private var shelfSummary: String {
+        let chapters = bookshelf.books.reduce(0) { $0 + $1.chapterCount }
+        let latest = bookshelf.books.first?.updatedAt.linoShortDate ?? "暂无记录"
+        return "\(bookshelf.books.count) 本书 · \(chapters) 章 · 最近更新 \(latest)"
     }
 }
 
@@ -121,37 +121,22 @@ private struct LinoIBookCard: View {
 
     var body: some View {
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 12) {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(LinoTheme.coverGradient(book.id))
-                    .frame(height: 92)
-                    .overlay(alignment: .bottomLeading) {
-                        Text(String(book.title.prefix(2)))
-                            .font(.custom("Songti SC", size: 28).weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(14)
-                    }
+            VStack(alignment: .leading, spacing: 10) {
+                LinoIPaperBookCover(title: bookTitle, seed: book.id)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(book.title.isEmpty ? "未命名书籍" : book.title)
-                        .font(LinoType.cardTitle)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(bookTitle)
+                        .font(LinoType.serif(15, .semibold))
                         .foregroundStyle(LinoTheme.ink)
-                        .lineLimit(2)
-                    HStack(spacing: 8) {
-                        Label("\(book.chapterCount)", systemImage: "text.book.closed")
-                        Label("\(book.characterCount)", systemImage: "person.2")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(LinoTheme.muted)
-                    Text(book.updatedAt.linoShortDate)
-                        .font(.caption2)
-                        .foregroundStyle(LinoTheme.faint)
+                        .lineLimit(1)
+                    Text("\(book.chapterCount) 章 · \(book.characterCount) 人物 · \(book.updatedAt.linoShortDate)")
+                        .font(LinoType.caption)
+                        .foregroundStyle(LinoTheme.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 178, alignment: .topLeading)
-            .linoCard(cornerRadius: 18)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .buttonStyle(LinoICardButtonStyle())
         .contextMenu {
@@ -160,7 +145,7 @@ private struct LinoIBookCard: View {
             }
         }
         .confirmationDialog(
-            "删除《\(book.title.isEmpty ? "未命名书籍" : book.title)》？",
+            "删除《\(bookTitle)》？",
             isPresented: $confirmingDelete,
             titleVisibility: .visible
         ) {
@@ -171,6 +156,90 @@ private struct LinoIBookCard: View {
         } message: {
             Text("此操作不可撤销，书籍下所有章节、人物与记忆都会被删除。")
         }
+    }
+
+    private var bookTitle: String {
+        book.title.isEmpty ? "未命名书籍" : book.title
+    }
+}
+
+private struct LinoIPaperBookCover: View {
+    let title: String
+    let seed: String
+
+    var body: some View {
+        ZStack {
+            UnevenRoundedRectangle(
+                topLeadingRadius: 4,
+                bottomLeadingRadius: 4,
+                bottomTrailingRadius: 10,
+                topTrailingRadius: 10,
+                style: .continuous
+            )
+            .fill(LinoTheme.coverPaper(seed))
+
+            HStack(spacing: 0) {
+                LinoTheme.coverInk.opacity(0.06)
+                    .frame(width: 5)
+                Spacer(minLength: 0)
+            }
+
+            UnevenRoundedRectangle(
+                topLeadingRadius: 2,
+                bottomLeadingRadius: 2,
+                bottomTrailingRadius: 5,
+                topTrailingRadius: 5,
+                style: .continuous
+            )
+            .stroke(LinoTheme.coverInk.opacity(0.20), lineWidth: 1)
+            .padding(.top, 12)
+            .padding(.trailing, 12)
+            .padding(.bottom, 12)
+            .padding(.leading, 20)
+
+            VStack(spacing: 2) {
+                VStack(spacing: 1) {
+                    ForEach(Array(title.prefix(8).enumerated()), id: \.offset) { _, character in
+                        Text(String(character))
+                            .font(LinoType.serif(19, .semibold))
+                    }
+                }
+                .tracking(5)
+                .foregroundStyle(LinoTheme.coverInk)
+                .padding(.top, 23)
+
+                Spacer()
+
+                Text(mark)
+                    .font(LinoType.ui(9.5, .medium))
+                    .tracking(2.4)
+                    .foregroundStyle(LinoTheme.coverInk.opacity(0.55))
+                    .padding(.bottom, 21)
+            }
+        }
+        .aspectRatio(3 / 4, contentMode: .fit)
+        .overlay(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 4,
+                bottomLeadingRadius: 4,
+                bottomTrailingRadius: 10,
+                topTrailingRadius: 10,
+                style: .continuous
+            )
+            .stroke(LinoTheme.coverInk.opacity(0.05), lineWidth: 1)
+        )
+    }
+
+    private var mark: String {
+        let transformed = title
+            .applyingTransform(.toLatin, reverse: false)?
+            .applyingTransform(.stripCombiningMarks, reverse: false) ?? title
+        let letters = transformed
+            .split(whereSeparator: { !$0.isLetter })
+            .compactMap(\.first)
+            .prefix(4)
+        let result = String(letters).uppercased()
+        return result.isEmpty ? "LINOI" : result
     }
 }
 
@@ -184,7 +253,7 @@ private struct LinoINewBookSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 LinoITextField("书名", text: $title)
                 Text("世界观设定进入书籍后再填写，方便先把项目建起来。")
-                    .font(.footnote)
+                    .font(LinoType.ui(12))
                     .foregroundStyle(LinoTheme.muted)
                 Spacer()
                 Button("创建") {
@@ -202,9 +271,10 @@ private struct LinoINewBookSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .foregroundStyle(LinoTheme.accent)
                 }
             }
-            .background(LinoTheme.background.ignoresSafeArea())
+            .background(LinoTheme.bg.ignoresSafeArea())
         }
     }
 }

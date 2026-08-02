@@ -8,7 +8,7 @@ struct LinoISectionLabel: View {
     init(_ text: String) { self.text = text }
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .bold))
+            .font(LinoType.sectionLabel)
             .tracking(1.2)
             .foregroundStyle(LinoTheme.faint)
     }
@@ -134,11 +134,11 @@ struct LinoIGenerationStatusPanel: View {
                 }
             }
         }
-        .padding(12)
-        .background(Color.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(14)
+        .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(LinoTheme.hairline, lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(LinoTheme.line, lineWidth: 1)
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel("生成进度，\(statusHeadline)，\(state.saveState.label)")
@@ -294,16 +294,16 @@ struct LinoIAvatar: View {
     var body: some View {
         Group {
             if rounded {
-                RoundedRectangle(cornerRadius: size * 0.24, style: .continuous).fill(LinoTheme.logoGradient)
+                RoundedRectangle(cornerRadius: size * 0.24, style: .continuous).fill(LinoTheme.surface2)
             } else {
-                Circle().fill(LinoTheme.logoGradient)
+                Circle().fill(LinoTheme.surface2)
             }
         }
         .frame(width: size, height: size)
         .overlay(
             Text(String(name.prefix(1)).uppercased())
                 .font(.custom("Songti SC", size: size * 0.42).weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(LinoTheme.coverInk)
         )
     }
 }
@@ -320,11 +320,12 @@ struct LinoITextField: View {
     var body: some View {
         TextField(placeholder, text: $text)
             .textFieldStyle(.plain)
-            .foregroundStyle(LinoTheme.body)
+            .font(LinoType.control)
+            .foregroundStyle(LinoTheme.ink2)
             .padding(.horizontal, 12)
             .frame(minHeight: 42)
-            .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.hairline, lineWidth: 0.5))
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.line2, lineWidth: 1))
     }
 }
 
@@ -344,11 +345,12 @@ struct LinoISecureField: View {
             .textInputAutocapitalization(.never)
             #endif
             .autocorrectionDisabled()
-            .foregroundStyle(LinoTheme.body)
+            .font(LinoType.control)
+            .foregroundStyle(LinoTheme.ink2)
             .padding(.horizontal, 12)
             .frame(minHeight: 42)
-            .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.hairline, lineWidth: 0.5))
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.line2, lineWidth: 1))
     }
 }
 
@@ -367,11 +369,12 @@ struct LinoINumberField: View {
             .keyboardType(.numberPad)
             #endif
             .textFieldStyle(.plain)
-            .foregroundStyle(LinoTheme.body)
+            .font(LinoType.control)
+            .foregroundStyle(LinoTheme.ink2)
             .padding(.horizontal, 12)
             .frame(minHeight: 42)
-            .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.hairline, lineWidth: 0.5))
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.line2, lineWidth: 1))
     }
 }
 
@@ -388,21 +391,21 @@ struct LinoIEditor: View {
                 TextEditor(text: $text)
                     .frame(minHeight: minHeight)
                     .scrollContentBackground(.hidden)
-                    .font(.system(size: 15))
-                    .lineSpacing(4)
-                    .foregroundStyle(LinoTheme.body)
+                    .font(LinoType.serif(14.5))
+                    .lineSpacing(12)
+                    .foregroundStyle(LinoTheme.ink2)
                     .padding(10)
                 if text.isEmpty && !placeholder.isEmpty {
                     Text(placeholder)
-                        .font(.system(size: 15))
+                        .font(LinoType.serif(14.5))
                         .foregroundStyle(LinoTheme.faint)
                         .padding(.horizontal, 15)
                         .padding(.top, 17)
                         .allowsHitTesting(false)
                 }
             }
-            .background(Color.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(LinoTheme.hairline, lineWidth: 0.5))
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(LinoTheme.line, lineWidth: 1))
         }
     }
 }
@@ -421,9 +424,9 @@ struct LinoIDraftPreview: View {
             } else {
                 ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
                     Text(paragraph)
-                        .font(.custom("Songti SC", size: 16))
-                        .foregroundStyle(LinoTheme.ink)
-                        .lineSpacing(14)
+                        .font(LinoType.bodyText)
+                        .foregroundStyle(LinoTheme.ink2)
+                        .lineSpacing(15)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.bottom, 16)
                 }
@@ -480,21 +483,27 @@ struct LinoIEmptyCard: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 44)
         .padding(.horizontal, 24)
-        .linoCard()
+        .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5]))
+                .foregroundStyle(LinoTheme.line2)
+        )
     }
 }
 
 struct LinoIPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     var compact = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 13 : 14, weight: .semibold))
-            .foregroundStyle(.white)
+            .font(LinoType.ui(compact ? 13 : 15, .semibold))
+            .foregroundStyle(LinoTheme.accentText)
             .padding(.horizontal, compact ? 14 : 18)
-            .frame(minHeight: compact ? LinoControlMetrics.compactHeight : 44)
+            .frame(minHeight: compact ? 36 : 48)
             .frame(maxWidth: compact ? nil : .infinity)
-            .background(LinoTheme.accentGradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: LinoTheme.accent.opacity(configuration.isPressed ? 0.12 : 0.24), radius: 10, y: 6)
+            .background(isEnabled ? LinoTheme.accent : LinoTheme.bg2, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .foregroundStyle(isEnabled ? LinoTheme.accentText : LinoTheme.muted)
             .opacity(configuration.isPressed ? 0.86 : 1)
     }
 }
@@ -504,14 +513,14 @@ struct LinoISuccessButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white)
+            .font(LinoType.ui(15, .semibold))
+            .foregroundStyle(LinoTheme.accentText)
             .padding(.horizontal, 18)
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 44)
-            .background(LinoTheme.successGradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .saturation(isEnabled ? 1 : 0)
-            .opacity(isEnabled ? (configuration.isPressed ? 0.86 : 1) : 0.42)
+            .frame(minHeight: 48)
+            .background(isEnabled ? LinoTheme.success : LinoTheme.bg2, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .foregroundStyle(isEnabled ? LinoTheme.accentText : LinoTheme.muted)
+            .opacity(configuration.isPressed ? 0.86 : 1)
     }
 }
 
@@ -519,12 +528,12 @@ struct LinoITintButtonStyle: ButtonStyle {
     var compact = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 13 : 14, weight: .semibold))
-            .foregroundStyle(LinoTheme.accentDeep)
+            .font(LinoType.ui(compact ? 13 : 14, .semibold))
+            .foregroundStyle(LinoTheme.ink)
             .padding(.horizontal, compact ? 12 : 16)
             .frame(minHeight: compact ? LinoControlMetrics.compactHeight : LinoControlMetrics.regularHeight)
-            .background(LinoTheme.accentSoft.opacity(configuration.isPressed ? 0.70 : 0.96), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.accent.opacity(0.18), lineWidth: 0.5))
+            .background(configuration.isPressed ? LinoTheme.surface2 : LinoTheme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.line2, lineWidth: 1))
     }
 }
 
@@ -532,24 +541,24 @@ struct LinoIDangerButtonStyle: ButtonStyle {
     var compact = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 13 : 14, weight: .semibold))
+            .font(LinoType.ui(compact ? 13 : 14, .semibold))
             .foregroundStyle(LinoTheme.danger)
             .padding(.horizontal, compact ? 12 : 16)
             .frame(minHeight: compact ? LinoControlMetrics.compactHeight : LinoControlMetrics.regularHeight)
-            .background(LinoTheme.danger.opacity(configuration.isPressed ? 0.18 : 0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.danger.opacity(0.24), lineWidth: 0.5))
+            .background(configuration.isPressed ? LinoTheme.danger.opacity(0.12) : LinoTheme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoTheme.danger.opacity(0.42), lineWidth: 1))
     }
 }
 
 struct LinoIDashedButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(LinoTheme.accentDeep)
-            .background(LinoTheme.accentSoft.opacity(configuration.isPressed ? 0.48 : 0.28), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .foregroundStyle(LinoTheme.muted)
+            .background(configuration.isPressed ? LinoTheme.surface2 : Color.clear, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 0.7, dash: [4]))
-                    .foregroundStyle(LinoTheme.accent.opacity(0.36))
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5]))
+                    .foregroundStyle(LinoTheme.line2)
             )
     }
 }
@@ -598,9 +607,9 @@ struct LinoSegmentedCore<Option: Hashable>: View {
                         .frame(height: LinoControlMetrics.segmentedHeight)
                         .background {
                             if isSelected {
-                                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    .fill(Color.white)
-                                    .shadow(color: LinoTheme.hex(0x143052, opacity: 0.14), radius: 6, y: 2)
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(LinoTheme.surface)
+                                    .shadow(color: LinoTheme.hex(0x17181C, opacity: 0.06), radius: 2, y: 1)
                                     .matchedGeometryEffect(id: "selection", in: namespace)
                             }
                         }
@@ -618,10 +627,10 @@ struct LinoSegmentedCore<Option: Hashable>: View {
             }
         }
         .padding(3)
-        .background(LinoTheme.hairline, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .background(LinoTheme.bg2, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(LinoTheme.hairline, lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(LinoTheme.line, lineWidth: 1)
         )
         .linoAnimation(LinoMotion.selection, value: selection)
     }
@@ -636,8 +645,8 @@ struct LinoSegmentedCore<Option: Hashable>: View {
 struct LinoICardButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .shadow(color: LinoTheme.hex(0x143052, opacity: 0.10), radius: 18, y: 10)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .shadow(color: LinoTheme.hex(0x17181C, opacity: 0.04), radius: 2, y: 1)
+            .scaleEffect(configuration.isPressed ? 0.975 : 1)
             .linoAnimation(LinoMotion.press, value: configuration.isPressed)
     }
 }
