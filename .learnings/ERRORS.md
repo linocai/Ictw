@@ -38,6 +38,68 @@ expected extract phase done, got failed
 
 ---
 
+## [ERR-20260802-025] Backend preflight used a placeholder checksum
+
+**Logged**: 2026-08-02T14:57:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The first clean-package target preflight hardcoded a placeholder SHA-256 instead of the checksum emitted by the preceding local archive command.
+
+### Error
+`sha256sum: WARNING: 1 computed checksum did NOT match`
+
+### Context
+- The clean archive uploaded successfully.
+- The checksum gate failed before offline extraction and before any production stop or mutation.
+
+### Suggested Fix
+Use the actual locally emitted digest `8f7cb730e2b81aab60c78eb884be11f26057ad4afe4b0d2f717cef6291ad2a9a` in the target preflight, and keep packaging and deployment as separately inspected steps.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `/Users/linotsai/Lino/hk_info.md`
+
+### Resolution
+- **Resolved**: 2026-08-02T14:57:00+08:00
+- **Notes**: Re-ran the offline package preflight with the emitted digest; production remained untouched during the failed check.
+
+---
+
+## [ERR-20260802-024] macOS tar added AppleDouble Python files to backend release
+
+**Logged**: 2026-08-02T14:55:54+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A backend archive created with macOS `tar` preserved extended attributes as `._*.py` AppleDouble files; GNU tar materialized them on Linux and Alembic tried to import them as migration modules.
+
+### Error
+`SyntaxError: source code string cannot contain null bytes`
+
+### Context
+- Production was stopped only after a verified backup and zero-active-job check.
+- `alembic upgrade head` failed before applying any migration.
+- The deployment trap restored the v1.6.4 code/database and restarted a healthy service.
+- Offline extraction confirmed only `._*.py` metadata files contained null bytes; real Python source hashes were unchanged.
+
+### Suggested Fix
+Build tracked backend deployment artifacts with `git archive HEAD:Backend`, then extract offline on the target and require zero `._*` files plus successful `compileall` and `alembic heads` before stopping production.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `Backend/alembic/versions`, `/Users/linotsai/Lino/hk_info.md`
+
+### Resolution
+- **Resolved**: 2026-08-02T14:55:54+08:00
+- **Notes**: Switched the v1.6.5 backend package to `git archive` and added target-side preflight compilation before retrying deployment.
+
+---
+
 ## [ERR-20260802-023] Parallel Xcode builds shared one DerivedData database
 
 **Logged**: 2026-08-02T14:50:00+08:00
