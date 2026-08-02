@@ -7,9 +7,9 @@
 - SwiftUI iOS（`LinoI`）/macOS（`LinoIMac`）客户端，FastAPI + SQLAlchemy + Alembic + SQLite 后端；产品历史标识 `LinoI` 与 Bundle/Keychain/草稿目录兼容标识不改。
 - `v1.5.0(14)` 于 2026-07-28 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 当前工作树有用户未提交的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 改动；v1.6 施工不得覆盖、回滚或纳入无关提交。
-- `v1.6.4(19)` 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 未打包或安装。`v1.6.5(20)` 已完成 Backend 部署和 macOS 正式 App 换装，待 tag 与 GitHub Release。
+- `v1.6.4(19)` 与 `v1.6.5(20)` 均已完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；iOS 未打包或安装。
 
-## 当前版本：v1.6.5(20) 输入法与草稿保存快修（已部署，待发布，iOS 不发包）
+## 当前版本：v1.6.5(20) 输入法与草稿保存快修（已发布，iOS 未发包）
 
 ### 版本目标
 
@@ -86,6 +86,8 @@
 
 **2026-08-02 v1.6.5 生产部署与 macOS 换装完成**：首次部署包因 macOS 扩展属性生成 `._*.py` AppleDouble 文件，被 Alembic 门禁在执行迁移前拒绝；保护脚本立即恢复 v1.6.4 代码／数据库并确认服务健康，失败尝试备份为 `/opt/linoi/backups/20260802-145428`。改用 `git archive` 纯跟踪文件包并在目标机离线通过零 AppleDouble、全量 Python 编译和 Alembic heads 后重新停服，成功备份位于 `/opt/linoi/backups/20260802-145655`。本补丁无新 migration，部署后内外网健康均为 `1.6.5`，数据库 integrity／foreign keys 正常，大小保持 2,170,880 B，实体数量保持 `2 books / 60 chapters / 21 characters / 221 chapter links / 220 character events / 4 personas / 4 bindings`，零活动任务、`NRestarts=0`、零错误标记。本机正式 App 已验签、换装并运行 `1.6.5(20)`，旧版备份位于 `/tmp/ictw-app-backup-v165.K1I3lD/ICTW-v1.6.4-build19.app`；iOS 未打包或安装，下一步只剩 tag、推送和 GitHub Release。
 
+**2026-08-02 v1.6.5 发布完成**：实现提交 `8b00d36`、生产落账提交 `eb358b1`；annotated tag `v1.6.5` 指向 `eb358b1` 并已推送。GitHub Release `ICTW / LinoI v1.6.5` 已发布，资产 `ICTW-1.6.5.zip` 为 3,148,623 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.5>。iOS 未打包或安装，由用户自行处理。
+
 ## 验收基线
 
 - 迁移前备份生产库；迁移后 `integrity_check`、`foreign_key_check`、`alembic heads` 全通过。任何生产 schema 改动只走 `alembic upgrade head`。
@@ -111,4 +113,4 @@
 - `v1.6.2(17)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.3(18)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.4(19)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
-- `v1.6.5(20)`：已部署，待 tag／Release，iOS 不发包；记录见 `archive/v1.6.0施工plan.md`。
+- `v1.6.5(20)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
