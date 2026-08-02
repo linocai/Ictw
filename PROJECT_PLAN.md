@@ -5,7 +5,7 @@
 ## 当前状态
 
 - 已发布基线：`v1.7.0(21)`（2026-08-02）；本版仅发布 iOS「纸与墨」原生 SwiftUI 视觉体系与全新 App Icon，Backend、Alembic 与 macOS App 维持 `v1.6.5(20)`，Alembic head 仍为 `20260801_0008`。
-- 当前状态：v1.7.0 阶段 0–5 全部完成；LinoI target 已升至 `1.7.0(21)`，正式 iOS Archive、tag 与 GitHub Release 均已完成，无进行中的版本施工。
+- 当前状态：v1.7.0 阶段 0–5 全部完成；LinoI target 已升至 `1.7.0(21)`，正式 iOS Archive、本机开发签名 IPA、tag 与 GitHub Release 均已完成，无进行中的版本施工。
 - 设计事实源：[`README.md`](design_handoff_ios_visual_upgrade/README.md) §3–§9 为尺寸与状态规格；[`02 视觉升级 · 可点原型.dc.html`](design_handoff_ios_visual_upgrade/02%20视觉升级%20·%20可点原型.dc.html) 仅用于阅读结构和交互；`screenshots/` 是逐屏验收基准。
 - 截图均为 iPhone 17 Pro `402×874 pt` 的 `804×1748 px @2x`。`05-Agent与模型.png`=`06-Agent详情.png`、`14-空态.png`=`01-书架.png`（SHA-256 相同）；这两项以 README §6.2／§6.5 和可点原型的对应状态为准，不把重复图片当作基准。
 - 工作树已有用户改动：`.learnings/ERRORS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`；以及未跟踪的 `design_handoff_ios_visual_upgrade/`。施工不得改动、暂存、覆盖或回滚它们。
@@ -18,7 +18,7 @@
 - 阶段 3：章节编辑器已改为宽松表单、四步流程、真实失败原因、人物豁免、留痕抽屉、Extractor 与吸底栏；阅读器已完成独立三主题、三字号、轻触 chrome 与原生 `Aa` 浮层。
 - 已通过 `Tests/run_client_state_tests.sh`、iOS Debug build、macOS Debug build 与 `git diff --check`；源码审计未发现 iOS WebView／HTML 移植、旧渐变调用或非阅读 Material。
 - 阶段 4：使用仅位于 `/tmp` 的本地数据库与临时 UI 测试工程，在标准 iPhone 17 Pro Simulator 完成两轮全链路交互；浅色覆盖书架、稿件、人物、人物详情、编辑器输入／流程、失败＋人物豁免、写作上下文、Checker 证据、Extractor、阅读／Aa、设定、Agent 列表／详情，暗色覆盖同一主链。两轮测试均为 `0 failures`，截图逐屏对照交接稿后未发现遮挡、溢出或低于 90% 门槛的结构性偏差；原生字体渲染与测试文案差异计入约定容差。
-- 阶段 5：**LinoI target** 已升至 `1.7.0(21)`；新 App Icon 已进入正式资源，iOS Release Archive 完成开发签名与包内版本校验，随后发布 `v1.7.0` tag 与 GitHub Release。Backend、Alembic 与 macOS 未部署、迁移或换装。
+- 阶段 5：**LinoI target** 已升至 `1.7.0(21)`；新 App Icon 已进入正式资源，iOS Release Archive 完成开发签名、包内版本校验并导出本机 IPA，随后发布 `v1.7.0` tag 与 GitHub Release。Backend、Alembic 与 macOS 未部署、迁移或换装。
 
 ## 目标、边界与不变量
 
@@ -74,7 +74,7 @@
 | 2. 工作台与导航 | `ShelfViews.swift` → `WorkspaceViews.swift` → `CharactersViews.swift` → `SettingsViews.swift`。先书架和三段 TabView，再章节／人物／设定，最后 Agent 列表／详情及复用连接 sheet。 | 原四 tab 中 Agent 完整迁至设定二级页；所有建书、建章、人物、导出、连接、Agent／Profile 操作仍可达。 |
 | 3. 写作与阅读 | `ChapterEditorViews.swift`：顶栏、宽松表单、流程／失败、留痕、Extractor、吸底栏；`ReadingViews.swift`：独立主题、chrome 轻触、Aa 浮层、阅读比例。 | 真实 Store 驱动的加载、恢复、生成／取消／失败／豁免、checker、归档和翻章均只改外观。 |
 | 4. 逐屏收口 | 只回改上述 iOS 视觉文件；逐屏捕获、对照和修正 token、基线、间距、长文／长标题、暗色及减少动态效果。 | 16 项视觉矩阵全过，自动与手动回归全过，工作树只含允许文件。 |
-| 5. 发版（已完成） | 仅 iOS target 版本号升至 `1.7.0(21)`，生成正式 Archive，提交并发布 tag／GitHub Release。 | Release Archive、签名、包内版本、双端编译与客户端状态测试通过；Backend、Alembic、macOS 均无发布动作。 |
+| 5. 发版（已完成） | 仅 iOS target 版本号升至 `1.7.0(21)`，生成正式 Archive 与本机开发签名 IPA，提交并发布 tag／GitHub Release。 | Release Archive、IPA 导出、签名、包内版本、双端编译与客户端状态测试通过；Backend、Alembic、macOS 均无发布动作。 |
 
 ## 验收与回归门禁
 
@@ -115,5 +115,5 @@ git diff --check
 ## 里程碑与 Backlog
 
 - `v1.5.0(14)`、`v1.6.0(15)` 至 `v1.6.5(20)`：均已发布；完整部署、发布和 iOS 未发包记录见 [`archive/v1.6.0施工plan.md`](archive/v1.6.0施工plan.md)。
-- `v1.7.0(21)`：iOS 视觉施工、全状态逐屏验收、全新 App Icon、正式 Archive、tag 与 GitHub Release 已完成；Backend 与 macOS 不在本版升级范围。
+- `v1.7.0(21)`：iOS 视觉施工、全状态逐屏验收、全新 App Icon、正式 Archive、本机开发签名 IPA、tag 与 GitHub Release 已完成；Backend 与 macOS 不在本版升级范围。
 - 宁波云迁移、阅读器功能增强和 v1.6 记忆参数评估继续保留为非本版本 Backlog；云迁移仍受既有 ICP／DNS／停服门禁约束。
