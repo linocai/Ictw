@@ -1021,17 +1021,3 @@ Inspect state-machine branches first and apply model, store, and view edits as s
 - **Notes**: Split the patch by layer, applied each hunk successfully, and passed focused Backend and client-state regression tests.
 
 ---
-## [ERR-20260802-026] Final verification used a stale health-check hostname
-
-**Logged**: 2026-08-02T15:05:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: infra
-
-### Summary
-The final aggregate verification stopped at `https://api.ictw.cn/health`, which is not the production health endpoint recorded for this project.
-
-### Resolution
-Used the authoritative endpoint from `hk_info.md`, `https://linoi.neluvee.top/api/v1/health`, and reran the remaining App checks separately.
-
----
