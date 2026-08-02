@@ -1,5 +1,26 @@
 # Errors
 
+## [ERR-20260802-026] Final verification used a stale unauthenticated health request
+
+**Logged**: 2026-08-02T15:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+The final aggregate verification first used a stale hostname, then called the correct protected production endpoint without its required bearer token and received HTTP 401.
+
+### Suggested Fix
+
+Use the health-check procedure in `hk_info.md`: connect to the server, load the protected environment there, and call the loopback endpoint without printing the token.
+
+### Resolution
+
+Reran the check through the documented authenticated server-side command, then completed the App and repository checks separately.
+
+---
+
 ## [ERR-20260801-017] Checker override test depended on another test's global character ID
 
 **Logged**: 2026-08-01T12:55:00+08:00
@@ -998,5 +1019,19 @@ Inspect state-machine branches first and apply model, store, and view edits as s
 ### Resolution
 - **Resolved**: 2026-08-02T09:52:29+08:00
 - **Notes**: Split the patch by layer, applied each hunk successfully, and passed focused Backend and client-state regression tests.
+
+---
+## [ERR-20260802-026] Final verification used a stale health-check hostname
+
+**Logged**: 2026-08-02T15:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The final aggregate verification stopped at `https://api.ictw.cn/health`, which is not the production health endpoint recorded for this project.
+
+### Resolution
+Used the authoritative endpoint from `hk_info.md`, `https://linoi.neluvee.top/api/v1/health`, and reran the remaining App checks separately.
 
 ---
