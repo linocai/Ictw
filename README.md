@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 [`1.7.0(21)`](https://github.com/linocai/Ictw/releases/tag/v1.7.0)；本版发布 iOS 原生「纸与墨」视觉体系与全新 App Icon，Backend、Alembic 与 macOS App 维持 `1.6.5(20)`。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 [`1.7.0(22)`](https://github.com/linocai/Ictw/releases/tag/v1.7.0-build22)；Build 22 修复 iOS 书架“新建书”卡片在换行时被压缩的问题，Backend、Alembic 与 macOS App 维持 `1.6.5(20)`。写作流程为：
 
 ```text
 Memory Selector → Writer → Checker → 用户接受 → Extractor

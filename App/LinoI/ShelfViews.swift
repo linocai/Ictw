@@ -42,10 +42,15 @@ struct LinoIShelfView: View {
                                     .font(LinoType.ui(13, .semibold))
                             }
                             .foregroundStyle(LinoTheme.muted)
-                            .frame(maxWidth: .infinity)
-                            .aspectRatio(3 / 4, contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(LinoIDashedButtonStyle())
+                        // The ratio belongs to the grid item, not its intrinsic-size label.
+                        // Otherwise Button may measure only the icon/text and collapse the tile.
+                        .aspectRatio(3 / 4, contentMode: .fit)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .accessibilityLabel("新建书")
                     }
                 }
             }

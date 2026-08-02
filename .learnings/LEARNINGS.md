@@ -1,5 +1,37 @@
 # Learnings
 
+## [LRN-20260802-004] correction
+
+**Logged**: 2026-08-02T17:34:56+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+
+SwiftUI 网格中的固定比例操作卡必须把稳定尺寸约束施加在整个网格项上，不能只给 Button 的固有尺寸 label 设置比例。
+
+### Details
+
+v1.7.0 书架的“新建书”按钮把 `aspectRatio(3 / 4)` 放在按钮 label 内。`LazyVGrid` 测量 Button 时，label 以加号和短文案的固有尺寸参与布局，导致虚线卡片缩成窄胶囊，没有占满两列网格中的一个完整书封宽度。此前构建和流程型 UI 测试均通过，但未在“恰好两本书、第三项为新建卡”的真实网格换行状态检查几何尺寸。
+
+### Suggested Action
+
+把比例与 `maxWidth` 约束放到 Button／网格项本身，label 只负责在可用空间内居中；视觉回归必须覆盖 0、1、2、3 本书，尤其检查操作卡换行后的宽高比与可点击区域。
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: App/LinoI/ShelfViews.swift
+- Tags: swiftui, lazyvgrid, button, intrinsic-size, visual-regression
+
+### Resolution
+
+- **Resolved**: 2026-08-02T17:38:41+08:00
+- **Notes**: 将 3:4 比例和整列宽度约束移到 Button 网格项；iPhone 17 Pro 截图确认新建卡恢复完整书封尺寸，1／2／3 本书场景均通过临时 UI 回归，断言宽度、高度、0.75 比例和点击打开 sheet 全部通过。0 本书继续使用独立空态卡，不经过本次网格分支。
+
+---
+
 ## [LRN-20260802-003] correction
 
 **Logged**: 2026-08-02T09:41:25+08:00

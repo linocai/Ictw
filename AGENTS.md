@@ -49,6 +49,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
+- `v1.7.0(22)` 已于 2026-08-02 修复 iOS 书架“新建书”卡片在网格换行时被压缩的问题，完成独立 Review、正式 Archive、本机开发签名 IPA、`v1.7.0-build22` tag 与 GitHub Release；市场版本仍为 `1.7.0`，Backend、Alembic 与 macOS App 未变更；未上传 App Store Connect 或安装设备。
 - `v1.7.0(21)` 已于 2026-08-02 完成 iOS「纸与墨」原生视觉升级、全新 App Icon、正式 Archive、本机开发签名 IPA、tag 与 GitHub Release；Backend、Alembic 与 macOS App 未变更，仍维持 `v1.6.5(20)`；未上传 App Store Connect 或安装设备。
 - `v1.6.5(20)` 已于 2026-08-02 完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；无新 migration，Alembic 保持 `20260801_0008`；iOS 未打包或安装。
 - `v1.6.4(19)` 已于 2026-08-02 完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；无新 migration，Alembic 保持 `20260801_0008`；iOS 未打包或安装。
