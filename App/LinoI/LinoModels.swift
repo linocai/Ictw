@@ -707,6 +707,7 @@ enum ChapterRecoveryAction: Equatable, Sendable {
 /// server accepted it.
 enum ChapterSaveState: Equatable, Sendable {
     case synced
+    case unsaved
     case savingLocally
     case localDraft
     case localSaveFailed(message: String)
@@ -717,6 +718,7 @@ enum ChapterSaveState: Equatable, Sendable {
     var label: String {
         switch self {
         case .synced: return "已与服务器同步"
+        case .unsaved: return "更改尚未保存"
         case .savingLocally: return "正在保存到本机"
         case .localDraft: return "已保存到本机，尚未同步"
         case .localSaveFailed: return "本机草稿保存失败"
@@ -742,6 +744,22 @@ enum ChapterSaveState: Equatable, Sendable {
 
     var needsRetry: Bool {
         failureMessage != nil
+    }
+}
+
+/// Text changes stay in memory so SwiftUI/IME composition never competes with
+/// synchronous JSON encoding and atomic disk writes. Only transition points
+/// flush an unsaved snapshot to the local recovery cache.
+enum ChapterLocalDraftPersistencePolicy {
+    static func needsPersistence(_ state: ChapterSaveState) -> Bool {
+        switch state {
+        case .unsaved, .localSaveFailed:
+            return true
+        case .remoteSaveFailed(_, let localDraftPreserved):
+            return !localDraftPreserved
+        case .synced, .savingLocally, .localDraft, .restoredLocalDraft, .savingRemotely:
+            return false
+        }
     }
 }
 

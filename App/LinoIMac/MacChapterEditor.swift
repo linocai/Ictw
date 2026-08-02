@@ -53,6 +53,11 @@ struct MacChapterEditor: View {
             Button("确认忽略并接受", role: .destructive) { accept(overrideChecker: true) }
             Button("取消", role: .cancel) {}
         } message: { Text("这会保留当前正文，并以你的明确决定继续提取归档。") }
+        .onChange(of: draftMode) { old, new in
+            if old == .edit, new == .preview {
+                editor.persistLocalDraftIfNeeded()
+            }
+        }
     }
 
     // MARK: - Empty

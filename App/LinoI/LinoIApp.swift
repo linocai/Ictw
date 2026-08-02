@@ -74,8 +74,13 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
+            switch phase {
+            case .active:
                 chapterEditorStore.handleScenePhaseActive()
+            case .inactive, .background:
+                chapterEditorStore.persistLocalDraftIfNeeded()
+            @unknown default:
+                chapterEditorStore.persistLocalDraftIfNeeded()
             }
         }
     }

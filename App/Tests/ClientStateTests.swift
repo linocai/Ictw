@@ -339,6 +339,27 @@ private func testFailedRegenerationKeepsVisibleDraftActions() throws {
     )
 }
 
+private func testLocalDraftPersistsOnlyAtTransitionBoundaries() throws {
+    try expect(
+        ChapterLocalDraftPersistencePolicy.needsPersistence(.unsaved),
+        "an in-memory edit must be flushed at the next transition boundary"
+    )
+    try expect(
+        !ChapterLocalDraftPersistencePolicy.needsPersistence(.synced),
+        "server-synced content must not cause another local disk write"
+    )
+    try expect(
+        !ChapterLocalDraftPersistencePolicy.needsPersistence(.localDraft),
+        "duplicate lifecycle events must not rewrite an already persisted local draft"
+    )
+    try expect(
+        ChapterLocalDraftPersistencePolicy.needsPersistence(
+            .remoteSaveFailed(message: "failed", localDraftPreserved: false)
+        ),
+        "a failed remote save without a local snapshot must retry local persistence"
+    )
+}
+
 @main
 private struct ClientStateTestRunner {
     static func main() throws {
@@ -354,6 +375,7 @@ private struct ClientStateTestRunner {
         try testDraftReadyDoesNotPretendCheckerPassed()
         try testLateRefreshCannotOverwriteLocalCharacterEdit()
         try testFailedRegenerationKeepsVisibleDraftActions()
+        try testLocalDraftPersistsOnlyAtTransitionBoundaries()
         print("Client state tests passed")
     }
 }

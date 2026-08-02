@@ -53,6 +53,12 @@ struct MacWorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await editor.refreshActiveJobIfNeeded() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
+            editor.persistLocalDraftIfNeeded()
+        }
+        .onDisappear {
+            editor.persistLocalDraftIfNeeded()
+        }
         .onChange(of: commandBus.showNewChapter) { _, trigger in
             guard trigger else { return }
             commandBus.showNewChapter = false

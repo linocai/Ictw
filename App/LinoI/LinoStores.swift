@@ -330,7 +330,6 @@ final class ChapterEditorStore: ObservableObject {
 
     private let session: AppSession
     private let cache = ChapterDraftCache()
-    private var cacheTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private var pollingChapterId: String?
     private var pollingErrorNotified = false
@@ -356,6 +355,7 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     func load(_ summary: ChapterSummary) async {
+        guard persistLocalDraftIfNeeded() else { return }
         isLoading = true
         restoredLocalDraft = false
         pollingConnectionInterrupted = false
@@ -412,7 +412,9 @@ final class ChapterEditorStore: ObservableObject {
             markCheckerStale()
         }
         clearTaskOutcome(chapterID: chapter.id)
-        scheduleCacheSave()
+        if saveState != .unsaved {
+            saveState = .unsaved
+        }
     }
 
     func setCharacterLinks(_ links: [ChapterLink]) {
@@ -423,12 +425,28 @@ final class ChapterEditorStore: ObservableObject {
         localEditRevision &+= 1
         markCheckerStale()
         clearTaskOutcome(chapterID: chapter.id)
-        scheduleCacheSave()
+        if saveState != .unsaved {
+            saveState = .unsaved
+        }
+    }
+
+    /// Flushes the in-memory chapter only at an explicit lifecycle or
+    /// navigation boundary. This is synchronous on purpose: once this method
+    /// returns, a transition may safely replace or suspend the editor.
+    @discardableResult
+    func persistLocalDraftIfNeeded() -> Bool {
+        guard let chapter = currentChapter else { return true }
+        guard ChapterLocalDraftPersistencePolicy.needsPersistence(saveState) else { return true }
+        saveState = .savingLocally
+        let saved = cache.saveDirty(chapter)
+        saveState = saved
+            ? .localDraft
+            : .localSaveFailed(message: "无法写入本机草稿缓存，请立即复制正文后重试。")
+        return saved
     }
 
     func save() async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
-        cacheTask?.cancel()
         // Persist the exact outgoing snapshot before the network request. If
         // PATCH fails, the UI can truthfully promise the local draft survived.
         let localSnapshotSaved = cache.saveDirty(chapter)
@@ -546,8 +564,11 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     private func markCheckerStale() {
-        checkerAppliesToVisibleDraft = false
+        if checkerAppliesToVisibleDraft {
+            checkerAppliesToVisibleDraft = false
+        }
         guard var result = checkerResult else { return }
+        guard result.status != "stale" || result.verdict != nil else { return }
         result.status = "stale"
         result.verdict = nil
         checkerResult = result
@@ -619,7 +640,6 @@ final class ChapterEditorStore: ObservableObject {
         guard let chapter = currentChapter else { return false }
         let deletingId = chapter.id
         stopPolling(for: deletingId)
-        cacheTask?.cancel()
         do {
             try await session.api.rawRequest("/chapters/\(deletingId)", method: "DELETE")
             cache.remove(chapterId: deletingId)
@@ -1067,7 +1087,7 @@ final class ChapterEditorStore: ObservableObject {
         switch saveState {
         case .synced:
             return false
-        case .savingLocally, .localDraft, .localSaveFailed, .restoredLocalDraft,
+        case .unsaved, .savingLocally, .localDraft, .localSaveFailed, .restoredLocalDraft,
              .savingRemotely, .remoteSaveFailed:
             return true
         }
@@ -1091,30 +1111,19 @@ final class ChapterEditorStore: ObservableObject {
         saveState = .synced
     }
 
-    private func scheduleCacheSave() {
-        guard let chapter = currentChapter else { return }
-        cacheTask?.cancel()
-        saveState = .savingLocally
-        cacheTask = Task { [weak self, chapter] in
-            do {
-                try await Task.sleep(nanoseconds: 450_000_000)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                let saved = self?.cache.saveDirty(chapter) ?? false
-                if self?.currentChapter?.id == chapter.id {
-                    self?.saveState = saved
-                        ? .localDraft
-                        : .localSaveFailed(message: "无法写入本机草稿缓存，请立即复制正文后重试。")
-                }
-            }
-        }
-    }
-
     private func clearTaskOutcome(chapterID: String) {
-        ChapterTaskOutcomeStore.clear(chapterID: chapterID)
+        let hadPersistedOutcome: Bool
+        switch writingPhase {
+        case .failed, .cancelled:
+            hadPersistedOutcome = true
+        default:
+            hadPersistedOutcome = failedCandidateCheckerResult != nil
+                || currentValidationReason != nil
+                || !pendingExemptionNames.isEmpty
+        }
+        if hadPersistedOutcome {
+            ChapterTaskOutcomeStore.clear(chapterID: chapterID)
+        }
         failedCandidateCheckerResult = nil
         switch writingPhase {
         case .failed, .cancelled:

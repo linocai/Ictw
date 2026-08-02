@@ -197,6 +197,7 @@ struct LinoIGenerationStatusPanel: View {
     private var saveSystemImage: String {
         switch state.saveState {
         case .synced: return "checkmark.icloud"
+        case .unsaved: return "pencil"
         case .savingLocally, .savingRemotely: return "arrow.trianglehead.2.clockwise.rotate.90"
         case .localDraft, .restoredLocalDraft: return "externaldrive"
         case .localSaveFailed, .remoteSaveFailed: return "externaldrive.badge.exclamationmark"

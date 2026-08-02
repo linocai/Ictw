@@ -38,6 +38,67 @@ expected extract phase done, got failed
 
 ---
 
+## [ERR-20260802-023] Parallel Xcode builds shared one DerivedData database
+
+**Logged**: 2026-08-02T14:50:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Parallel iOS and macOS builds targeted the same default DerivedData directory, so the macOS build could not acquire the Xcode build database lock.
+
+### Error
+`accessing build database .../XCBuildData/build.db: database is locked`
+
+### Context
+- The simultaneous iOS build completed successfully.
+- The failure occurred before macOS compilation and does not indicate a source error.
+
+### Suggested Fix
+Run Xcode targets sequentially or give each parallel build a distinct `-derivedDataPath`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `App/LinoI.xcodeproj`
+
+### Resolution
+- **Resolved**: 2026-08-02T14:50:00+08:00
+- **Notes**: Re-ran the macOS build with a dedicated DerivedData path.
+
+---
+
+## [ERR-20260802-022] Broad lifecycle patch missed a view modifier context
+
+**Logged**: 2026-08-02T14:48:26+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+A broad multi-file patch was rejected because the iOS confirmation-dialog modifier did not match the assumed one-line layout.
+
+### Error
+`apply_patch verification failed: Failed to find expected lines in App/LinoI/ChapterEditorViews.swift`
+
+### Context
+- The rejected patch made no file changes.
+- The intended change removes per-keystroke disk writes and adds lifecycle-boundary persistence on both platforms.
+
+### Suggested Fix
+Patch models, store logic, and each platform lifecycle hook separately after inspecting the exact local modifier layout.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `App/LinoI/ChapterEditorViews.swift`, `App/LinoIMac/MacChapterEditor.swift`, `App/LinoI/LinoStores.swift`
+- See Also: ERR-20260802-021
+
+### Resolution
+- **Resolved**: 2026-08-02T14:48:26+08:00
+- **Notes**: Switched to narrow patches against exact inspected contexts.
+
+---
+
 ## [ERR-20260802-022] Version and state patch used stale release wording
 
 **Logged**: 2026-08-02T09:54:10+08:00

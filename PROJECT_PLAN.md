@@ -7,9 +7,9 @@
 - SwiftUI iOS（`LinoI`）/macOS（`LinoIMac`）客户端，FastAPI + SQLAlchemy + Alembic + SQLite 后端；产品历史标识 `LinoI` 与 Bundle/Keychain/草稿目录兼容标识不改。
 - `v1.5.0(14)` 于 2026-07-28 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
 - 当前工作树有用户未提交的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 改动；v1.6 施工不得覆盖、回滚或纳入无关提交。
-- `v1.6.3(18)` 已完成 Backend 部署、Alembic 摘要合并迁移、macOS 正式 App 换装、tag 与 GitHub Release；iOS 未打包或安装。`v1.6.4(19)` 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 未打包或安装。
+- `v1.6.4(19)` 已完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 未打包或安装。`v1.6.5(20)` 输入法与草稿保存快修已获授权一口气发版。
 
-## 当前版本：v1.6.4(19) Selector／Checker 解释性快修（已发布，iOS 未发包）
+## 当前版本：v1.6.5(20) 输入法与草稿保存快修（施工中，iOS 不发包）
 
 ### 版本目标
 
@@ -82,6 +82,8 @@
 
 **2026-08-02 v1.6.4 发布完成**：实现提交 `657cbf5`、生产落账提交 `36438d0`；annotated tag `v1.6.4` 指向 `36438d0` 并已推送。GitHub Release `ICTW / LinoI v1.6.4` 已发布，资产 `ICTW-1.6.4.zip` 为 3,140,891 B，GitHub digest 与本地 SHA-256 一致。Release 地址：<https://github.com/linocai/Ictw/releases/tag/v1.6.4>。iOS 未打包或安装，由用户自行处理。
 
+**2026-08-02 v1.6.5 快修授权与施工**：用户实测输入期间频繁本地草稿保存会打断中文输入法。核查确认双端共享 Store 每次文字变化都会调度 450ms 后的整章 JSON 原子写入，并在主线程更新保存状态。快修取消文字变化触发磁盘写入，编辑期间仅保留内存状态；只在退出编辑、切换章节、App 进入后台／失焦、窗口离开及手动保存时落盘，并区分“更改尚未保存”与“已保存到本机”。版本更新为 `1.6.5(20)`；Backend 93 项、客户端状态测试、iOS/macOS Debug、签名通用架构 macOS Release、唯一 Alembic head `20260801_0008` 与 diff check 全绿。发布 ZIP 为 3,148,623 B、SHA-256 `e7b480dcdd0a7a4ad0f8d5b44207b592759163e204d2a5cb03333c659d23d2c9`；本补丁无 schema 变化，iOS 不打包或安装。
+
 ## 验收基线
 
 - 迁移前备份生产库；迁移后 `integrity_check`、`foreign_key_check`、`alembic heads` 全通过。任何生产 schema 改动只走 `alembic upgrade head`。
@@ -107,3 +109,4 @@
 - `v1.6.2(17)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.3(18)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
 - `v1.6.4(19)`：已发布，iOS 未发包；记录见 `archive/v1.6.0施工plan.md`。
+- `v1.6.5(20)`：施工中，iOS 不发包；记录见 `archive/v1.6.0施工plan.md`。
