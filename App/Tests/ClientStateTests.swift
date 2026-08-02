@@ -225,6 +225,36 @@ private func testV16ContextAndCheckerDecode() throws {
     try expect(ChapterWritingPhase.legacyRevising.label == "旧版任务记录", "legacy phase must not expose Reviser")
 }
 
+private func testRejectedCandidateKeepsSpecificCheckerReasonsSeparate() throws {
+    let object: [String: Any] = [
+        "chapter_id": "chapter-1", "kind": "write", "phase": "failed",
+        "error_code": "checker_rejected",
+        "error_message": "Checker 未通过；请修改",
+        "checker_result": [
+            "verdict": "violation",
+            "issues": [
+                ["kind": "new_plot", "draft_evidence": "候选证据", "bible_evidence": "Bible 证据", "reason": "新增了 Bible 未授权剧情"],
+                ["kind": "duplicate", "draft_evidence": "另一证据", "bible_evidence": "Bible 证据", "reason": "新增了 Bible 未授权剧情"],
+            ],
+        ],
+        "visible_checker_result": ["verdict": "passed", "issues": []],
+    ]
+    let data = try JSONSerialization.data(withJSONObject: object)
+    let status = try JSONDecoder().decode(WriteJobStatus.self, from: data)
+    try expect(
+        status.specificFailureReason == "Checker 未通过：新增了 Bible 未授权剧情",
+        "Checker issue reasons must override the generic rejection copy without duplication"
+    )
+    try expect(
+        status.failedCandidateCheckerResult?.displayVerdict == "violation",
+        "rejected candidate result must stay available separately"
+    )
+    try expect(
+        status.visibleCheckerResult?.isPassed == true,
+        "old visible draft Checker result must remain independently identifiable"
+    )
+}
+
 private func testDraftReadyDoesNotPretendCheckerPassed() throws {
     let pending = ChapterEditorPresentationState.make(
         phase: .idle,
@@ -320,6 +350,7 @@ private struct ClientStateTestRunner {
         try testCachedFailureRestoresSafeDetails()
         try testCachedFailureInvalidatesOnAnyInputChangeOrFinalization()
         try testV16ContextAndCheckerDecode()
+        try testRejectedCandidateKeepsSpecificCheckerReasonsSeparate()
         try testDraftReadyDoesNotPretendCheckerPassed()
         try testLateRefreshCannotOverwriteLocalCharacterEdit()
         try testFailedRegenerationKeepsVisibleDraftActions()

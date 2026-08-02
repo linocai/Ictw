@@ -1,5 +1,32 @@
 # Learnings
 
+## [LRN-20260802-003] correction
+
+**Logged**: 2026-08-02T09:41:25+08:00
+**Priority**: high
+**Status**: pending
+**Area**: writing-pipeline
+
+### Summary
+
+“Selector 已调用”和“Checker 已保存结构化结果”不等于用户实际获得了有效选择与可见失败解释，必须用生产产物分布和最终 UI 状态验证端到端语义。
+
+### Details
+
+用户实测指出“本次写作上下文”总在展示大量历史章节信息，Checker 失败也只显示泛化的“未通过”。只读核查确认：生产 Selector 调用本身成功，但部分任务把 35 章的全部摘要来源压成 32–33 条简报，另一些任务又选择 0 条，说明当前协议只校验来源和总预算，没有约束相关性、选择规模或整合粒度；双端还逐条展开所有原始来源，使“精炼简报”和“审计依据”混成一块。Checker 失败时后端已保存 issues 和带具体 reason 的 error_message，但客户端错误表优先覆盖原始消息，失败状态又只保留旧可见正文的 Checker 结果，导致被拒候选的原因和证据无处显示。
+
+### Suggested Action
+
+为 Selector 增加可程序验收的相关性／选择规模／合并粒度协议与真实多章回归样本，并把审计来源默认折叠、与 Writer 实际输入分区展示；修正实际简报字符统计。Checker 失败需单独保存并展示“本次失败候选检查结果”，只展示原因和必要证据、不返回候选全文；错误呈现必须保留后端具体 reason，通用建议只能追加而不能覆盖。
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: Backend/app/agents/memory_selector.py, Backend/app/services/context.py, Backend/app/services/write_jobs.py, App/LinoI/LinoErrorPresenter.swift, App/LinoI/LinoStores.swift, App/LinoI/ChapterEditorViews.swift, App/LinoIMac/MacChapterEditor.swift
+- Tags: memory-selector, checker, explainability, production-evidence, ui-state
+
+---
+
 ## [LRN-20260801-002] correction
 
 **Logged**: 2026-08-01T13:05:00+08:00

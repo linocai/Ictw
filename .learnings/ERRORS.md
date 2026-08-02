@@ -38,6 +38,36 @@ expected extract phase done, got failed
 
 ---
 
+## [ERR-20260802-022] Version and state patch used stale release wording
+
+**Logged**: 2026-08-02T09:54:10+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: release
+
+### Summary
+A combined version/state patch was rejected because the expected v1.6.3 completion sentence differed from the exact current `PROJECT_PLAN.md` wording.
+
+### Error
+`apply_patch verification failed: Failed to find expected lines in PROJECT_PLAN.md`
+
+### Context
+- The rejected patch made no file changes.
+- Code version fields and project-state prose were bundled in one patch.
+
+### Suggested Fix
+Patch deterministic version fields separately, then inspect and update state documents with their exact current wording.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `PROJECT_PLAN.md`, `App/LinoI.xcodeproj/project.pbxproj`, `Backend/app/main.py`
+
+### Resolution
+- **Resolved**: 2026-08-02T09:54:10+08:00
+- **Notes**: Split code-version and state-document edits; both applied successfully and all four target configurations now report `1.6.4(19)`.
+
+---
+
 ## [ERR-20260801-016] Client state harness excludes error presenter dependencies
 
 **Logged**: 2026-08-01T12:52:00+08:00
@@ -814,3 +844,36 @@ Read expected inactive state through `systemctl show -p ActiveState --value`, wh
 ### Resolution
 - **Resolved**: 2026-08-01T16:05:00+08:00
 - **Notes**: Confirmed the server remained on the intact v1.6.2 state and changed the stop assertion to use `ActiveState` before retrying.
+
+---
+
+## [ERR-20260802-021] Broad client patch missed an exact store branch context
+
+**Logged**: 2026-08-02T09:52:29+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+A broad multi-file patch was rejected because one `LinoStores.swift` phase branch had additional existing statements and did not match the expected context exactly.
+
+### Error
+`apply_patch verification failed: Failed to find expected lines in App/LinoI/LinoStores.swift`
+
+### Context
+- The rejected patch made no file changes.
+- The intended changes covered models, error presentation, shared store state, and both platform views.
+- Exact branch inspection showed `checkerAppliesToVisibleDraft` is set before `writingPhase` in `selecting_memory`.
+
+### Suggested Fix
+Inspect state-machine branches first and apply model, store, and view edits as separate patches with narrow context.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `App/LinoI/LinoStores.swift`, `App/LinoI/LinoModels.swift`, `App/LinoI/ChapterEditorViews.swift`, `App/LinoIMac/MacChapterEditor.swift`
+
+### Resolution
+- **Resolved**: 2026-08-02T09:52:29+08:00
+- **Notes**: Split the patch by layer, applied each hunk successfully, and passed focused Backend and client-state regression tests.
+
+---

@@ -20,6 +20,10 @@ MIN_DRAFT_NONSPACE_CHARS = 4000
 MEMORY_BUDGET_CHARS = 2400
 PREVIOUS_ENDING_MAX_CHARS = 700
 CHARACTER_EVENT_MAX_CHARS = 60
+MAX_MEMORY_BRIEFS = 8
+MAX_MEMORY_CONFLICTS = 4
+MAX_MEMORY_SOURCES = 16
+MAX_SOURCES_PER_BRIEF = 6
 
 
 def nonspace_len(text: str) -> int:
@@ -126,15 +130,6 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
     if previous is not None and previous.draft_text.strip():
         blocks.extend(_previous_ending_blocks(previous))
     for item in prior:
-        if item.headline.strip():
-            blocks.append(
-                MemoryBlock(
-                    id=f"chapter:{item.id}:headline",
-                    text=f"第 {item.index} 章大事记：{item.headline.strip()}",
-                    chapter_index=item.index,
-                    memory_type="headline",
-                )
-            )
         canonical_summary = item.long_summary.strip()
         if canonical_summary:
             blocks.append(
@@ -145,6 +140,19 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     text=f"第 {item.index} 章摘要：{canonical_summary}",
                     chapter_index=item.index,
                     memory_type="summary",
+                )
+            )
+        elif item.headline.strip():
+            # v1.6.3 made the chapter summary the canonical history source.
+            # Keep the headline only as a compatibility fallback for an old or
+            # hand-edited chapter whose canonical summary is still empty; never
+            # send both representations of the same chapter to Selector.
+            blocks.append(
+                MemoryBlock(
+                    id=f"chapter:{item.id}:headline",
+                    text=f"第 {item.index} 章大事记：{item.headline.strip()}",
+                    chapter_index=item.index,
+                    memory_type="headline",
                 )
             )
         blocks.extend(_archive_memory_blocks(item))
@@ -219,8 +227,6 @@ def prefilter_memory_candidates(
 ) -> list[MemoryBlock]:
     ending = [block for block in blocks if block.memory_type == "previous_ending"]
     ordinary = [block for block in blocks if block.memory_type != "previous_ending"]
-    if len(ordinary) <= 300 and sum(nonspace_len(block.text) for block in ordinary) <= 30_000:
-        return blocks
     query = normalize_text(f"{chapter.title}\n{chapter.user_prompt}")
     keywords = _keywords(query)
 
@@ -231,6 +237,11 @@ def prefilter_memory_candidates(
         return (-selected, -overlap, -block.chapter_index, block.id)
 
     ranked = sorted(ordinary, key=score)
+    # Even when the full candidate pool fits, put likely-relevant facts first.
+    # This preserves broad recall while preventing chronological order from
+    # nudging the model toward a chapter-by-chapter recap.
+    if len(ranked) <= 300 and sum(nonspace_len(block.text) for block in ranked) <= 30_000:
+        return ending + ranked
     chosen: list[MemoryBlock] = []
     chars = 0
     for block in ranked:
@@ -258,7 +269,10 @@ def memory_selector_user_message(
             "# 本章剧情 Bible（原文快照）\n" + (bible if bible is not None else chapter.user_prompt).strip(),
             "# 本章允许人物及当前状态\n" + (cards or "（无已选人物）"),
             f"# 历史记忆简报预算\n最终记忆简报最多 {budget} 个去空白字符；上一章结尾独立，最多 {PREVIOUS_ENDING_MAX_CHARS} 字。"
-            "只压缩有来源的历史事实，不得改写 Bible 或补足历史。",
+            "只压缩有来源且会直接约束本章写作的历史事实，不得改写 Bible 或补足历史。"
+            f"最多 {MAX_MEMORY_BRIEFS} 条简报、{MAX_MEMORY_CONFLICTS} 条冲突、合计 {MAX_MEMORY_SOURCES} 个不同来源；"
+            "候选已按相关性排列。禁止逐章回顾，禁止因为某章发生在前面就自动选入；"
+            "同一事实的多个来源必须合并成一条简报。若没有会影响本章动作、认知、人物状态或连续性的历史事实，briefs 返回空数组。",
             (
                 "# 紧邻上一章结尾候选（原文）\n" + ending + "\n\n"
                 "如有候选，请选择满足开场衔接所需的最短片段起点；只考虑时间、地点、动作、人物状态和最后落点，"
@@ -270,6 +284,7 @@ def memory_selector_user_message(
                 '"conflicts":[{"text":"冲突说明","source_ids":["候选ID"]}],'
                 '"previous_ending_start_id":"上一章结尾起点ID或null"}。briefs/conflicts 允许空数组。'
                 "每条事实和冲突均须包含非空 source_ids；ID 必须从候选块的方括号中原样完整复制，不得自造。"
+                "briefs 按对本章的重要性从高到低排列；不要输出候选清单、章节流水账或一章一条的复述。"
             ),
         ]
     )
@@ -341,6 +356,9 @@ def pack_memory_brief(
     blocks: list[MemoryBlock],
     briefs: Iterable[dict[str, Any]],
     budget: int,
+    *,
+    max_items: int = MAX_MEMORY_BRIEFS,
+    max_sources: int = MAX_MEMORY_SOURCES,
 ) -> list[MemoryBlock]:
     """Validate Selector's compressed facts against recalled sources.
 
@@ -351,8 +369,11 @@ def pack_memory_brief(
     by_id = {block.id: block for block in blocks if block.memory_type != "previous_ending"}
     packed: list[MemoryBlock] = []
     used = 0
+    used_source_ids: set[str] = set()
     seen: set[tuple[str, tuple[str, ...]]] = set()
     for item in briefs:
+        if len(packed) >= max_items:
+            break
         if not isinstance(item, dict):
             continue
         text = item.get("text")
@@ -360,7 +381,12 @@ def pack_memory_brief(
         if not isinstance(text, str) or not text.strip() or not isinstance(source_ids, list):
             continue
         ids = tuple(dict.fromkeys(source_id.strip() for source_id in source_ids if isinstance(source_id, str) and source_id.strip()))
-        if not ids or any(source_id not in by_id for source_id in ids):
+        if (
+            not ids
+            or len(ids) > MAX_SOURCES_PER_BRIEF
+            or any(source_id not in by_id for source_id in ids)
+            or len(used_source_ids.union(ids)) > max_sources
+        ):
             continue
         key = (normalize_text(text).strip(), ids)
         if key in seen:
@@ -372,6 +398,7 @@ def pack_memory_brief(
         primary = by_id[ids[0]]
         packed.append(MemoryBlock("|".join(ids), text.strip(), primary.chapter_index, primary.character_id, "memory_brief"))
         used += size
+        used_source_ids.update(ids)
     return packed
 
 

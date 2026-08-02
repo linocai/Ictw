@@ -317,6 +317,10 @@ final class ChapterEditorStore: ObservableObject {
     @Published private(set) var currentValidationReason: String?
     @Published private(set) var memoryContext: MemoryContext?
     @Published private(set) var checkerResult: CheckerResult?
+    /// Checker metadata for the latest rejected backend-only candidate. This
+    /// is intentionally separate from `checkerResult`, which always belongs
+    /// to the text currently visible in the editor.
+    @Published private(set) var failedCandidateCheckerResult: CheckerResult?
     @Published private(set) var checkerAppliesToVisibleDraft = false
     @Published private(set) var checkerRefreshing = false
     @Published private(set) var restoredLocalDraft = false
@@ -357,6 +361,7 @@ final class ChapterEditorStore: ObservableObject {
         pollingConnectionInterrupted = false
         memoryContext = nil
         checkerResult = nil
+        failedCandidateCheckerResult = nil
         checkerAppliesToVisibleDraft = false
         defer { isLoading = false }
         do {
@@ -455,6 +460,7 @@ final class ChapterEditorStore: ObservableObject {
             let imported: Chapter = try await session.api.request("/chapters/\(chapter.id)/import", method: "POST", body: ChapterImportPayload(draft_text: text))
             currentChapter = imported
             checkerResult = nil
+            failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = false
             cache.saveClean(imported)
             ChapterTaskOutcomeStore.clear(chapterID: imported.id)
@@ -482,6 +488,7 @@ final class ChapterEditorStore: ObservableObject {
         pendingExemptionNames = []
         currentValidationReason = nil
         checkerResult = nil
+        failedCandidateCheckerResult = nil
         checkerAppliesToVisibleDraft = false
         memoryContext = nil
         guard await save() != nil else { return nil }
@@ -496,6 +503,7 @@ final class ChapterEditorStore: ObservableObject {
         guard let saved = await save() else { return nil }
         pendingExemptionNames = []
         currentValidationReason = nil
+        failedCandidateCheckerResult = nil
         ChapterTaskOutcomeStore.clear(chapterID: saved.id)
         writingPhase = .extracting
         do {
@@ -528,6 +536,7 @@ final class ChapterEditorStore: ObservableObject {
                 hasLocalInputDivergence: hasLocalInputDivergence
             ) else { return nil }
             checkerResult = response.checkerResult
+            failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = response.checkerResult != nil
             return response.checkerResult
         } catch {
@@ -562,6 +571,7 @@ final class ChapterEditorStore: ObservableObject {
             let reopened: Chapter = try await session.api.request("/chapters/\(chapter.id)/reopen", method: "POST")
             currentChapter = reopened
             checkerResult = nil
+            failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = false
             cache.saveClean(reopened)
             ChapterTaskOutcomeStore.clear(chapterID: reopened.id)
@@ -580,6 +590,7 @@ final class ChapterEditorStore: ObservableObject {
         let cancelledStage = writingPhase.currentStage ?? .drafting
         stopPolling(for: chapter.id)
         currentValidationReason = nil
+        failedCandidateCheckerResult = nil
         do {
             let cancelled = try await session.api.cancelWrite(chapterId: chapter.id)
             currentChapter = cancelled
@@ -617,6 +628,7 @@ final class ChapterEditorStore: ObservableObject {
             saveState = .synced
             pendingExemptionNames = []
             currentValidationReason = nil
+            failedCandidateCheckerResult = nil
             if currentChapter?.id == deletingId {
                 currentChapter = nil
             }
@@ -782,6 +794,7 @@ final class ChapterEditorStore: ObservableObject {
         if let context = status.memoryContext { memoryContext = context }
         switch status.phase {
         case "selecting_memory":
+            failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = false
             writingPhase = .selectingMemory
             setCurrentChapterStatus("writing", chapterId: chapterId)
@@ -809,10 +822,12 @@ final class ChapterEditorStore: ObservableObject {
             writingPhase = .legacyRevising
             setCurrentChapterStatus("writing", chapterId: chapterId)
         case "extracting":
+            failedCandidateCheckerResult = nil
             writingPhase = .extracting
             setCurrentChapterStatus("extracting", chapterId: chapterId)
         case "done":
             memoryContext = status.memoryContext ?? memoryContext
+            failedCandidateCheckerResult = nil
             if status.kind == "write" {
                 checkerResult = status.visibleCheckerResult ?? status.checkerResult
                 checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
@@ -833,6 +848,7 @@ final class ChapterEditorStore: ObservableObject {
         case "failed":
             applyJobFailure(status, chapterId: chapterId, announce: announceFailure)
         case "cancelled":
+            failedCandidateCheckerResult = nil
             let cancelledStage = writingPhase.currentStage ?? .drafting
             writingPhase = .cancelled(
                 message: "任务已取消，当前草稿已保留。",
@@ -866,6 +882,7 @@ final class ChapterEditorStore: ObservableObject {
     ) {
         let presented = LinoErrorPresenter.present(jobFailure: status)
         if status.kind == "write" {
+            failedCandidateCheckerResult = status.failedCandidateCheckerResult
             checkerResult = status.visibleCheckerResult
             checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
         }
@@ -1042,6 +1059,7 @@ final class ChapterEditorStore: ObservableObject {
         writingPhase = .idle
         currentValidationReason = nil
         pendingExemptionNames = []
+        failedCandidateCheckerResult = nil
         pollingConnectionInterrupted = false
     }
 
@@ -1097,6 +1115,7 @@ final class ChapterEditorStore: ObservableObject {
 
     private func clearTaskOutcome(chapterID: String) {
         ChapterTaskOutcomeStore.clear(chapterID: chapterID)
+        failedCandidateCheckerResult = nil
         switch writingPhase {
         case .failed, .cancelled:
             writingPhase = .idle

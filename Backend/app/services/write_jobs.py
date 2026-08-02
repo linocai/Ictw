@@ -17,6 +17,7 @@ from app.models import Chapter, ChapterDraftCandidate, JobRun
 from app.models.entities import utc_now
 from app.services.audit import record_llm_call
 from app.services.context import (
+    MAX_MEMORY_CONFLICTS,
     MEMORY_BUDGET_CHARS,
     MemoryBlock,
     checker_user_message,
@@ -298,13 +299,19 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             remaining = max(0, job.memory_budget - nonspace_len(packed_ending.previous_ending))
             memories = pack_memory_brief(job.memory_candidates, selection.briefs, remaining)
             previous_ending = packed_ending.previous_ending
-            valid_conflicts = pack_memory_brief(job.memory_candidates, selection.conflicts, remaining)
+            valid_conflicts = pack_memory_brief(
+                job.memory_candidates,
+                selection.conflicts,
+                remaining,
+                max_items=MAX_MEMORY_CONFLICTS,
+            )
             conflicts = [{"text": item.text, "source_ids": item.id.split("|")} for item in valid_conflicts]
             source_by_id = {block.id: block for block in job.memory_candidates}
             used_source_ids = [source_id for item in memories + valid_conflicts for source_id in item.id.split("|")]
             manifest = {**packed_ending.manifest(), "memory_brief": [
                 {"text": item.text, "source_ids": item.id.split("|"), "chapter_index": item.chapter_index,
                  "memory_type": item.memory_type} for item in memories], "conflicts": conflicts}
+            manifest["memory_non_whitespace_count"] = sum(nonspace_len(item.text) for item in memories)
             manifest["sources"] = [
                 {"id": source_id, "chapter_index": source_by_id[source_id].chapter_index,
                  "memory_type": source_by_id[source_id].memory_type, "source_excerpt": source_by_id[source_id].text}

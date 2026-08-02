@@ -28,7 +28,7 @@ enum LinoErrorPresenter {
         let context = status.errorContext
         let entry = code.flatMap(tableEntry)
         let reason = annotate(
-            reason: entry?.reason ?? status.errorMessage ?? "任务失败",
+            reason: status.specificFailureReason ?? entry?.reason ?? status.errorMessage ?? "任务失败",
             code: code,
             violations: status.violations
         )
@@ -258,6 +258,11 @@ enum LinoErrorPresenter {
             return Entry(
                 reason: "新正文未通过确定性校验",
                 suggestion: "失败稿只在后端留档，正文区仍显示生成前草稿；调整人物后请重新生成"
+            )
+        case "memory_selection_invalid":
+            return Entry(
+                reason: "Memory Selector 两次都没有给出合格的精炼记忆",
+                suggestion: "请重试；若持续出现，请调整 Memory Selector 人格或模型配置"
             )
         case "checker_failed":
             return Entry(reason: "正文已生成，但 Bible 检查未完成", suggestion: "可稍后重新检查，或明确忽略后接受")

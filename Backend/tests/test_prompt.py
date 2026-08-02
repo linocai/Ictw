@@ -115,7 +115,8 @@ def test_memory_candidates_scope_and_budget_packing(client, auth_headers):
         candidates = memory_candidates(db, current)
     finally:
         db.close()
-    assert len(candidates) == 2
+    assert len(candidates) == 1
+    assert candidates[0].memory_type == "summary"
     assert all("可用" in block.text for block in candidates)
     assert memory_budget("短") == MEMORY_BUDGET_CHARS
     blocks = [MemoryBlock("too-big", "甲" * 700, 1), MemoryBlock("fits", "乙" * 500, 1)]
@@ -134,6 +135,7 @@ def test_memory_candidates_emit_one_canonical_summary_per_chapter(client, auth_h
         prior = Chapter(
             book_id=book.id,
             index=1,
+            headline="旧版大事记",
             long_summary="新版摘要",
             status="finalized",
         )
@@ -148,8 +150,29 @@ def test_memory_candidates_emit_one_canonical_summary_per_chapter(client, auth_h
 
     summaries = [block for block in candidates if block.memory_type == "summary"]
     assert len(summaries) == 1
+    assert not [block for block in candidates if block.memory_type == "headline"]
     assert summaries[0].id == f"chapter:{prior_id}:summary"
     assert summaries[0].text == "第 1 章摘要：新版摘要"
+
+
+def test_memory_candidates_use_headline_only_when_canonical_summary_is_empty(client, auth_headers):
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        book = Book(title="书")
+        db.add(book)
+        db.flush()
+        prior = Chapter(book_id=book.id, index=1, headline="兼容大事记", status="finalized")
+        current = Chapter(book_id=book.id, index=2, user_prompt="继续")
+        db.add_all([prior, current])
+        db.commit()
+        db.refresh(current)
+        candidates = memory_candidates(db, current)
+    finally:
+        db.close()
+
+    assert [(block.memory_type, block.text) for block in candidates] == [("headline", "第 1 章大事记：兼容大事记")]
 
 
 def test_previous_ending_uses_only_adjacent_finalized_chapter_and_preserves_source(client, auth_headers):

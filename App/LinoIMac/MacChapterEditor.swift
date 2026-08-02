@@ -388,11 +388,18 @@ struct MacChapterEditor: View {
         VStack(alignment: .leading, spacing: 10) {
             DisclosureGroup("本次写作上下文") {
                 if let context = editor.memoryContext {
+                    Text("Writer 实际记忆简报")
+                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(LinoTheme.muted)
                     Text(context.brief.isEmpty ? "没有采用历史记忆。" : context.brief)
                         .font(.system(size: 12)).foregroundStyle(LinoTheme.body).fixedSize(horizontal: false, vertical: true)
                     if !context.previousTail.isEmpty { labeledText("上一章尾段", context.previousTail) }
-                    if let count = context.characterCount { Text("实际上下文：\(count) 字符 · \(context.sources.count) 条来源").font(.system(size: 11)).foregroundStyle(LinoTheme.muted) }
-                    ForEach(context.sources) { source in labeledText("来源\(source.chapterIndex.map { " · 第 \($0) 章" } ?? "")", source.excerpt ?? "来源内容不可用") }
+                    if let count = context.characterCount { Text("简报占用：\(count) 字符 · \(context.sources.count) 条审计来源").font(.system(size: 11)).foregroundStyle(LinoTheme.muted) }
+                    if !context.sources.isEmpty {
+                        DisclosureGroup("审计来源（\(context.sources.count) 条）") {
+                            ForEach(context.sources) { source in labeledText("来源\(source.chapterIndex.map { " · 第 \($0) 章" } ?? "")", source.excerpt ?? "来源内容不可用") }
+                        }
+                        .font(.system(size: 11))
+                    }
                     ForEach(context.conflicts) { conflict in labeledText("Bible 冲突提示", [conflict.memoryEvidence, conflict.bibleEvidence, conflict.reason].compactMap { $0 }.joined(separator: "\n")) }
                 } else { Text("等待本次生成完成后显示实际采用的记忆。").font(.system(size: 11)).foregroundStyle(LinoTheme.muted) }
             }
@@ -402,9 +409,26 @@ struct MacChapterEditor: View {
     }
 
     @ViewBuilder private var checkerPanel: some View {
+        if let failed = editor.failedCandidateCheckerResult {
+            Text("本次候选未通过，正文区仍保留生成前草稿。")
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(LinoTheme.warning)
+            if let issues = failed.issues, !issues.isEmpty {
+                ForEach(issues) { issue in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(issue.reason).font(.system(size: 11, weight: .semibold)).foregroundStyle(LinoTheme.warning)
+                        labeledText("候选稿证据", issue.draftEvidence)
+                        labeledText("Bible 证据", issue.bibleEvidence)
+                    }
+                }
+            } else {
+                Text("Checker 没有返回可展示的逐项证据，具体错误见本次失败提示。")
+                    .font(.system(size: 11)).foregroundStyle(LinoTheme.warning)
+            }
+            Divider()
+        }
         let result = editor.checkerResult
-        Text((result?.displayVerdict ?? "unavailable").checkerLabel).font(.system(size: 12, weight: .semibold)).foregroundStyle(result?.isPassed == true ? LinoTheme.success : LinoTheme.warning)
-        if let issues = result?.issues, !issues.isEmpty { ForEach(issues) { issue in VStack(alignment: .leading, spacing: 3) { labeledText("正文证据", issue.draftEvidence); labeledText("Bible 证据", issue.bibleEvidence); Text(issue.reason).font(.system(size: 11)).foregroundStyle(LinoTheme.muted) } } } else { Text(result?.displayVerdict == "unavailable" ? "正文已生成，Bible 检查尚不可用。" : "Checker 只检查剧情边界，不评价文风。").font(.system(size: 11)).foregroundStyle(LinoTheme.muted) }
+        Text("当前正文 · \((result?.displayVerdict ?? "unavailable").checkerLabel)").font(.system(size: 12, weight: .semibold)).foregroundStyle(result?.isPassed == true ? LinoTheme.success : LinoTheme.warning)
+        if let issues = result?.issues, !issues.isEmpty { ForEach(issues) { issue in VStack(alignment: .leading, spacing: 3) { labeledText("正文证据", issue.draftEvidence); labeledText("Bible 证据", issue.bibleEvidence); Text(issue.reason).font(.system(size: 11)).foregroundStyle(LinoTheme.muted) } } } else { Text(result?.displayVerdict == "unavailable" ? "当前正文尚无可用的 Bible 检查结果。" : "Checker 只检查剧情边界，不评价文风。").font(.system(size: 11)).foregroundStyle(LinoTheme.muted) }
         if editor.writingPhase.isFailed && !editor.checkerAppliesToVisibleDraft {
             Text("这次失败稿只在后端留档，没有进入正文区。请调整输入后重新生成。")
                 .font(.system(size: 11))

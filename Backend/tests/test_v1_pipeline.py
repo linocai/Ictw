@@ -48,6 +48,17 @@ def test_memory_brief_requires_real_deduplicated_sources_and_budget():
     assert [(item.text, item.id) for item in packed] == [("可用事实", "a")]
 
 
+def test_memory_brief_enforces_item_and_source_caps_defensively():
+    sources = [MemoryBlock(f"source-{index}", f"来源 {index}", index) for index in range(30)]
+    briefs = [{"text": f"事实 {index}", "source_ids": [f"source-{index}"]} for index in range(20)]
+    packed = pack_memory_brief(sources, briefs, 10_000)
+    assert len(packed) == 8
+    assert len({source_id for item in packed for source_id in item.id.split("|")}) <= 16
+
+    too_many_sources = [{"text": "来源过多", "source_ids": [f"source-{index}" for index in range(7)]}]
+    assert pack_memory_brief(sources, too_many_sources, 10_000) == []
+
+
 def test_extractor_schema_for_no_characters_forces_empty_arrays():
     schema = extractor_schema([])
     assert schema["properties"]["character_events"]["maxItems"] == 0
@@ -279,6 +290,38 @@ def test_memory_selector_appends_fixed_contract_to_existing_custom_persona():
     assert "旧的自定义人格" in llm.system
     assert MEMORY_SELECTION_FIXED_CONTRACT in llm.system
     assert "previous_ending_start_id" in llm.system
+    assert "禁止逐章回顾" in llm.system
+
+
+def test_memory_selector_retries_pathological_chapter_by_chapter_output():
+    class RetrySelectionLLM:
+        def __init__(self):
+            self.calls = 0
+            self.users: list[str] = []
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            self.users.append(kwargs["user"])
+            if self.calls == 1:
+                return {
+                    "briefs": [
+                        {"text": f"第 {index} 章", "source_ids": [f"chapter:{index}:summary"]}
+                        for index in range(9)
+                    ],
+                    "conflicts": [],
+                    "previous_ending_start_id": None,
+                }
+            return {
+                "briefs": [{"text": "真正相关事实", "source_ids": ["chapter:8:summary"]}],
+                "conflicts": [],
+                "previous_ending_start_id": None,
+            }
+
+    llm = RetrySelectionLLM()
+    selection = MemorySelectorAgent(llm, "selector").select("input")  # type: ignore[arg-type]
+    assert selection.briefs == [{"text": "真正相关事实", "source_ids": ["chapter:8:summary"]}]
+    assert llm.calls == 2
+    assert "程序退回" in llm.users[1]
 
 
 def test_memory_selector_tolerates_malformed_id_payload_shapes():

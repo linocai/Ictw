@@ -436,6 +436,30 @@ struct WriteJobStatus: Decodable, Sendable {
         case checkerResult = "checker_result"
         case visibleCheckerResult = "visible_checker_result"
     }
+
+    /// Failure details for the backend-only candidate that Checker rejected.
+    /// They must not be attached to the old text still visible in the editor.
+    var failedCandidateCheckerResult: CheckerResult? {
+        guard errorCode == "checker_rejected" else { return nil }
+        return checkerResult
+    }
+
+    /// Preserve concrete structured reasons for Checker rejection. Other
+    /// failures continue through the established localized error table.
+    var specificFailureReason: String? {
+        guard errorCode == "checker_rejected" else { return nil }
+        let reasons = checkerResult?.issues?
+            .map { $0.reason.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        let uniqueReasons = reasons.reduce(into: [String]()) { result, reason in
+            if !result.contains(reason) { result.append(reason) }
+        }
+        if !uniqueReasons.isEmpty {
+            return "Checker 未通过：" + uniqueReasons.joined(separator: "；")
+        }
+        let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return message.isEmpty ? nil : message
+    }
 }
 
 struct MemoryContext: Decodable, Hashable, Sendable {

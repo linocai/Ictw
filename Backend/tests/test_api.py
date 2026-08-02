@@ -5,8 +5,8 @@ from sqlalchemy import select
 
 import app.db as db_module
 from app.llm.base import LLMError
-from app.llm.factory import get_checker_client, get_extractor_client, get_writer_client
-from app.models import ChapterDraftCandidate
+from app.llm.factory import get_checker_client, get_extractor_client, get_memory_selector_client, get_writer_client
+from app.models import Chapter, ChapterDraftCandidate
 from app.services.write_jobs import WriteJob, write_registry
 
 
@@ -52,6 +52,50 @@ class TextLLM:
 
     def complete_json(self, **kwargs):
         return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+
+
+def test_memory_manifest_reports_actual_packed_brief_count(client, auth_headers, wait_for_terminal):
+    class OneBriefSelector:
+        def complete_json(self, **kwargs):
+            user = kwargs["user"]
+            start = user.index("[chapter:") + 1
+            source_id = user[start : user.index("]", start)]
+            return {
+                "briefs": [{"text": "旧事实仍然成立", "source_ids": [source_id]}],
+                "conflicts": [],
+                "previous_ending_start_id": None,
+            }
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    prior = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "旧章"},
+    ).json()
+    db = db_module.SessionLocal()
+    try:
+        prior_row = db.get(Chapter, prior["id"])
+        assert prior_row is not None
+        prior_row.status = "finalized"
+        prior_row.long_summary = "历史事实"
+        prior_row.draft_text = "上一章结尾"
+        db.commit()
+    finally:
+        db.close()
+    current = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "沿用旧事实"},
+    ).json()
+    client.app.dependency_overrides[get_memory_selector_client] = lambda: OneBriefSelector()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("文" * 4000)
+
+    client.post(f"/api/v1/chapters/{current['id']}/write", headers=auth_headers).raise_for_status()
+    status = wait_for_terminal(client, current["id"], auth_headers)
+    assert status["phase"] == "done"
+    assert status["memory_context"]["memory_non_whitespace_count"] == len("旧事实仍然成立")
+    assert len(status["memory_context"]["memory_brief"]) == 1
+    assert len(status["memory_context"]["sources"]) == 1
 
 
 class SequenceTextLLM(TextLLM):
@@ -266,6 +310,7 @@ def test_checker_violation_stays_backend_only_and_does_not_replace_visible_draft
     assert status["phase"] == "failed"
     assert status["error_code"] == "checker_rejected"
     assert status["checker_result"]["verdict"] == "violation"
+    assert "越界" in status["error_message"]
     assert "draft_candidate" not in status
     assert ("文" * 4000) not in client.get(
         f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers
