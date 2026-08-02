@@ -4,7 +4,7 @@
 
 **Logged**: 2026-08-02T09:41:25+08:00
 **Priority**: high
-**Status**: pending
+**Status**: resolved
 **Area**: writing-pipeline
 
 ### Summary
@@ -24,6 +24,11 @@
 - Source: user_feedback
 - Related Files: Backend/app/agents/memory_selector.py, Backend/app/services/context.py, Backend/app/services/write_jobs.py, App/LinoI/LinoErrorPresenter.swift, App/LinoI/LinoStores.swift, App/LinoI/ChapterEditorViews.swift, App/LinoIMac/MacChapterEditor.swift
 - Tags: memory-selector, checker, explainability, production-evidence, ui-state
+
+### Resolution
+
+- **Resolved**: 2026-08-02T10:00:34+08:00
+- **Notes**: v1.6.4 已用单章单一历史来源、相关性排序、8／4／16 规模门禁和一次纠偏重试收口 Selector；双端分层展示 Writer 简报与审计来源并修正统计。Checker 失败候选结果与旧正文状态分离，具体原因和必要证据可见且候选全文仍只留后端。Backend、双端构建、生产部署、macOS 换装、tag 与 Release 全部完成。
 
 ---
 

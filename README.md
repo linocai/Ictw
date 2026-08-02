@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 [`1.6.3(18)`](https://github.com/linocai/Ictw/releases/tag/v1.6.3)；Backend、macOS App、tag 与 GitHub Release 已发布，按发布范围未打包或安装 iOS。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 [`1.6.4(19)`](https://github.com/linocai/Ictw/releases/tag/v1.6.4)；Backend、macOS App、tag 与 GitHub Release 已发布，按发布范围未打包或安装 iOS。写作流程为：
 
 ```text
 Memory Selector → Writer → Checker → 用户接受 → Extractor
@@ -22,15 +22,15 @@ Memory Selector → Writer → Checker → 用户接受 → Extractor
 
 - 写作与提取均为后台任务：`POST /write`、`POST /accept` 立即返回 `WriteJobStatus`，通过 `GET /chapters/{id}/job` 轮询到终态；任务状态持久化到 `job_runs`，重启后非终态任务标记 failed。客户端加载章节时会主动对账最新任务，后端用 `job_id` / `outcome_current` 区分当前终态与已失效旧结果。
 - 字数按去空白字符计，只要求正文不少于 4000 字且正常结束，不设产品上限；首次长度或截断失败最多从同一输入完整重写一次。
-- Memory Selector 从同书已完成历史中召回较多候选，再压缩成短而密集、逐条带来源的记忆简报；上一章尾段独立提供开场衔接。
+- Memory Selector 从同书已完成历史中召回较多候选，按本章相关性排序后压缩成最多 8 条、合计最多 16 个来源的记忆简报；逐章复述会被程序退回纠偏一次，上一章尾段独立提供开场衔接。
 - Writer 使用人物白名单，历史记忆不会自动授予人物本章出场权限；短名校验对单字名走左边界启发式（“森林”不再误命中“林”），并支持章级豁免。
 - Writer 每次从同一份 Bible 与记忆上下文完整生成整章，不扩写旧稿；所有候选只在后端完整留档，双端不拉取或渲染候选全文。
-- Checker 只举证 Bible 遗漏、矛盾和剧情越界，不修改正文或评价文风；Writer 新稿只有明确通过后才进入正文区，存疑、越界或检查不可用的稿件保持后台留档。用户手动编辑当前正文后仍可复查，并对当前可见正文明确覆盖接受。
+- Checker 只举证 Bible 遗漏、矛盾和剧情越界，不修改正文或评价文风；Writer 新稿只有明确通过后才进入正文区，存疑、越界或检查不可用的稿件保持后台留档，但具体失败原因和必要证据仍会展示。用户手动编辑当前正文后仍可复查，并对当前可见正文明确覆盖接受。
 - Extractor 只从用户接受的正文提取唯一章节摘要、状态变化、未决事项、原子记忆和已选人物更新，事务化提交并为后续记忆提供来源。
 - 每次 LLM 调用写入 `llm_call_audits`（role/model/耗时/usage/finish_reason/error_code），绝不记录 API Key、prompt 或正文。
 - 四个现役 Agent 可独立绑定模型、可编辑人格、思考开关与思考强度；不可编辑程序协议始终生效。
 - 支持 DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash 的显式推理能力。
-- 双端可展开查看实际记忆简报、上一章尾段、来源、冲突提示和 Checker 双侧证据；长候选全文不进入 SwiftUI 视图树。
+- 双端主层展示 Writer 实际记忆简报、上一章尾段、冲突提示和 Checker 双侧证据；原始审计来源默认折叠，长候选全文不进入 SwiftUI 视图树。
 - 支持章节删除、人物事件级联和章节序号收拢。
 - 旧 `chapter_style` wire 字段在兼容期继续可读写，内部统一为 `author_note`。
 
