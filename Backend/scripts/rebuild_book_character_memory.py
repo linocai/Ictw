@@ -15,6 +15,7 @@ from app.services.personas import get_persona
 
 
 ACTIVE_PHASES = {"selecting_memory", "writing", "checking", "extracting"}
+MAX_EXTRACTION_ATTEMPTS = 4
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,18 +51,19 @@ def main() -> int:
         for chapter in chapters:
             selected = [(link.character_id, link.character.name) for link in chapter.character_links]
             message = extractor_user_message(db, book, chapter)
-            for attempt in range(2):
+            for attempt in range(MAX_EXTRACTION_ATTEMPTS):
                 output = extractor.extract(message, selected)
                 try:
                     validated = validate_extractor_output(chapter, output)
                     break
-                except ExtractorValidationError:
-                    if attempt:
+                except ExtractorValidationError as exc:
+                    if attempt == MAX_EXTRACTION_ATTEMPTS - 1:
                         raise
                     message += (
-                        "\n\n# 格式纠偏\n上一次输出未通过确定性归属或证据校验。"
-                        "本次每条 evidence 必须包含所属人物精确姓名，并复制正文中至少 16 个连续原文字符；"
-                        "不得转述、概括或改写 evidence。"
+                        f"\n\n# 第 {attempt + 1} 次格式纠偏\n上一次输出未通过确定性校验：{exc}。"
+                        "只保留能在正文中找到逐字证据的 event 和动态字段；找不到就删除该条，宁缺毋滥。"
+                        "每条 evidence 只能直接复制正文中包含所属人物姓名的完整原句或连续原文段落，"
+                        "不得添加‘原文’标签、引号、解释，不得转述、概括或改写。"
                     )
             outputs[chapter.id] = output
             print(
