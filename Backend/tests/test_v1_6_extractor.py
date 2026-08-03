@@ -30,11 +30,11 @@ def _archive_payload(character_name: str) -> dict:
             "character_name": character_name,
             "event_type": "行动",
             "event_text": f"{character_name}在渡口交出钥匙。",
-            "evidence": f"{character_name}在渡口交出了钥匙",
+            "evidence": f"原文：{character_name}在渡口交出了钥匙，决定等候回信。",
         }],
         "dynamic_fields_patch": [{
             "character_name": character_name,
-            "evidence": f"{character_name}在渡口交出了钥匙",
+            "evidence": f"原文：{character_name}在渡口交出了钥匙，决定等候回信。",
             "fields": {"当前行动": "已交出钥匙"},
             "relationships": [],
         }],

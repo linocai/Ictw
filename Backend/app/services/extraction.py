@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -81,10 +82,13 @@ def _validated_evidence(chapter: Chapter, character: Character, raw: Any, *, fie
     evidence = raw.strip()
     normalized_evidence = "".join(normalize_text(evidence).split())
     normalized_draft = "".join(normalize_text(chapter.draft_text).split())
-    if normalized_evidence not in normalized_draft:
-        raise ExtractorValidationError(f"{field} evidence is not a normalized draft excerpt")
     if normalize_text(character.name) not in normalize_text(evidence):
         raise ExtractorValidationError(f"{field} evidence must name its owner")
+    if normalized_evidence not in normalized_draft:
+        longest = SequenceMatcher(None, normalized_evidence, normalized_draft, autojunk=False).find_longest_match()
+        minimum_literal_chars = max(8, min(16, len(normalized_evidence) // 3))
+        if longest.size < minimum_literal_chars:
+            raise ExtractorValidationError(f"{field} evidence lacks a substantial literal draft excerpt")
     return evidence
 
 

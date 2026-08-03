@@ -10,7 +10,7 @@ from app.llm.factory import build_llm_client
 from app.models import Book, Chapter, JobRun
 from app.services.character_memory_rebuild import rebuild_book_character_memory
 from app.services.context import extractor_user_message
-from app.services.extraction import validate_extractor_output
+from app.services.extraction import ExtractorValidationError, validate_extractor_output
 from app.services.personas import get_persona
 
 
@@ -49,8 +49,20 @@ def main() -> int:
         outputs: dict[str, dict] = {}
         for chapter in chapters:
             selected = [(link.character_id, link.character.name) for link in chapter.character_links]
-            output = extractor.extract(extractor_user_message(db, book, chapter), selected)
-            validated = validate_extractor_output(chapter, output)
+            message = extractor_user_message(db, book, chapter)
+            for attempt in range(2):
+                output = extractor.extract(message, selected)
+                try:
+                    validated = validate_extractor_output(chapter, output)
+                    break
+                except ExtractorValidationError:
+                    if attempt:
+                        raise
+                    message += (
+                        "\n\n# 格式纠偏\n上一次输出未通过确定性归属或证据校验。"
+                        "本次每条 evidence 必须包含所属人物精确姓名，并复制正文中至少 16 个连续原文字符；"
+                        "不得转述、概括或改写 evidence。"
+                    )
             outputs[chapter.id] = output
             print(
                 f"validated chapter={chapter.index} events={len(validated.events)} "
