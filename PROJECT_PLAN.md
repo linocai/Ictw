@@ -19,7 +19,7 @@
 - QA 发现并修复两项 macOS 反馈缺陷：新建作品卡的 `3:4` 比例原施加在 label 导致卡片横置，现移至 Button；连接失败时曾同时显示“未连接”和成功文案，现以本次 `NoticeBus` 真实错误取代成功反馈，隔离 `127.0.0.1:1` 已复验。
 - 隔离 QA 与双端回归门禁均已完成；未调用外部模型，Writer／Checker／Extractor 使用无副作用的种子状态核验；发布授权前未驱动当前机器的 `/Applications/ICTW.app`。
 - 2026-08-03 用户授权正式发版：仅 `LinoIMac` 的 Debug/Release 升至 `1.7.0(22)`；客户端状态测试、iOS/macOS Debug 与签名 macOS Release Archive 全绿。Archive 为 `arm64 + x86_64`、Apple Development 签名，包内版本与 Bundle ID 正确。本机 `/Applications/ICTW.app` 已换装、验签并启动 `1.7.0(22)`，旧版备份位于 `/tmp/ictw-app-backup-v170-macos.QcSXpq/ICTW-v1.6.5-build20.app`。发布 ZIP 为 2,290,209 B，SHA-256 `b26f4d379c8040c820b2bb9f25157a5a795a4ee0c10bb636b5b1c09a77863956`；实现提交 `1ff31b9`，annotated tag `v1.7.0-macos-build22` 指向该提交，main、tag 与 GitHub Release <https://github.com/linocai/Ictw/releases/tag/v1.7.0-macos-build22> 均已发布，云端资产 digest 与本地一致。Backend 与 iOS 无发布动作。
-- 2026-08-03 双端发版产物：iOS IPA 2,532,604 B，SHA-256 `f41ca04a1df5e6b427c0732090761c31e08b17d294edfb095f75d21b62fb36a2`；macOS ZIP 2,290,210 B，SHA-256 `57fe07bccb0aa56f690ea099b8f0a8c65ffb41392553aea8683e6fb85cd55f8f`。本机旧 macOS App 备份位于 `/tmp/ictw-app-backup-v171.Tif6J5/ICTW-v1.7.0-build22.app`。
+- 2026-08-03 双端发版产物：iOS IPA 2,532,604 B，SHA-256 `f41ca04a1df5e6b427c0732090761c31e08b17d294edfb095f75d21b62fb36a2`；macOS ZIP 2,290,210 B，SHA-256 `57fe07bccb0aa56f690ea099b8f0a8c65ffb41392553aea8683e6fb85cd55f8f`。双端 Archive、IPA 与 ZIP 固定保留在 `/Users/linotsai/Downloads/ICTW-v1.7.1-build23`；本机旧 macOS App 备份位于 `/tmp/ictw-app-backup-v171.Tif6J5/ICTW-v1.7.0-build22.app`。
 - 下一步：无进行中的版本施工；等待用户安装 iOS 包并实测后续章节的 Extractor 结果。
 
 ## v1.7 iOS 完成记录（凝缩保留）
