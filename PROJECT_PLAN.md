@@ -4,13 +4,14 @@
 
 ## 当前状态
 
+- `v1.7.1(23)` 双端补丁发版已完成：iOS 与 macOS 的 Debug/Release 均统一为 `1.7.1(23)`；客户端状态测试、双端 Debug、双端签名 Release Archive、包内版本／Bundle ID／架构／签名复核均通过。iOS 已导出本机开发签名 IPA，未上传 App Store Connect；macOS 已完成通用架构 Archive、正式 App 换装并启动。统一 tag 与 GitHub Release 为 `v1.7.1`，公开资产仅含 macOS ZIP。
 - Backend `v1.7.1` 人物记忆快修已完成并部署。根因是 v1.6 Extractor 只收到无姓名映射的 UUID 白名单，模型无法把正文姓名可靠绑定到人物 ID，而后端只校验 ID 在白名单内便直接落库；前端只是原样展示，不是故障源。
 - 现行合约：Extractor 只输出白名单内精确人物姓名，后端机械映射 UUID；人物事件／动态字段必须有可定位的正文证据，事件文本必须明确所属人物；事件类型、中文动态字段和关系键固定化。代词证据只在所属人物出现在该证据或其前置近邻正文时接受，非法条目整次回滚。
 - 单书重建采用“在线演练生成 0600 验证包 → 章节／Bible／人物状态指纹复核 → 停服原样原子提交”，正式落库不再二次调用模型。生产备份为 `/opt/linoi/backups/20260803-152134`；《骁扬》8 个已定稿章节已重建为 54 条事件、22 条字段补丁，10 人物中 8 人有动态更新。
-- 最终门禁：Backend 97 项测试、compileall、`git diff --check`、Alembic `20260801_0008`、内外网 `1.7.1` 健康、SQLite integrity／foreign keys 全绿。54 条事件错挂、非法事件类型、非法动态／补丁 key、章节记忆人物错挂均为 0；正文、Bible、标题、大事记、摘要与备份逐字一致，另外两本书的业务表哈希全部一致。无 migration、无客户端或 App 改动。
+- 最终门禁：Backend 97 项测试、compileall、`git diff --check`、Alembic `20260801_0008`、内外网 `1.7.1` 健康、SQLite integrity／foreign keys 全绿。54 条事件错挂、非法事件类型、非法动态／补丁 key、章节记忆人物错挂均为 0；正文、Bible、标题、大事记、摘要与备份逐字一致，另外两本书的业务表哈希全部一致。Backend 快修无 migration，随后仅改双端版本号完成 `1.7.1(23)` 客户端发版。
 - 上一目标完成记录：`LinoIMac` 的原生 SwiftUI 前端已升级为 iOS `v1.7.0(22)` 已验收的“纸与墨”体系；代码、自动回归、正式 Archive、本机换装、Git Tag 与 GitHub Release 全部完成，发布号为 `1.7.0(22)`。
 - 视觉事实源仅为仓库内的 iOS 成品：`App/LinoI/LinoTheme.swift`、`LinoComponents.swift`、`NoticeBus.swift` 及 Shelf／Workspace／Characters／Settings+Agent／Editor／Reader 页面；无新的外部设计稿。
-- macOS Debug/Release 与本机正式 App 当前均为 `1.7.0(22)`；`LinoI` Debug/Release 保持既有 `1.7.0(22)`。Backend 与 Alembic head `20260801_0008` 不在本轮范围。
+- macOS Debug/Release 与本机正式 App、`LinoI` Debug/Release 当前均为 `1.7.1(23)`；Backend 为 `1.7.1`，Alembic head 保持 `20260801_0008`。
 - 用户工作树不干净：`.learnings/ERRORS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/` 均为用户资产；不得查看以外改动、暂存、覆盖、回退或纳入验收产物。
 - 本轮代码变更：`LinoTheme` macOS 动态纸墨 token／阅读 token、`NoticeBus` macOS Toast 与 `App/LinoIMac` 的窗口 chrome、书架、三栏、人物、Agent、编辑器纸面层级；iOS 条件路径、业务 Store、导出与命令路由未改。
 - 已验证：`Tests/run_client_state_tests.sh`、iOS Debug build、macOS Debug build 和 `git diff --check` 通过；禁止路径（Backend、工程设置、iOS 页面、`MacCommandBus`、`MacExportSaver`）零 diff，`LinoIMac` 仍为 `1.6.5(20)`。
@@ -18,7 +19,8 @@
 - QA 发现并修复两项 macOS 反馈缺陷：新建作品卡的 `3:4` 比例原施加在 label 导致卡片横置，现移至 Button；连接失败时曾同时显示“未连接”和成功文案，现以本次 `NoticeBus` 真实错误取代成功反馈，隔离 `127.0.0.1:1` 已复验。
 - 隔离 QA 与双端回归门禁均已完成；未调用外部模型，Writer／Checker／Extractor 使用无副作用的种子状态核验；发布授权前未驱动当前机器的 `/Applications/ICTW.app`。
 - 2026-08-03 用户授权正式发版：仅 `LinoIMac` 的 Debug/Release 升至 `1.7.0(22)`；客户端状态测试、iOS/macOS Debug 与签名 macOS Release Archive 全绿。Archive 为 `arm64 + x86_64`、Apple Development 签名，包内版本与 Bundle ID 正确。本机 `/Applications/ICTW.app` 已换装、验签并启动 `1.7.0(22)`，旧版备份位于 `/tmp/ictw-app-backup-v170-macos.QcSXpq/ICTW-v1.6.5-build20.app`。发布 ZIP 为 2,290,209 B，SHA-256 `b26f4d379c8040c820b2bb9f25157a5a795a4ee0c10bb636b5b1c09a77863956`；实现提交 `1ff31b9`，annotated tag `v1.7.0-macos-build22` 指向该提交，main、tag 与 GitHub Release <https://github.com/linocai/Ictw/releases/tag/v1.7.0-macos-build22> 均已发布，云端资产 digest 与本地一致。Backend 与 iOS 无发布动作。
-- 下一步：无进行中的版本施工；等待用户刷新人物页并实测后续章节的 Extractor 结果。
+- 2026-08-03 双端发版产物：iOS IPA 2,532,604 B，SHA-256 `f41ca04a1df5e6b427c0732090761c31e08b17d294edfb095f75d21b62fb36a2`；macOS ZIP 2,290,210 B，SHA-256 `57fe07bccb0aa56f690ea099b8f0a8c65ffb41392553aea8683e6fb85cd55f8f`。本机旧 macOS App 备份位于 `/tmp/ictw-app-backup-v171.Tif6J5/ICTW-v1.7.0-build22.app`。
+- 下一步：无进行中的版本施工；等待用户安装 iOS 包并实测后续章节的 Extractor 结果。
 
 ## v1.7 iOS 完成记录（凝缩保留）
 
