@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -21,6 +22,15 @@ class UnselectedCharacterReference(ExtractorValidationError):
 
 
 ARCHIVE_LIST_FIELDS = ("state_changes", "unresolved_items", "atomic_memories")
+
+
+@dataclass(frozen=True)
+class ValidatedExtractorOutput:
+    headline: str
+    long_summary: str
+    archive_values: dict[str, list[dict[str, str]]]
+    events: list[tuple[str, str, str]]
+    patches_by_character: dict[str, dict[str, str | None]]
 
 
 def _validated_archive_items(
@@ -69,8 +79,10 @@ def _validated_evidence(chapter: Chapter, character: Character, raw: Any, *, fie
     if not isinstance(raw, str) or not raw.strip():
         raise ExtractorValidationError(f"{field} evidence is required")
     evidence = raw.strip()
-    if evidence not in chapter.draft_text:
-        raise ExtractorValidationError(f"{field} evidence is not an exact draft excerpt")
+    normalized_evidence = "".join(normalize_text(evidence).split())
+    normalized_draft = "".join(normalize_text(chapter.draft_text).split())
+    if normalized_evidence not in normalized_draft:
+        raise ExtractorValidationError(f"{field} evidence is not a normalized draft excerpt")
     if normalize_text(character.name) not in normalize_text(evidence):
         raise ExtractorValidationError(f"{field} evidence must name its owner")
     return evidence
@@ -97,7 +109,8 @@ def _validated_dynamic_fields(
     return result
 
 
-def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:
+def validate_extractor_output(chapter: Chapter, output: dict[str, Any]) -> ValidatedExtractorOutput:
+    """Validate and normalize an Extractor result without mutating the database."""
     if not isinstance(output, dict):
         raise ExtractorValidationError("Extractor output must be an object")
     headline = output.get("headline")
@@ -154,11 +167,24 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
         fields = _validated_dynamic_fields(item.get("fields"), owner=character, character_map=character_map)
         valid_patches_by_character.setdefault(character_id, {}).update(fields)
 
+    return ValidatedExtractorOutput(
+        headline=headline.strip(),
+        long_summary=long_summary.strip(),
+        archive_values=archive_values,
+        events=valid_events,
+        patches_by_character=valid_patches_by_character,
+    )
+
+
+def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:
+    validated = validate_extractor_output(chapter, output)
+    character_map = {link.character_id: link.character for link in chapter.character_links}
+
     # Replacement and all extracted chapter metadata are committed by the caller
     # in one transaction. A validation error above leaves existing events intact.
     db.execute(delete(CharacterEvent).where(CharacterEvent.chapter_id == chapter.id))
     added_event_ids: list[str] = []
-    for character_id, event_type, event_text in valid_events:
+    for character_id, event_type, event_text in validated.events:
         event = CharacterEvent(
             book_id=chapter.book_id,
             chapter_id=chapter.id,
@@ -184,7 +210,7 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
 
     updated_ids: list[str] = []
     patched_character_ids: set[str] = set()
-    for character_id, fields in valid_patches_by_character.items():
+    for character_id, fields in validated.patches_by_character.items():
         character: Character = character_map[character_id]
         current = dict(character.dynamic_fields or {})
         old_row = existing_patches.get(character_id)
@@ -231,11 +257,10 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
             )
         )
 
-    canonical_summary = long_summary.strip()
-    chapter.headline = headline.strip()
-    chapter.long_summary = canonical_summary
-    chapter.state_changes = archive_values["state_changes"]
-    chapter.unresolved_items = archive_values["unresolved_items"]
-    chapter.atomic_memories = archive_values["atomic_memories"]
+    chapter.headline = validated.headline
+    chapter.long_summary = validated.long_summary
+    chapter.state_changes = validated.archive_values["state_changes"]
+    chapter.unresolved_items = validated.archive_values["unresolved_items"]
+    chapter.atomic_memories = validated.archive_values["atomic_memories"]
     chapter.status = "finalized"
     return sorted(set(updated_ids)), added_event_ids
