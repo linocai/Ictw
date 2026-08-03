@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-- 现行目标：将 `LinoIMac` 的原生 SwiftUI 前端升级为 iOS `v1.7.0(22)` 已验收的“纸与墨”体系；代码、自动回归、正式 Archive 与本机换装已完成，目标发布号为 `1.7.0(22)`，待 Git Tag 与 GitHub Release。
+- 现行目标：`LinoIMac` 的原生 SwiftUI 前端已升级为 iOS `v1.7.0(22)` 已验收的“纸与墨”体系；代码、自动回归、正式 Archive、本机换装、Git Tag 与 GitHub Release 全部完成，发布号为 `1.7.0(22)`。
 - 视觉事实源仅为仓库内的 iOS 成品：`App/LinoI/LinoTheme.swift`、`LinoComponents.swift`、`NoticeBus.swift` 及 Shelf／Workspace／Characters／Settings+Agent／Editor／Reader 页面；无新的外部设计稿。
 - macOS Debug/Release 与本机正式 App 当前均为 `1.7.0(22)`；`LinoI` Debug/Release 保持既有 `1.7.0(22)`。Backend 与 Alembic head `20260801_0008` 不在本轮范围。
 - 用户工作树不干净：`.learnings/ERRORS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/` 均为用户资产；不得查看以外改动、暂存、覆盖、回退或纳入验收产物。
@@ -13,8 +13,8 @@
 - 隔离 QA 使用独立 bundle、临时 token、仅绑定 `127.0.0.1` 的临时 SQLite 完成，不读取既有 Keychain／数据；已实测浅／深书架、三栏与最小断点、长名称、人物／书设定／Agent、旧正文保留失败与 Checker 输入、reader day/sepia/night／字号／导航／Esc、新建与设置 sheet、File 菜单、连接失败与恢复，以及原生 `NSSavePanel` 打开后取消。结果留在 `/tmp/ictw-visualqa.qyoSop/screenshots`。
 - QA 发现并修复两项 macOS 反馈缺陷：新建作品卡的 `3:4` 比例原施加在 label 导致卡片横置，现移至 Button；连接失败时曾同时显示“未连接”和成功文案，现以本次 `NoticeBus` 真实错误取代成功反馈，隔离 `127.0.0.1:1` 已复验。
 - 隔离 QA 与双端回归门禁均已完成；未调用外部模型，Writer／Checker／Extractor 使用无副作用的种子状态核验；发布授权前未驱动当前机器的 `/Applications/ICTW.app`。
-- 2026-08-03 用户授权正式发版：仅 `LinoIMac` 的 Debug/Release 升至 `1.7.0(22)`；客户端状态测试、iOS/macOS Debug 与签名 macOS Release Archive 全绿。Archive 为 `arm64 + x86_64`、Apple Development 签名，包内版本与 Bundle ID 正确。本机 `/Applications/ICTW.app` 已换装、验签并启动 `1.7.0(22)`，旧版备份位于 `/tmp/ictw-app-backup-v170-macos.QcSXpq/ICTW-v1.6.5-build20.app`。发布 ZIP 为 2,290,209 B，SHA-256 `b26f4d379c8040c820b2bb9f25157a5a795a4ee0c10bb636b5b1c09a77863956`；Backend 与 iOS 无发布动作。
-- 下一步：提交受控改动，创建不与既有 iOS tag 冲突的 `v1.7.0-macos-build22`，推送并发布 GitHub Release。
+- 2026-08-03 用户授权正式发版：仅 `LinoIMac` 的 Debug/Release 升至 `1.7.0(22)`；客户端状态测试、iOS/macOS Debug 与签名 macOS Release Archive 全绿。Archive 为 `arm64 + x86_64`、Apple Development 签名，包内版本与 Bundle ID 正确。本机 `/Applications/ICTW.app` 已换装、验签并启动 `1.7.0(22)`，旧版备份位于 `/tmp/ictw-app-backup-v170-macos.QcSXpq/ICTW-v1.6.5-build20.app`。发布 ZIP 为 2,290,209 B，SHA-256 `b26f4d379c8040c820b2bb9f25157a5a795a4ee0c10bb636b5b1c09a77863956`；实现提交 `1ff31b9`，annotated tag `v1.7.0-macos-build22` 指向该提交，main、tag 与 GitHub Release <https://github.com/linocai/Ictw/releases/tag/v1.7.0-macos-build22> 均已发布，云端资产 digest 与本地一致。Backend 与 iOS 无发布动作。
+- 下一步：无进行中的版本施工；等待用户实测反馈。
 
 ## v1.7 iOS 完成记录（凝缩保留）
 
@@ -91,7 +91,7 @@
 
 ### Phase 5 — 双端回归、视觉签收与待授权发布
 
-状态：发布中。自动回归与隔离视觉 QA 已覆盖核心书架、三栏、inspector／editor、reader、sheet、菜单、连接失败和 `NSSavePanel`；外部模型链以无副作用种子状态核验。用户已授权版本、Archive、换装、tag 与发布，当前只剩 Git Tag 与 GitHub Release。
+状态：完成。自动回归与隔离视觉 QA 已覆盖核心书架、三栏、inspector／editor、reader、sheet、菜单、连接失败和 `NSSavePanel`；外部模型链以无副作用种子状态核验。版本、Archive、换装、tag 与 GitHub Release 已全部完成。
 
 - 先完成下列构建和客户端状态回归，再做实际 macOS 交互与截图矩阵；不因视觉通过跳过 iOS shared-file 回归。
 
