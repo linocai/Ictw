@@ -272,6 +272,50 @@ def test_extractor_rejects_evidence_that_does_not_name_the_assigned_character(
     assert client.get(f"/api/v1/characters/{lin['id']}", headers=auth_headers).json()["events"] == []
 
 
+def test_extractor_accepts_pronoun_evidence_when_preceding_context_names_owner(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林骁扬"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "折返", "character_links": [{"character_id": character["id"]}]},
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": "林骁扬在门边停住脚步。随后，他转身返回。"},
+    ).raise_for_status()
+    payload = {
+        "headline": "林骁扬折返。",
+        "long_summary": "林骁扬在门边停步后折返。",
+        "state_changes": [],
+        "unresolved_items": [],
+        "atomic_memories": [],
+        "character_events": [{
+            "character_name": "林骁扬",
+            "event_type": "行动",
+            "event_text": "林骁扬停步后转身返回。",
+            "evidence": "随后，他转身返回。",
+        }],
+        "dynamic_fields_patch": [{
+            "character_name": "林骁扬",
+            "evidence": "随后，他转身返回。",
+            "fields": {"当前行动": "转身返回"},
+            "relationships": [],
+        }],
+    }
+    client.app.dependency_overrides[get_extractor_client] = lambda: RecordingExtractor(payload)
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    after = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()
+    assert [event["event_text"] for event in after["events"]] == ["林骁扬停步后转身返回。"]
+    assert after["dynamic_fields"] == {"当前行动": "转身返回"}
+
+
 def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
     client, auth_headers, wait_for_terminal
 ):

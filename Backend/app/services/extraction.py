@@ -82,13 +82,26 @@ def _validated_evidence(chapter: Chapter, character: Character, raw: Any, *, fie
     evidence = raw.strip()
     normalized_evidence = "".join(normalize_text(evidence).split())
     normalized_draft = "".join(normalize_text(chapter.draft_text).split())
-    if normalize_text(character.name) not in normalize_text(evidence):
-        raise ExtractorValidationError(f"{field} evidence must name its owner")
-    if normalized_evidence not in normalized_draft:
+    match_start = normalized_draft.find(normalized_evidence)
+    match_size = len(normalized_evidence)
+    if match_start < 0:
         longest = SequenceMatcher(None, normalized_evidence, normalized_draft, autojunk=False).find_longest_match()
         minimum_literal_chars = max(8, min(16, len(normalized_evidence) // 3))
         if longest.size < minimum_literal_chars:
             raise ExtractorValidationError(f"{field} evidence lacks a substantial literal draft excerpt")
+        match_start = longest.b
+        match_size = longest.size
+
+    owner_name = "".join(normalize_text(character.name).split())
+    if owner_name not in normalized_evidence:
+        # Fiction commonly names a character immediately before a quoted action
+        # and then uses a pronoun in the evidence sentence.  Accept that natural
+        # form, but only when the exact owner occurs shortly *before* the matched
+        # excerpt.  A later, nearby occurrence must not retroactively reassign an
+        # earlier action to the wrong character.
+        preceding_context = normalized_draft[max(0, match_start - 96):match_start]
+        if owner_name not in preceding_context:
+            raise ExtractorValidationError(f"{field} evidence context must identify its owner")
     return evidence
 
 
