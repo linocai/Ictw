@@ -49,7 +49,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
-- Backend `v1.7.1` 人物记忆快修已完成本地实现与 96 项测试，尚未部署；无 migration。生产执行必须先备份并停服，部署后只允许原子重建《骁扬》已完成 8 章的 Extractor 人物记忆，正文、Bible、标题摘要与另两本书不得改动。
+- Backend `v1.7.1` 人物记忆快修已于 2026-08-03 部署，无 migration；《骁扬》8 个已定稿章节已通过 0600 验证包与指纹门禁原子重建为 54 条人物事件、22 条字段补丁。正文、Bible、标题、大事记、摘要保持不变，另两本书业务表哈希不变；生产备份在 `/opt/linoi/backups/20260803-152134`。
 - macOS `v1.7.0(22)` 已于 2026-08-03 完成「纸与墨」视觉升级、双端回归、正式通用架构 Archive、本机正式 App 换装、`v1.7.0-macos-build22` tag 与 GitHub Release；Backend、Alembic 与 iOS 无发布动作。
 - `v1.7.0(22)` 已于 2026-08-02 修复 iOS 书架“新建书”卡片在网格换行时被压缩的问题，完成独立 Review、正式 Archive、本机开发签名 IPA、`v1.7.0-build22` tag 与 GitHub Release；市场版本仍为 `1.7.0`，Backend、Alembic 与 macOS App 未变更；未上传 App Store Connect 或安装设备。
 - `v1.7.0(21)` 已于 2026-08-02 完成 iOS「纸与墨」原生视觉升级、全新 App Icon、正式 Archive、本机开发签名 IPA、tag 与 GitHub Release；Backend、Alembic 与 macOS App 未变更，仍维持 `v1.6.5(20)`；未上传 App Store Connect 或安装设备。

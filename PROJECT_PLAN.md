@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- 现行目标：Backend `v1.7.1` 人物记忆快修。现网《骁扬》28 条人物事件中至少 13 条确定错挂；根因是 v1.6 Extractor 只收到无姓名映射的 UUID 白名单，模型无法把正文姓名可靠绑定到人物 ID，而后端只校验 ID 在白名单内便直接落库。前端只是原样展示，污染会继续进入 Memory Selector 与 Writer。
-- 快修代码已完成：Extractor 只输出精确人物姓名，后端机械映射 UUID；人物事件／动态字段必须提供包含所属人物的正文原文证据；事件类型、中文动态字段和人物关系键固定化；非法归属整次回滚。新增单书原子重建工具，只替换 Extractor 拥有的人物事件、动态字段及带人物归属的章节记忆，保留正文、Bible、标题和章节摘要。
-- 本地门禁：Backend 96 项、Python compileall、唯一 Alembic head `20260801_0008` 与 `git diff --check` 全绿；无 migration，客户端与 App 版本不变。生产 Backend 和《骁扬》数据尚未改动。
-- 下一步：在现网数据库上运行不落库的真实 Extractor 合约试跑；通过后停服备份、部署 Backend `1.7.1`，再按章节顺序原子重建《骁扬》已完成的 8 章人物记忆并复核。
+- Backend `v1.7.1` 人物记忆快修已完成并部署。根因是 v1.6 Extractor 只收到无姓名映射的 UUID 白名单，模型无法把正文姓名可靠绑定到人物 ID，而后端只校验 ID 在白名单内便直接落库；前端只是原样展示，不是故障源。
+- 现行合约：Extractor 只输出白名单内精确人物姓名，后端机械映射 UUID；人物事件／动态字段必须有可定位的正文证据，事件文本必须明确所属人物；事件类型、中文动态字段和关系键固定化。代词证据只在所属人物出现在该证据或其前置近邻正文时接受，非法条目整次回滚。
+- 单书重建采用“在线演练生成 0600 验证包 → 章节／Bible／人物状态指纹复核 → 停服原样原子提交”，正式落库不再二次调用模型。生产备份为 `/opt/linoi/backups/20260803-152134`；《骁扬》8 个已定稿章节已重建为 54 条事件、22 条字段补丁，10 人物中 8 人有动态更新。
+- 最终门禁：Backend 97 项测试、compileall、`git diff --check`、Alembic `20260801_0008`、内外网 `1.7.1` 健康、SQLite integrity／foreign keys 全绿。54 条事件错挂、非法事件类型、非法动态／补丁 key、章节记忆人物错挂均为 0；正文、Bible、标题、大事记、摘要与备份逐字一致，另外两本书的业务表哈希全部一致。无 migration、无客户端或 App 改动。
 - 上一目标完成记录：`LinoIMac` 的原生 SwiftUI 前端已升级为 iOS `v1.7.0(22)` 已验收的“纸与墨”体系；代码、自动回归、正式 Archive、本机换装、Git Tag 与 GitHub Release 全部完成，发布号为 `1.7.0(22)`。
 - 视觉事实源仅为仓库内的 iOS 成品：`App/LinoI/LinoTheme.swift`、`LinoComponents.swift`、`NoticeBus.swift` 及 Shelf／Workspace／Characters／Settings+Agent／Editor／Reader 页面；无新的外部设计稿。
 - macOS Debug/Release 与本机正式 App 当前均为 `1.7.0(22)`；`LinoI` Debug/Release 保持既有 `1.7.0(22)`。Backend 与 Alembic head `20260801_0008` 不在本轮范围。
@@ -18,7 +18,7 @@
 - QA 发现并修复两项 macOS 反馈缺陷：新建作品卡的 `3:4` 比例原施加在 label 导致卡片横置，现移至 Button；连接失败时曾同时显示“未连接”和成功文案，现以本次 `NoticeBus` 真实错误取代成功反馈，隔离 `127.0.0.1:1` 已复验。
 - 隔离 QA 与双端回归门禁均已完成；未调用外部模型，Writer／Checker／Extractor 使用无副作用的种子状态核验；发布授权前未驱动当前机器的 `/Applications/ICTW.app`。
 - 2026-08-03 用户授权正式发版：仅 `LinoIMac` 的 Debug/Release 升至 `1.7.0(22)`；客户端状态测试、iOS/macOS Debug 与签名 macOS Release Archive 全绿。Archive 为 `arm64 + x86_64`、Apple Development 签名，包内版本与 Bundle ID 正确。本机 `/Applications/ICTW.app` 已换装、验签并启动 `1.7.0(22)`，旧版备份位于 `/tmp/ictw-app-backup-v170-macos.QcSXpq/ICTW-v1.6.5-build20.app`。发布 ZIP 为 2,290,209 B，SHA-256 `b26f4d379c8040c820b2bb9f25157a5a795a4ee0c10bb636b5b1c09a77863956`；实现提交 `1ff31b9`，annotated tag `v1.7.0-macos-build22` 指向该提交，main、tag 与 GitHub Release <https://github.com/linocai/Ictw/releases/tag/v1.7.0-macos-build22> 均已发布，云端资产 digest 与本地一致。Backend 与 iOS 无发布动作。
-- 下一步：无进行中的版本施工；等待用户实测反馈。
+- 下一步：无进行中的版本施工；等待用户刷新人物页并实测后续章节的 Extractor 结果。
 
 ## v1.7 iOS 完成记录（凝缩保留）
 
