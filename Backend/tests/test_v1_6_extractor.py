@@ -5,6 +5,7 @@ from app.llm.factory import get_extractor_client
 from app.services.character_memory_rebuild import rebuild_book_character_memory
 from app.services.context import memory_candidates
 from app.services.personas import PROGRAM_PROTOCOLS
+from scripts.rebuild_book_character_memory import load_validated_bundle, write_validated_bundle
 
 
 class RecordingExtractor:
@@ -317,7 +318,7 @@ def test_extractor_accepts_pronoun_evidence_when_preceding_context_names_owner(
 
 
 def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
-    client, auth_headers, wait_for_terminal
+    client, auth_headers, wait_for_terminal, tmp_path
 ):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     character = client.post(
@@ -347,12 +348,19 @@ def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
     ).raise_for_status()
 
     from app import db as db_module
-    from app.models import Book
+    from app.models import Book, Chapter
 
     db = db_module.SessionLocal()
     try:
         output = bind_extractor_character_names(_archive_payload("林夕"), [(character["id"], "林夕")])
-        stats = rebuild_book_character_memory(db, db.get(Book, book["id"]), {chapter["id"]: output})
+        orm_book = db.get(Book, book["id"])
+        orm_chapter = db.get(Chapter, chapter["id"])
+        bundle_path = tmp_path / "validated-rebuild.json"
+        write_validated_bundle(str(bundle_path), orm_book, [orm_chapter], {chapter["id"]: output})
+        assert bundle_path.stat().st_mode & 0o777 == 0o600
+        loaded_outputs = load_validated_bundle(str(bundle_path), orm_book, [orm_chapter])
+        assert loaded_outputs == {chapter["id"]: output}
+        stats = rebuild_book_character_memory(db, orm_book, loaded_outputs)
         db.commit()
     finally:
         db.close()
