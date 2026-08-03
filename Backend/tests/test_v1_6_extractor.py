@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from app.agents.extractor import ExtractorAgent, extractor_schema
+from app.agents.extractor import ExtractorAgent, bind_extractor_character_names, extractor_schema
 from app.llm.factory import get_extractor_client
+from app.services.character_memory_rebuild import rebuild_book_character_memory
 from app.services.context import memory_candidates
 from app.services.personas import PROGRAM_PROTOCOLS
 
@@ -18,25 +19,37 @@ class RecordingExtractor:
         return self.payload
 
 
-def _archive_payload(character_id: str) -> dict:
+def _archive_payload(character_name: str) -> dict:
     return {
         "headline": "关键落点。",
         "long_summary": "正文中主角在渡口交出了钥匙，并决定等候回信。",
-        "state_changes": [{"text": "主角不再持有钥匙。", "kind": "possession", "character_id": character_id}],
-        "unresolved_items": [{"text": "回信尚未抵达。", "kind": "pending"}],
-        "atomic_memories": [{"text": "钥匙已交给渡口守人。", "kind": "event", "character_id": character_id}],
-        "character_events": [{"character_id": character_id, "event_text": "在渡口交出钥匙"}],
-        "dynamic_fields_patch": [{"character_id": character_id, "fields": {"钥匙": "已交出"}}],
+        "state_changes": [{"text": f"{character_name}不再持有钥匙。", "kind": "possession", "character_name": character_name}],
+        "unresolved_items": [{"text": "回信尚未抵达。", "kind": "pending", "character_name": None}],
+        "atomic_memories": [{"text": f"{character_name}已把钥匙交给渡口守人。", "kind": "event", "character_name": character_name}],
+        "character_events": [{
+            "character_name": character_name,
+            "event_type": "行动",
+            "event_text": f"{character_name}在渡口交出钥匙。",
+            "evidence": f"{character_name}在渡口交出了钥匙",
+        }],
+        "dynamic_fields_patch": [{
+            "character_name": character_name,
+            "evidence": f"{character_name}在渡口交出了钥匙",
+            "fields": {"当前行动": "已交出钥匙"},
+            "relationships": [],
+        }],
     }
 
 
 def test_extractor_appends_fixed_protocol_and_schema_has_v16_archive_fields():
-    llm = RecordingExtractor(_archive_payload("character"))
-    ExtractorAgent(llm, "可编辑 Extractor 人格").extract("最终正文", ["character"])
+    llm = RecordingExtractor(_archive_payload("林夕"))
+    output = ExtractorAgent(llm, "可编辑 Extractor 人格").extract("最终正文", [("character", "林夕")])
     assert llm.system == f"可编辑 Extractor 人格\n\n{PROGRAM_PROTOCOLS['extractor']}"
     assert {"long_summary", "state_changes", "unresolved_items", "atomic_memories"} <= set(llm.schema["properties"])
     assert "summary" not in llm.schema["properties"]
     assert extractor_schema([])["properties"]["character_events"].get("maxItems") == 0
+    assert output["character_events"][0]["character_id"] == "character"
+    assert "character_name" not in output["character_events"][0]
 
 
 def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
@@ -57,7 +70,7 @@ def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
         f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers,
         json={"draft_text": "林夕在渡口交出了钥匙，决定等候回信。"},
     ).raise_for_status()
-    llm = RecordingExtractor(_archive_payload(character["id"]))
+    llm = RecordingExtractor(_archive_payload("林夕"))
     client.app.dependency_overrides[get_extractor_client] = lambda: llm
 
     client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
@@ -85,7 +98,7 @@ def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
     recalled = {block.id: block for block in blocks}
     summary_block = recalled[f"chapter:{chapter['id']}:summary"]
     assert summary_block.memory_type == "summary"
-    assert summary_block.text.endswith(_archive_payload(character["id"])["long_summary"])
+    assert summary_block.text.endswith(_archive_payload("林夕")["long_summary"])
     assert f"chapter:{chapter['id']}:long_summary" not in recalled
     assert recalled[f"chapter:{chapter['id']}:state_change:1"].chapter_index == 1
     assert recalled[f"chapter:{chapter['id']}:unresolved_item:1"].memory_type == "unresolved_item"
@@ -103,7 +116,7 @@ def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
     assert any(block.text.endswith("钥匙已沉入河底。") for block in edited_blocks)
 
 
-def test_extractor_discards_unselected_archive_character_and_rolls_back_on_bad_archive(
+def test_extractor_keeps_chapter_level_archive_and_rolls_back_on_bad_archive(
     client, auth_headers, wait_for_terminal
 ):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
@@ -113,17 +126,24 @@ def test_extractor_discards_unselected_archive_character_and_rolls_back_on_bad_a
         headers=auth_headers,
         json={"user_prompt": "行动", "character_links": [{"character_id": selected["id"]}]},
     ).json()
-    client.post(f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "甲完成行动。"})
-    output = _archive_payload(selected["id"])
-    output["atomic_memories"].append({"text": "未知人物的事实", "character_id": "unknown"})
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": "甲在渡口交出了钥匙，决定等候回信。"},
+    )
+    output = _archive_payload("甲")
+    output["atomic_memories"].append({"text": "回信仍未抵达。", "character_name": None})
     client.app.dependency_overrides[get_extractor_client] = lambda: RecordingExtractor(output)
     client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
     archived = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
-    assert [item["text"] for item in archived["atomic_memories"]] == ["钥匙已交给渡口守人。"]
+    assert [item["text"] for item in archived["atomic_memories"]] == [
+        "甲已把钥匙交给渡口守人。",
+        "回信仍未抵达。",
+    ]
 
     client.post(f"/api/v1/chapters/{chapter['id']}/reopen", headers=auth_headers).raise_for_status()
-    bad_output = _archive_payload(selected["id"])
+    bad_output = _archive_payload("甲")
     bad_output["state_changes"] = [{"text": 3}]
     client.app.dependency_overrides[get_extractor_client] = lambda: RecordingExtractor(bad_output)
     client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
@@ -132,3 +152,171 @@ def test_extractor_discards_unselected_archive_character_and_rolls_back_on_bad_a
     after_failure = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert after_failure["status"] == "draft_ready"
     assert after_failure["atomic_memories"] == archived["atomic_memories"]
+
+
+def test_extractor_maps_multi_character_names_without_exposing_ids_to_model(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    lin = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林骁扬"}
+    ).json()
+    zhou = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "周蕴文"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={
+            "user_prompt": "递伞",
+            "character_links": [{"character_id": lin["id"]}, {"character_id": zhou["id"]}],
+        },
+    ).json()
+    draft = "林骁扬把伞递给周蕴文。周蕴文接过伞并向林骁扬道谢。"
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": draft}
+    ).raise_for_status()
+    payload = {
+        "headline": "林骁扬递伞。",
+        "long_summary": draft,
+        "state_changes": [
+            {"text": "林骁扬主动帮助周蕴文。", "kind": "关系", "character_name": "林骁扬"}
+        ],
+        "unresolved_items": [],
+        "atomic_memories": [
+            {"text": "周蕴文接受林骁扬递来的伞。", "kind": "事件", "character_name": "周蕴文"}
+        ],
+        "character_events": [
+            {
+                "character_name": "林骁扬",
+                "event_type": "行动",
+                "event_text": "林骁扬把伞递给周蕴文。",
+                "evidence": "林骁扬把伞递给周蕴文。",
+            },
+            {
+                "character_name": "周蕴文",
+                "event_type": "行动",
+                "event_text": "周蕴文接过伞并向林骁扬道谢。",
+                "evidence": "周蕴文接过伞并向林骁扬道谢。",
+            },
+        ],
+        "dynamic_fields_patch": [
+            {
+                "character_name": "林骁扬",
+                "evidence": "林骁扬把伞递给周蕴文。",
+                "fields": {"当前行动": "给周蕴文递伞"},
+                "relationships": [{"other_character_name": "周蕴文", "status": "主动帮助"}],
+            },
+            {
+                "character_name": "周蕴文",
+                "evidence": "周蕴文接过伞并向林骁扬道谢。",
+                "fields": {"情绪状态": "感谢"},
+                "relationships": [{"other_character_name": "林骁扬", "status": "接受帮助"}],
+            },
+        ],
+    }
+    llm = RecordingExtractor(payload)
+    client.app.dependency_overrides[get_extractor_client] = lambda: llm
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+
+    lin_after = client.get(f"/api/v1/characters/{lin['id']}", headers=auth_headers).json()
+    zhou_after = client.get(f"/api/v1/characters/{zhou['id']}", headers=auth_headers).json()
+    assert [event["event_text"] for event in lin_after["events"]] == ["林骁扬把伞递给周蕴文。"]
+    assert [event["event_text"] for event in zhou_after["events"]] == ["周蕴文接过伞并向林骁扬道谢。"]
+    assert lin_after["dynamic_fields"] == {"当前行动": "给周蕴文递伞", "与周蕴文关系": "主动帮助"}
+    assert zhou_after["dynamic_fields"] == {"情绪状态": "感谢", "与林骁扬关系": "接受帮助"}
+    name_schema = llm.schema["properties"]["character_events"]["items"]["properties"]["character_name"]
+    assert set(name_schema["enum"]) == {"林骁扬", "周蕴文"}
+    assert lin["id"] not in llm.user and zhou["id"] not in llm.user
+    assert "林骁扬" in llm.user and "周蕴文" in llm.user
+
+
+def test_extractor_rejects_evidence_that_does_not_name_the_assigned_character(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    lin = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林骁扬"}
+    ).json()
+    zhou = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "周蕴文"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "离开", "character_links": [{"character_id": lin["id"]}, {"character_id": zhou["id"]}]},
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": "周蕴文独自离开。林骁扬留在原地。"},
+    ).raise_for_status()
+    payload = {
+        "headline": "离开。",
+        "long_summary": "周蕴文离开，林骁扬留下。",
+        "state_changes": [],
+        "unresolved_items": [],
+        "atomic_memories": [],
+        "character_events": [{
+            "character_name": "林骁扬",
+            "event_type": "行动",
+            "event_text": "林骁扬留在原地。",
+            "evidence": "周蕴文独自离开。",
+        }],
+        "dynamic_fields_patch": [],
+    }
+    client.app.dependency_overrides[get_extractor_client] = lambda: RecordingExtractor(payload)
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "failed"
+    assert client.get(f"/api/v1/characters/{lin['id']}", headers=auth_headers).json()["events"] == []
+
+
+def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "交钥匙", "character_links": [{"character_id": character["id"]}]},
+    ).json()
+    draft = "林夕在渡口交出了钥匙，决定等候回信。"
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": draft}
+    ).raise_for_status()
+    client.app.dependency_overrides[get_extractor_client] = lambda: RecordingExtractor(_archive_payload("林夕"))
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    client.patch(
+        f"/api/v1/chapters/{chapter['id']}",
+        headers=auth_headers,
+        json={"headline": "用户大事记", "long_summary": "用户保留摘要"},
+    ).raise_for_status()
+    client.patch(
+        f"/api/v1/characters/{character['id']}",
+        headers=auth_headers,
+        json={"dynamic_fields": {"坏字段": "污染"}},
+    ).raise_for_status()
+
+    from app import db as db_module
+    from app.models import Book
+
+    db = db_module.SessionLocal()
+    try:
+        output = bind_extractor_character_names(_archive_payload("林夕"), [(character["id"], "林夕")])
+        stats = rebuild_book_character_memory(db, db.get(Book, book["id"]), {chapter["id"]: output})
+        db.commit()
+    finally:
+        db.close()
+    assert stats == {"chapters": 1, "characters": 1, "updated_characters": 1, "events": 1, "patches": 1}
+    rebuilt_character = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()
+    rebuilt_chapter = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert rebuilt_character["dynamic_fields"] == {"当前行动": "已交出钥匙"}
+    assert rebuilt_character["events"][0]["event_text"] == "林夕在渡口交出钥匙。"
+    assert rebuilt_chapter["headline"] == "用户大事记"
+    assert rebuilt_chapter["long_summary"] == "用户保留摘要"
+    assert rebuilt_chapter["draft_text"] == draft

@@ -5,8 +5,9 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.agents.extractor import CANONICAL_DYNAMIC_FIELD_KEYS, CANONICAL_EVENT_TYPES
 from app.models import Chapter, Character, CharacterEvent, CharacterFieldPatch
-from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
+from app.services.context import CHARACTER_EVENT_MAX_CHARS, normalize_text, truncate_to_nonspace
 
 
 class ExtractorValidationError(ValueError):
@@ -26,7 +27,7 @@ def _validated_archive_items(
     raw: Any,
     *,
     field: str,
-    selected_ids: set[str],
+    character_map: dict[str, Character],
 ) -> list[dict[str, str]]:
     """Normalize Extractor archive lists without inventing missing facts.
 
@@ -45,11 +46,13 @@ def _validated_archive_items(
         if not isinstance(item, dict):
             raise ExtractorValidationError(f"{field} item must be an object")
         character_id = item.get("character_id")
-        if character_id is not None and (not isinstance(character_id, str) or character_id not in selected_ids):
+        if character_id is not None and (not isinstance(character_id, str) or character_id not in character_map):
             continue
         text = item.get("text")
         if not isinstance(text, str) or not text.strip():
             raise ExtractorValidationError(f"{field} item text is required")
+        if isinstance(character_id, str) and normalize_text(character_map[character_id].name) not in normalize_text(text):
+            raise ExtractorValidationError(f"{field} character attribution must name its owner")
         kind = item.get("kind")
         if kind is not None and not isinstance(kind, str):
             raise ExtractorValidationError(f"{field} item kind must be a string")
@@ -59,6 +62,38 @@ def _validated_archive_items(
         if isinstance(character_id, str):
             normalized["character_id"] = character_id
         result.append(normalized)
+    return result
+
+
+def _validated_evidence(chapter: Chapter, character: Character, raw: Any, *, field: str) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise ExtractorValidationError(f"{field} evidence is required")
+    evidence = raw.strip()
+    if evidence not in chapter.draft_text:
+        raise ExtractorValidationError(f"{field} evidence is not an exact draft excerpt")
+    if normalize_text(character.name) not in normalize_text(evidence):
+        raise ExtractorValidationError(f"{field} evidence must name its owner")
+    return evidence
+
+
+def _validated_dynamic_fields(
+    raw: Any, *, owner: Character, character_map: dict[str, Character]
+) -> dict[str, str | None]:
+    if not isinstance(raw, dict):
+        raise ExtractorValidationError("selected character dynamic fields patch must be an object")
+    selected_names = {character.name for character in character_map.values()}
+    allowed = set(CANONICAL_DYNAMIC_FIELD_KEYS)
+    result: dict[str, str | None] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            raise ExtractorValidationError("dynamic field key must be a string")
+        if key not in allowed:
+            relation_name = key.removeprefix("与").removesuffix("关系") if key.startswith("与") and key.endswith("关系") else ""
+            if relation_name not in selected_names or relation_name == owner.name:
+                raise ExtractorValidationError(f"unsupported dynamic field key: {key}")
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ExtractorValidationError(f"dynamic field value is invalid: {key}")
+        result[key] = value.strip() if isinstance(value, str) else None
     return result
 
 
@@ -84,7 +119,7 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
     character_map = {link.character_id: link.character for link in chapter.character_links}
     selected_ids = set(character_map)
     archive_values = {
-        field: _validated_archive_items(output.get(field), field=field, selected_ids=selected_ids)
+        field: _validated_archive_items(output.get(field), field=field, character_map=character_map)
         for field in ARCHIVE_LIST_FIELDS
     }
 
@@ -98,22 +133,26 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
         event_text = item.get("event_text")
         if not isinstance(event_text, str) or not event_text.strip():
             raise ExtractorValidationError("selected character event text is required")
+        character = character_map[character_id]
+        if normalize_text(character.name) not in normalize_text(event_text):
+            raise ExtractorValidationError("selected character event text must name its owner")
+        _validated_evidence(chapter, character, item.get("evidence"), field="character event")
         event_type = item.get("event_type")
-        if event_type is not None and not isinstance(event_type, str):
-            raise ExtractorValidationError("event_type must be a string")
-        valid_events.append((character_id, event_type or "story", event_text.strip()))
+        if not isinstance(event_type, str) or event_type not in CANONICAL_EVENT_TYPES:
+            raise ExtractorValidationError("event_type must use the canonical taxonomy")
+        valid_events.append((character_id, event_type, event_text.strip()))
 
-    valid_patches: list[tuple[str, dict[str, Any]]] = []
+    valid_patches_by_character: dict[str, dict[str, str | None]] = {}
     for item in raw_patches:
         if not isinstance(item, dict):
             raise ExtractorValidationError("dynamic_fields_patch item must be an object")
         character_id = item.get("character_id")
         if not isinstance(character_id, str) or character_id not in selected_ids:
             continue
-        fields = item.get("fields")
-        if not isinstance(fields, dict):
-            raise ExtractorValidationError("selected character dynamic fields patch must be an object")
-        valid_patches.append((character_id, fields))
+        character = character_map[character_id]
+        _validated_evidence(chapter, character, item.get("evidence"), field="dynamic fields patch")
+        fields = _validated_dynamic_fields(item.get("fields"), owner=character, character_map=character_map)
+        valid_patches_by_character.setdefault(character_id, {}).update(fields)
 
     # Replacement and all extracted chapter metadata are committed by the caller
     # in one transaction. A validation error above leaves existing events intact.
@@ -145,7 +184,7 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
 
     updated_ids: list[str] = []
     patched_character_ids: set[str] = set()
-    for character_id, fields in valid_patches:
+    for character_id, fields in valid_patches_by_character.items():
         character: Character = character_map[character_id]
         current = dict(character.dynamic_fields or {})
         old_row = existing_patches.get(character_id)
@@ -169,7 +208,11 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
         )
         patched_character_ids.add(character_id)
         merged = current
-        merged.update(fields)
+        for key, value in fields.items():
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
         character.dynamic_fields = merged
         updated_ids.append(character.id)
 

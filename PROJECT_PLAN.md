@@ -4,7 +4,11 @@
 
 ## 当前状态
 
-- 现行目标：`LinoIMac` 的原生 SwiftUI 前端已升级为 iOS `v1.7.0(22)` 已验收的“纸与墨”体系；代码、自动回归、正式 Archive、本机换装、Git Tag 与 GitHub Release 全部完成，发布号为 `1.7.0(22)`。
+- 现行目标：Backend `v1.7.1` 人物记忆快修。现网《骁扬》28 条人物事件中至少 13 条确定错挂；根因是 v1.6 Extractor 只收到无姓名映射的 UUID 白名单，模型无法把正文姓名可靠绑定到人物 ID，而后端只校验 ID 在白名单内便直接落库。前端只是原样展示，污染会继续进入 Memory Selector 与 Writer。
+- 快修代码已完成：Extractor 只输出精确人物姓名，后端机械映射 UUID；人物事件／动态字段必须提供包含所属人物的正文原文证据；事件类型、中文动态字段和人物关系键固定化；非法归属整次回滚。新增单书原子重建工具，只替换 Extractor 拥有的人物事件、动态字段及带人物归属的章节记忆，保留正文、Bible、标题和章节摘要。
+- 本地门禁：Backend 96 项、Python compileall、唯一 Alembic head `20260801_0008` 与 `git diff --check` 全绿；无 migration，客户端与 App 版本不变。生产 Backend 和《骁扬》数据尚未改动。
+- 下一步：在现网数据库上运行不落库的真实 Extractor 合约试跑；通过后停服备份、部署 Backend `1.7.1`，再按章节顺序原子重建《骁扬》已完成的 8 章人物记忆并复核。
+- 上一目标完成记录：`LinoIMac` 的原生 SwiftUI 前端已升级为 iOS `v1.7.0(22)` 已验收的“纸与墨”体系；代码、自动回归、正式 Archive、本机换装、Git Tag 与 GitHub Release 全部完成，发布号为 `1.7.0(22)`。
 - 视觉事实源仅为仓库内的 iOS 成品：`App/LinoI/LinoTheme.swift`、`LinoComponents.swift`、`NoticeBus.swift` 及 Shelf／Workspace／Characters／Settings+Agent／Editor／Reader 页面；无新的外部设计稿。
 - macOS Debug/Release 与本机正式 App 当前均为 `1.7.0(22)`；`LinoI` Debug/Release 保持既有 `1.7.0(22)`。Backend 与 Alembic head `20260801_0008` 不在本轮范围。
 - 用户工作树不干净：`.learnings/ERRORS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/` 均为用户资产；不得查看以外改动、暂存、覆盖、回退或纳入验收产物。

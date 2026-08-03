@@ -60,15 +60,27 @@ class FakeExtractor:
     def complete_json(self, *, system: str, user: str, schema: dict, **kwargs):
         if self.fail:
             raise RuntimeError("extract failed")
+        names = schema["properties"]["character_events"]["items"]["properties"]["character_name"]["enum"]
+        name = names[0] if names else ""
+        draft = user.rsplit("# 最终接受正文（原样）\n", 1)[-1]
         return {
-            "summary": "本章完成了关键行动。",
+            "long_summary": "本章完成了关键行动。",
             "headline": "主角完成关键行动。",
-            "character_events": [
-                {"character_id": pytest.character_id, "event_type": "story", "event_text": "完成关键行动。"}
-            ],
-            "dynamic_fields_patch": [
-                {"character_id": pytest.character_id, "fields": {"current_status": "完成关键行动后休整"}}
-            ],
+            "state_changes": [],
+            "unresolved_items": [],
+            "atomic_memories": [],
+            "character_events": ([{
+                "character_name": name,
+                "event_type": "行动",
+                "event_text": f"{name}完成关键行动。",
+                "evidence": draft,
+            }] if name else []),
+            "dynamic_fields_patch": ([{
+                "character_name": name,
+                "evidence": draft,
+                "fields": {"当前行动": "完成关键行动后休整"},
+                "relationships": [],
+            }] if name else []),
         }
 
     def complete(self, **kwargs):

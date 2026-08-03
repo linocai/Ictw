@@ -186,18 +186,30 @@ def test_accept_success_and_reaccept_replaces_events(client, auth_headers, wait_
     assert len(events) == 1
 
 
-def test_extractor_discards_name_and_unknown_refs_but_keeps_valid(client, auth_headers, wait_for_terminal):
+def test_extractor_rejects_unknown_character_name_without_partial_writes(client, auth_headers, wait_for_terminal):
     class MixedExtractor:
         def complete_json(self, **kwargs):
             return {
-                "summary": "梗概",
+                "long_summary": "梗概",
                 "headline": "大事",
+                "state_changes": [],
+                "unresolved_items": [],
+                "atomic_memories": [],
                 "character_events": [
-                    {"character_id": pytest.character_id, "event_text": "有效事件"},
-                    {"character_id": "林夕", "event_text": "姓名引用丢弃"},
-                    {"character_id": "unknown", "event_text": "未知引用丢弃"},
+                    {
+                        "character_name": "林夕",
+                        "event_type": "行动",
+                        "event_text": "林夕完成行动。",
+                        "evidence": "林夕完成行动。",
+                    },
+                    {
+                        "character_name": "未知人物",
+                        "event_type": "行动",
+                        "event_text": "未知人物完成行动。",
+                        "evidence": "未知人物完成行动。",
+                    },
                 ],
-                "dynamic_fields_patch": [{"character_id": "unknown", "fields": "坏结构也随非法引用丢弃"}],
+                "dynamic_fields_patch": [],
             }
 
     client.app.dependency_overrides[get_extractor_client] = lambda: MixedExtractor()
@@ -211,20 +223,27 @@ def test_extractor_discards_name_and_unknown_refs_but_keeps_valid(client, auth_h
         headers=auth_headers,
         json={"user_prompt": "行动", "character_links": [{"character_id": character["id"]}]},
     ).json()
-    client.post(f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "正文"})
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": "林夕完成行动。未知人物完成行动。"},
+    )
     assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 200
     status = wait_for_terminal(client, chapter["id"], auth_headers)
-    assert status["phase"] == "done"
-    assert len(status["added_event_ids"]) == 1
+    assert status["phase"] == "failed"
+    assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"] == []
 
 
 def test_selected_extractor_item_malformed_restores_draft_ready(client, auth_headers, wait_for_terminal):
     class BadExtractor:
         def complete_json(self, **kwargs):
             return {
-                "summary": "梗概",
+                "long_summary": "梗概",
                 "headline": "大事",
-                "character_events": [{"character_id": pytest.character_id}],
+                "state_changes": [],
+                "unresolved_items": [],
+                "atomic_memories": [],
+                "character_events": [{}],
                 "dynamic_fields_patch": [],
             }
 

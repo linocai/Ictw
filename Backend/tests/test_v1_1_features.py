@@ -286,9 +286,17 @@ def _finalize_with_event(client, auth_headers, wait_for_terminal, event_text: st
         class LongExtractor:
             def complete_json(self, **kwargs):
                 return {
-                    "summary": "梗概",
+                    "long_summary": "梗概",
                     "headline": "大事",
-                    "character_events": [{"character_id": pytest.character_id, "event_text": event_text}],
+                    "state_changes": [],
+                    "unresolved_items": [],
+                    "atomic_memories": [],
+                    "character_events": [{
+                        "character_name": "林夕",
+                        "event_type": "经历",
+                        "event_text": "林夕" + event_text,
+                        "evidence": "林夕行动",
+                    }],
                     "dynamic_fields_patch": [],
                 }
 
@@ -369,7 +377,7 @@ def test_chapter_patch_summary_compatibility_and_headline(client, auth_headers):
 
 
 def test_health_reports_current_version(client, auth_headers):
-    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.6.5"
+    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.7.1"
 
 
 # --- B8 migration from the production revision --------------------------------

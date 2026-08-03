@@ -490,19 +490,23 @@ def _truncate_from_end(text: str, n: int) -> str:
 
 def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
     characters = _selected_characters(chapter)
-    # Do not send character cards, names, or world-setting facts to Extractor:
-    # IDs are an output-field whitelist only, not evidence for an archive fact.
-    character_ids = "\n".join(f"- {character.id}" for character in characters) or "（无已选人物）"
+    # Names are identity labels only.  The model never receives or chooses UUIDs;
+    # ExtractorAgent maps an exact selected name back to its ID mechanically.
+    character_names = "\n".join(f"- {character.name}" for character in characters) or "（无已选人物）"
     return "\n\n".join(
         [
             "# 事实来源（唯一）\n以下“最终接受正文”是唯一可以归档事实的材料。"
             "不得使用、复述或根据未提供的 Bible、世界观、人物卡或历史记忆补写事实。",
-            "# 人物 ID 白名单（仅用于字段归属，不是事实来源）\n" + character_ids,
+            "# 人物姓名白名单（仅用于身份归属，不是事实来源）\n" + character_names,
             (
                 "# 提取输出约束\nheadline/long_summary 必填；long_summary 是本章唯一摘要，不限制机械字数；"
                 "state_changes、unresolved_items、atomic_memories "
-                "逐项只记录正文中明确发生、明确改变或明确尚未解决的事实。人物更新以及这些数组中出现的 "
-                "character_id 只能使用上面列出的 ID；未选择人物时人物更新数组必须为空。"
+                "逐项只记录正文中明确发生、明确改变或明确尚未解决的事实。人物归属只能使用上面列出的精确姓名；"
+                "人物相关的 text 与 event_text 必须以该人物精确姓名开头。人物事件只使用约定的中文类型。"
+                "动态字段只写本章明确改变的当前状态，使用约定字段；人物关系通过 relationships 输出，"
+                "正文明确证明旧状态已经结束时可用 null 清除对应固定字段。"
+                "不得自造拼音 key、last_event、role 或 new_acquaintance。event 与动态字段的 evidence 必须是正文中的原文片段，"
+                "且必须包含所属人物姓名；宁可不记，也不得猜测归属。未选择人物时人物更新数组必须为空。"
                 f"每条 event_text 不超过 {CHARACTER_EVENT_MAX_CHARS} 个去空白字符。"
             ),
             f"# 最终接受正文（原样）\n{chapter.draft_text}",

@@ -536,7 +536,7 @@ def accept_chapter(
     if book is None:
         raise HTTPException(status_code=404, detail="book not found")
     extractor = ExtractorAgent(extractor_client, get_persona(db, "extractor"))
-    selected_ids = [link.character_id for link in chapter.character_links]
+    selected_characters = [(link.character_id, link.character.name) for link in chapter.character_links]
     message = extractor_user_message(db, book, chapter)
     job_id = uuid_str()
     run = JobRun(id=job_id, chapter_id=chapter.id, kind="extract", phase="extracting",
@@ -548,7 +548,7 @@ def accept_chapter(
         kind="extract",
         extractor=extractor,
         extractor_user_message=message,
-        selected_character_ids=selected_ids,
+        selected_characters=selected_characters,
     )
     try:
         write_registry.reserve(job)

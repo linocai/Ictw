@@ -56,7 +56,7 @@ class WriteJob:
         kind: str = "write",
         extractor: Any | None = None,
         extractor_user_message: str = "",
-        selected_character_ids: list[str] | None = None,
+        selected_characters: list[tuple[str, str]] | None = None,
         bible_snapshot: str = "",
         bible_sha256: str = "",
     ) -> None:
@@ -73,7 +73,7 @@ class WriteJob:
         self.baseline_status = baseline_status
         self.extractor = extractor
         self.extractor_user_message = extractor_user_message
-        self.selected_character_ids = selected_character_ids or []
+        self.selected_characters = selected_characters or []
         self.bible_snapshot = bible_snapshot
         self.bible_sha256 = bible_sha256 or hashlib.sha256(bible_snapshot.encode()).hexdigest()
         self.cancel_event = threading.Event()
@@ -445,7 +445,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             record_job_phase(sf, job.job_id, "failed", error_code="chapter_missing", error_message="章节不存在"); job.mark_terminal("failed"); return
         start, client = time.monotonic(), getattr(job.extractor, "llm", None)
         try:
-            output = job.extractor.extract(job.extractor_user_message, job.selected_character_ids)
+            output = job.extractor.extract(job.extractor_user_message, job.selected_characters)
         except LLMError as exc:
             _record_llm(sf, "extractor", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
             exc.agent_role, exc.model_name = "extractor", getattr(client, "model_name", None); raise
