@@ -41,7 +41,7 @@ struct MacChapterSidebar: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(LinoTheme.accentDeep)
                     .frame(width: 28, height: 28)
-                    .background(Color.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth))
             }
             .buttonStyle(.plain)
@@ -119,8 +119,8 @@ private struct MacChapterRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Text("\(chapter.index)")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(LinoTheme.coverInk)
                     .frame(width: 34, height: 40)
                     .background(LinoTheme.coverGradient(chapter.id), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 

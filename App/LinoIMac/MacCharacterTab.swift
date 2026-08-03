@@ -58,7 +58,7 @@ struct MacCharacterTab: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .foregroundStyle(LinoTheme.accentDeep)
-            .background(Color.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth))
             .onHover { pointer($0) }
         }
@@ -100,7 +100,7 @@ private struct MacCharacterChip: View {
                 if selected {
                     Capsule().fill(LinoTheme.accentGradient)
                 } else {
-                    Capsule().fill(Color.white.opacity(0.72))
+                    Capsule().fill(LinoTheme.surface2)
                 }
             }
             .overlay(Capsule().stroke(LinoTheme.accent.opacity(selected ? 0 : 0.22), lineWidth: 0.6))
@@ -154,7 +154,7 @@ private struct MacCharacterCard: View {
             storylineSection
         }
         .padding(14)
-        .background(Color.white.opacity(0.66), in: RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius, style: .continuous))
+        .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius, style: .continuous).stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth))
         .onAppear(perform: sync)
         .onChange(of: character.id) { _, _ in sync() }
@@ -187,7 +187,7 @@ private struct MacCharacterCard: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(11)
-                        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                     }
                 }
             }
@@ -215,7 +215,7 @@ private struct MacCharacterCard: View {
             .foregroundStyle(LinoTheme.faint)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(Color.white.opacity(0.5), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
     private func sync() {
@@ -264,7 +264,7 @@ private struct MacCharacterEventRow: View {
                             .foregroundStyle(LinoTheme.body)
                             .padding(6)
                     }
-                    .background(Color.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth))
                     HStack(spacing: 8) {
                         Button("取消") {
@@ -315,7 +315,7 @@ private struct MacCharacterEventRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(11)
-        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         .onAppear { draftText = event.eventText }
         .confirmationDialog("删除这条故事线？", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("删除", role: .destructive) {

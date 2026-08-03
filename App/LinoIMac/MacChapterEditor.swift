@@ -200,7 +200,7 @@ struct MacChapterEditor: View {
                     .foregroundStyle(LinoTheme.faint)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
-                    .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
                 FlowLayout(spacing: 8) {
                     ForEach(characters.characters) { character in
@@ -231,7 +231,7 @@ struct MacChapterEditor: View {
                     if selected {
                         Capsule().fill(LinoTheme.accentGradient)
                     } else {
-                        Capsule().fill(Color.white.opacity(0.68))
+                        Capsule().fill(LinoTheme.surface2)
                     }
                 }
                 .overlay(Capsule().stroke(LinoTheme.accent.opacity(selected ? 0 : 0.22), lineWidth: 0.6))
@@ -349,7 +349,7 @@ struct MacChapterEditor: View {
                 .padding(14)
         }
         .frame(minHeight: 280, maxHeight: 520)
-        .background(Color.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth))
     }
 

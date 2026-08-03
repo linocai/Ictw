@@ -68,9 +68,9 @@ struct LinoIToast: View {
                 .background(LinoTheme.ink, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.16), radius: 12, y: 6)
                 #else
-                .background(Color.black.opacity(0.82), in: Capsule())
-                .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+                .background(LinoTheme.ink, in: Capsule())
+                .overlay(Capsule().strokeBorder(LinoTheme.line2, lineWidth: 1))
+                .shadow(color: LinoTheme.hex(0x17181C, opacity: 0.16), radius: 8, y: 4)
                 #endif
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .onAppear { scheduleDismiss(notice) }

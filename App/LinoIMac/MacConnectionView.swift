@@ -170,8 +170,14 @@ struct MacConnectionView: View {
         session.baseURL = trimmedURL
         session.token = trimmedToken
         session.saveConnection()
+        let noticeCount = session.notices.history.count
         await bookshelf.load()
         isSaving = false
-        feedback = .success
+        if session.notices.history.count > noticeCount,
+           let notice = session.notices.history.last {
+            feedback = .failure(notice.message)
+        } else {
+            feedback = .success
+        }
     }
 }

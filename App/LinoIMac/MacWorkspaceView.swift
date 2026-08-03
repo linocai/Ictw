@@ -135,7 +135,7 @@ struct MacWorkspaceView: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 28)
-            .background(Color.white.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .help("返回书架")
@@ -211,8 +211,8 @@ struct MacWorkspaceView: View {
     private var sidebarDrawer: some View {
         MacChapterSidebar(selectedChapterId: $selectedChapterId)
             .frame(width: LinoMacMetrics.sidebarWidth)
-            .background(.regularMaterial)
-            .shadow(color: LinoTheme.hex(0x141C3C, opacity: 0.18), radius: 18, x: 6)
+            .background(LinoTheme.surface2)
+            .shadow(color: LinoTheme.hex(0x17181C, opacity: 0.12), radius: 12, x: 6)
             .transition(.move(edge: .leading))
             .zIndex(2)
     }
@@ -220,8 +220,8 @@ struct MacWorkspaceView: View {
     private var rightDrawer: some View {
         MacRightPanel(tab: $rightTab)
             .frame(width: LinoMacMetrics.rightPanelWidth)
-            .background(.regularMaterial)
-            .shadow(color: LinoTheme.hex(0x141C3C, opacity: 0.18), radius: 18, x: -6)
+            .background(LinoTheme.surface2)
+            .shadow(color: LinoTheme.hex(0x17181C, opacity: 0.12), radius: 12, x: -6)
             .transition(.move(edge: .trailing))
             .zIndex(2)
     }

@@ -85,7 +85,7 @@ struct MacAgentTab: View {
             .foregroundStyle(LinoTheme.faint)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -136,7 +136,7 @@ private struct MacProfileRow: View {
             .onHover { pointer($0) }
         }
         .padding(12)
-        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .sheet(isPresented: $editing) {
             MacProfileEditorSheet(profile: profile)
         }
@@ -246,17 +246,21 @@ private struct MacAgentBindingCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(role.linoAgentName)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LinoTheme.ink)
-                    Text(profileDescription)
-                        .font(.system(size: 11))
-                        .foregroundStyle(LinoTheme.muted)
-                        .lineLimit(1)
-                }
-                Spacer()
+            VStack(alignment: .leading, spacing: 2) {
+                Text(role.linoAgentName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LinoTheme.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(profileDescription)
+                    .font(.system(size: 11))
+                    .foregroundStyle(LinoTheme.muted)
+                    .lineLimit(1)
+            }
+            HStack(spacing: 8) {
+                Text("模型")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LinoTheme.body)
                 Picker(role.linoAgentName, selection: profileSelection) {
                     Text("未绑定").tag("")
                     ForEach(agents.profiles) { profile in
@@ -265,7 +269,7 @@ private struct MacAgentBindingCard: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
-                .fixedSize()
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Divider().overlay(LinoTheme.hairline)
@@ -302,7 +306,7 @@ private struct MacAgentBindingCard: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onChange(of: binding?.temperature) { _, _ in
             temperatureDraft = nil
         }
@@ -523,7 +527,7 @@ private struct MacPersonaCard: View {
             }
         }
         .padding(12)
-        .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onAppear { sync() }
         .onChange(of: persona.editablePersona) { _, _ in sync(force: true) }
     }

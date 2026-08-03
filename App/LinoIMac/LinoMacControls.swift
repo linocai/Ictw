@@ -23,7 +23,7 @@ struct LinoMacIconButton: View {
 
         func background(hovered: Bool) -> Color {
             switch self {
-            case .normal: return Color.white.opacity(hovered ? 0.75 : 0.6)
+            case .normal: return hovered ? LinoTheme.surface2 : LinoTheme.surface
             case .danger: return LinoTheme.danger.opacity(hovered ? 0.16 : 0.10)
             case .warning: return LinoTheme.warning.opacity(hovered ? 0.16 : 0.10)
             }
@@ -150,7 +150,7 @@ struct LinoMacConnectionChip: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(Color.white.opacity(0.55), in: Capsule())
+        .background(LinoTheme.surface, in: Capsule())
         .overlay(Capsule().stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth))
         .linoAnimation(LinoMotion.content, value: state)
         .task(id: session.baseURL + "\u{0}" + session.token) {

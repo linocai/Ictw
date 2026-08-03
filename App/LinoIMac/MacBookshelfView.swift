@@ -11,7 +11,7 @@ struct MacBookshelfView: View {
     @EnvironmentObject private var commandBus: MacCommandBus
     @State private var showingNewBook = false
 
-    private let columns = [GridItem(.adaptive(minimum: 220), spacing: 22)]
+    private let columns = [GridItem(.adaptive(minimum: 188, maximum: 244), spacing: 22)]
 
     var body: some View {
         ScrollView {
@@ -116,9 +116,11 @@ struct MacBookshelfView: View {
                     .font(.system(size: 13, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 214)
+            .frame(maxHeight: .infinity)
         }
         .buttonStyle(LinoIDashedButtonStyle())
+        .frame(maxWidth: .infinity)
+        .aspectRatio(3 / 4, contentMode: .fit)
         .onHover { pointer($0) }
         .accessibilityLabel("新建作品")
     }
@@ -139,11 +141,16 @@ private struct MacBookCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius, style: .continuous)
                     .fill(LinoTheme.coverGradient(book.id))
-                    .frame(height: 108)
+                    .aspectRatio(3 / 4, contentMode: .fit)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius - 4, style: .continuous)
+                            .inset(by: 7)
+                            .stroke(LinoTheme.coverInk.opacity(0.28), lineWidth: 1)
+                    )
                     .overlay(alignment: .bottomLeading) {
                         Text(String(book.title.prefix(2)))
                             .font(.custom("Songti SC", size: 30).weight(.bold))
-                            .foregroundStyle(.white.opacity(0.92))
+                            .foregroundStyle(LinoTheme.coverInk)
                             .padding(16)
                     }
 
@@ -162,8 +169,7 @@ private struct MacBookCard: View {
                 }
                 .padding(14)
             }
-            .frame(minHeight: 214, alignment: .top)
-            .background(Color.white.opacity(0.7), in: RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius, style: .continuous))
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: LinoMacMetrics.cardRadius, style: .continuous)
                     .stroke(LinoMacMetrics.hairline, lineWidth: LinoMacMetrics.hairlineWidth)
@@ -172,7 +178,7 @@ private struct MacBookCard: View {
             // 一帧即可；若让阴影半径逐帧插值，鼠标扫过一排卡会同时重算多张卡的
             // 阴影模糊，是 v1.4.0 实测卡顿源（v1.4.1 性能修复）。位移在阴影之后
             // 做 GPU 变换，动画期间阴影随内容整体平移、不重算。
-            .shadow(color: LinoTheme.hex(0x143052, opacity: hovered ? 0.20 : 0.10), radius: hovered ? 22 : 14, y: hovered ? 12 : 8)
+            .shadow(color: LinoTheme.hex(0x17181C, opacity: hovered ? 0.12 : 0.05), radius: hovered ? 12 : 3, y: hovered ? 8 : 2)
             .animation(nil, value: hovered)
             .offset(y: hovered ? -3 : 0)
         }

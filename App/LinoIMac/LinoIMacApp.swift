@@ -1,13 +1,11 @@
 import SwiftUI
 import AppKit
 
-/// 锁浅色双保险之一：AppKit 层锁定整体 appearance，覆盖 SwiftUI
-/// `.preferredColorScheme` 管不到的系统面板——`NSSavePanel`、右键
-/// `contextMenu`、`confirmationDialog` 等。配合 `MacShell` 顶层的
-/// `.preferredColorScheme(.light)`（锁住 SwiftUI 层）双保险覆盖全部系统弹层。
+/// 让 AppKit 跟随系统 appearance；原生面板、菜单与 SwiftUI 内容因此可同样
+/// 呈现 light/dark 纸墨色板。
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.appearance = NSAppearance(named: .aqua)
+        NSApp.appearance = nil
     }
 }
 
