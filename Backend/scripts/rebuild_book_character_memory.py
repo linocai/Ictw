@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ from app.llm.factory import build_llm_client
 from app.models import Book, Chapter, Character, CharacterStateChange, JobRun
 from app.services.character_memory_rebuild import rebuild_book_character_memory
 from app.services.character_state_projection import rebuild_book_projection
-from app.services.context import draft_fingerprint, extractor_user_message
+from app.services.context import extractor_user_message
 from app.services.extraction import (
     ExtractorValidationError,
     persist_validated_state_changes,
@@ -27,6 +28,38 @@ from app.services.personas import get_persona
 ACTIVE_PHASES = {"selecting_memory", "writing", "checking", "extracting"}
 MAX_EXTRACTION_ATTEMPTS = 3
 BUNDLE_VERSION = 2
+
+
+def state_rebuild_fingerprint(chapter: Chapter) -> str:
+    """Stable identity for offline state extraction inputs.
+
+    Current dynamic fields are deliberately excluded: they are the output being
+    rebuilt and change transiently while earlier chapters are replayed.
+    """
+    selected = sorted((link.character for link in chapter.character_links), key=lambda item: item.id)
+    payload = {
+        "book_id": chapter.book_id,
+        "book_title": chapter.book.title,
+        "world_setting": chapter.book.world_setting,
+        "chapter_id": chapter.id,
+        "chapter_index": chapter.index,
+        "chapter_title": chapter.title,
+        "bible": chapter.user_prompt,
+        "author_note": chapter.author_note,
+        "target_word_count": chapter.target_word_count,
+        "draft_text": chapter.draft_text,
+        "selected_characters": [
+            {
+                "id": character.id,
+                "name": character.name,
+                "role": character.role,
+                "fixed_profile": character.fixed_profile,
+            }
+            for character in selected
+        ],
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,7 +107,7 @@ def _bundle_payload(
             {
                 "id": chapter.id,
                 "index": chapter.index,
-                "fingerprint": draft_fingerprint(chapter, chapter.draft_text),
+                "fingerprint": state_rebuild_fingerprint(chapter),
                 "output": outputs[chapter.id],
             }
             for chapter in chapters
@@ -147,7 +180,7 @@ def load_validated_bundle(
         entry = entries[chapter.id]
         if entry.get("index") != chapter.index:
             raise RuntimeError("validated bundle chapter order changed")
-        if entry.get("fingerprint") != draft_fingerprint(chapter, chapter.draft_text):
+        if entry.get("fingerprint") != state_rebuild_fingerprint(chapter):
             raise RuntimeError(f"chapter {chapter.index} changed after bundle validation")
         output = entry.get("output")
         if not isinstance(output, dict):
@@ -183,7 +216,7 @@ def load_rebuild_checkpoint(
     for chapter, entry in zip(chapters[:len(entries)], entries, strict=True):
         if not isinstance(entry, dict) or entry.get("id") != chapter.id or entry.get("index") != chapter.index:
             raise RuntimeError("rebuild checkpoint is not an exact chapter prefix")
-        if entry.get("fingerprint") != draft_fingerprint(chapter, chapter.draft_text):
+        if entry.get("fingerprint") != state_rebuild_fingerprint(chapter):
             raise RuntimeError(f"chapter {chapter.index} changed after checkpoint")
         output = entry.get("output")
         if not isinstance(output, dict):

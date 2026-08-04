@@ -8,6 +8,7 @@ from app.services.personas import PROGRAM_PROTOCOLS
 from scripts.rebuild_book_character_memory import (
     load_rebuild_checkpoint,
     load_validated_bundle,
+    state_rebuild_fingerprint,
     write_rebuild_checkpoint,
     write_validated_bundle,
 )
@@ -420,6 +421,9 @@ def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
         output = {"state_updates": full_output["state_updates"]}
         orm_book = db.get(Book, book["id"])
         orm_chapter = db.get(Chapter, chapter["id"])
+        fingerprint = state_rebuild_fingerprint(orm_chapter)
+        orm_chapter.character_links[0].character.dynamic_fields = {"临时投影": "不属于输入身份"}
+        assert state_rebuild_fingerprint(orm_chapter) == fingerprint
         checkpoint_path = tmp_path / "validated-rebuild.json.partial"
         write_rebuild_checkpoint(
             checkpoint_path, orm_book, [orm_chapter], [orm_chapter], {chapter["id"]: output}
