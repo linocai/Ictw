@@ -172,6 +172,62 @@ def test_online_extractor_corrects_a_validation_failure_before_committing(
     assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]
 
 
+def test_online_extractor_salvages_only_unsafe_optional_state_after_three_attempts(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "负伤后停留", "character_links": [{"character_id": character["id"]}]},
+    ).json()
+    draft = "林夕受了伤。" + "风" * 120 + "随后，他留在门边。"
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": draft}
+    ).raise_for_status()
+    output = {
+        "headline": "林夕负伤后停留。",
+        "long_summary": "林夕受伤并留在门边。",
+        "state_changes": [], "unresolved_items": [], "atomic_memories": [],
+        "character_events": [{
+            "character_name": "林夕", "event_type": "状态", "event_text": "林夕受了伤。", "evidence": "林夕受了伤。",
+        }],
+        "state_updates": [{
+            "character_name": "林夕",
+            "snapshot": {
+                "presence_evidence": "林夕受了伤。",
+                "当前位置": {"operation": "clear", "value": None, "evidence": "林夕受了伤。"},
+                "当前行动": {"operation": "set", "value": "留在门边", "evidence": "随后，他留在门边。"},
+                "情绪状态": {"operation": "clear", "value": None, "evidence": "林夕受了伤。"},
+            },
+            "persistent_ops": [{"slot": "身体状态", "operation": "set", "value": "受伤", "evidence": "林夕受了伤。"}],
+            "relationship_ops": [],
+        }],
+    }
+    llm = RecordingExtractor(output)
+    client.app.dependency_overrides[get_extractor_client] = lambda: llm
+
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    result = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert result["phase"] == "done"
+    assert result["attempt"] == 3
+    assert result["error_context"] == {
+        "stage": "state_salvage",
+        "completion_warning": "本章已接受；1 项人物当前状态未归档：即时快照“当前行动”的原文证据及近邻语境无法确认所属人物。正文、摘要及其余合格记忆已保存。",
+        "dropped_state_components": 1,
+        "dropped_state_reasons": ["即时快照“当前行动”的原文证据及近邻语境无法确认所属人物"],
+    }
+    assert llm.calls == 3
+    archived = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert archived["status"] == "finalized"
+    after = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()
+    assert after["dynamic_fields"] == {"身体状态": "受伤"}
+    assert [event["event_text"] for event in after["events"]] == ["林夕受了伤。"]
+
+
 def test_extractor_keeps_chapter_level_archive_and_rolls_back_on_bad_archive(
     client, auth_headers, wait_for_terminal
 ):

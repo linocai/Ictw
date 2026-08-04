@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
@@ -228,8 +229,10 @@ def validate_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> V
     )
 
 
-def salvage_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    """Keep only independently valid state components after correction exhausts.
+def _salvage_state_components(
+    chapter: Chapter, output: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """Keep independently valid state components and retain rejection reasons.
 
     Snapshot batches remain all-or-nothing. Persistent slots and relationship
     operations are admitted one at a time only when the complete accumulated
@@ -237,12 +240,12 @@ def salvage_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> tu
     """
     raw_updates = output.get("state_updates") if isinstance(output, dict) else None
     if not isinstance(raw_updates, list):
-        return {"state_updates": []}, 1
+        return {"state_updates": []}, ["state_updates must be an array"]
     accepted: list[dict[str, Any]] = []
-    dropped = 0
+    dropped_reasons: list[str] = []
     for item in raw_updates:
         if not isinstance(item, dict):
-            dropped += 1
+            dropped_reasons.append("state_updates item must be an object")
             continue
         character_id = item.get("character_id")
         components: list[dict[str, Any]] = []
@@ -262,7 +265,7 @@ def salvage_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> tu
                 "relationship_ops": [],
             } for operation in persistent_ops)
         elif persistent_ops is not None:
-            dropped += 1
+            dropped_reasons.append("persistent_ops must be an array")
         relationship_ops = item.get("relationship_ops")
         if isinstance(relationship_ops, list):
             components.extend({
@@ -272,18 +275,49 @@ def salvage_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> tu
                 "relationship_ops": [operation],
             } for operation in relationship_ops)
         elif relationship_ops is not None:
-            dropped += 1
+            dropped_reasons.append("relationship_ops must be an array")
         for component in components:
             trial = {"state_updates": [*accepted, component]}
             try:
                 validate_state_rebuild_output(chapter, trial)
-            except ExtractorValidationError:
-                dropped += 1
+            except ExtractorValidationError as exc:
+                dropped_reasons.append(str(exc))
             else:
                 accepted.append(component)
     cleaned = {"state_updates": accepted}
     validate_state_rebuild_output(chapter, cleaned)
-    return cleaned, dropped
+    return cleaned, dropped_reasons
+
+
+def salvage_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Compatibility wrapper used by the offline rebuild's count-only audit."""
+    cleaned, dropped_reasons = _salvage_state_components(chapter, output)
+    return cleaned, len(dropped_reasons)
+
+
+def salvage_online_extractor_state_output(
+    chapter: Chapter, output: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """Conservatively finish an online extract when only optional state is bad.
+
+    Chapter archives and character events remain strict: they must validate with
+    an empty state update list before any salvage is attempted.  State snapshots
+    stay all-or-nothing, while independently valid persistent and relationship
+    operations may survive.  No evidence is rewritten and no ownership is
+    inferred; unsafe components are simply omitted after correction exhausts.
+    """
+    if not isinstance(output, dict):
+        raise ExtractorValidationError("Extractor output must be an object")
+    cleaned = deepcopy(output)
+    raw_state = {"state_updates": cleaned.get("state_updates")}
+    cleaned["state_updates"] = []
+    validate_extractor_output(chapter, cleaned)
+    salvaged, dropped_reasons = _salvage_state_components(chapter, raw_state)
+    if not dropped_reasons:
+        raise ExtractorValidationError("online state salvage requires at least one rejected component")
+    cleaned["state_updates"] = salvaged["state_updates"]
+    validate_extractor_output(chapter, cleaned)
+    return cleaned, dropped_reasons
 
 
 def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:

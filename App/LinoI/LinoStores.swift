@@ -870,6 +870,9 @@ final class ChapterEditorStore: ObservableObject {
             writingPhase = .idle
             pendingExemptionNames = []
             currentValidationReason = nil
+            if let warning = status.completionWarning {
+                session.notices.publish(warning)
+            }
         case "failed":
             applyJobFailure(status, chapterId: chapterId, announce: announceFailure)
         case "cancelled":

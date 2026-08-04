@@ -7,7 +7,13 @@ import pytest
 from app.agents.extractor import ExtractorContractError, bind_extractor_character_names
 from app.models import Chapter, ChapterCharacter, Character, CharacterStateChange
 from app.services.character_state_projection import project_state_changes, rebuild_book_projection
-from app.services.extraction import salvage_state_rebuild_output, validate_state_rebuild_output
+from app.services.extraction import (
+    ExtractorValidationError,
+    salvage_online_extractor_state_output,
+    salvage_state_rebuild_output,
+    validate_extractor_output,
+    validate_state_rebuild_output,
+)
 
 
 def _change(character_id: str, *, scope: str, slot: str, operation: str, value: str | None, batch_id: str = "", other: str | None = None) -> CharacterStateChange:
@@ -95,6 +101,45 @@ def test_state_rebuild_salvage_drops_invalid_snapshot_but_keeps_valid_persistent
     assert dropped == 1
     assert len(validated.state_changes) == 1
     assert validated.state_changes[0].slot == "身体状态"
+
+
+def test_online_salvage_only_drops_state_after_all_archives_and_events_validate():
+    character = Character(id="a", book_id="book", name="甲")
+    chapter = Chapter(
+        id="chapter", book_id="book", index=1, title="章",
+        draft_text="甲受了伤。" + "风" * 120 + "随后，他留在门边。",
+        user_prompt="", status="draft_ready",
+    )
+    chapter.character_links = [ChapterCharacter(chapter_id=chapter.id, character_id=character.id, character=character)]
+    output = {
+        "headline": "甲负伤后停留。",
+        "long_summary": "甲受伤并留在门边。",
+        "state_changes": [], "unresolved_items": [], "atomic_memories": [],
+        "character_events": [{
+            "character_id": "a", "event_type": "状态", "event_text": "甲受了伤。", "evidence": "甲受了伤。",
+        }],
+        "state_updates": [{
+            "character_id": "a",
+            "snapshot": {
+                "presence_evidence": "甲受了伤。",
+                "当前位置": {"operation": "clear", "value": None, "evidence": "甲受了伤。"},
+                "当前行动": {"operation": "set", "value": "留在门边", "evidence": "随后，他留在门边。"},
+                "情绪状态": {"operation": "clear", "value": None, "evidence": "甲受了伤。"},
+            },
+            "persistent_ops": [{"slot": "身体状态", "operation": "set", "value": "受伤", "evidence": "甲受了伤。"}],
+            "relationship_ops": [],
+        }],
+    }
+    cleaned, dropped_reasons = salvage_online_extractor_state_output(chapter, output)
+    validated = validate_extractor_output(chapter, cleaned)
+    assert dropped_reasons == ["snapshot 当前行动 evidence context must identify its owner"]
+    assert [change.slot for change in validated.state_changes] == ["身体状态"]
+    assert len(validated.events) == 1
+
+    bad_archive = deepcopy(output)
+    bad_archive["character_events"][0]["evidence"] = "没有出现在正文里的证据"
+    with pytest.raises(ExtractorValidationError):
+        salvage_online_extractor_state_output(chapter, bad_archive)
 
 
 def test_character_rename_and_delete_reprojects_relationship(client, auth_headers):

@@ -29,7 +29,12 @@ from app.services.context import (
     pack_writer_context,
     writer_user_message,
 )
-from app.services.extraction import ExtractorValidationError, apply_extractor_output, validate_extractor_output
+from app.services.extraction import (
+    ExtractorValidationError,
+    apply_extractor_output,
+    salvage_online_extractor_state_output,
+    validate_extractor_output,
+)
 
 
 TERMINAL_PHASES = {"done", "failed", "cancelled"}
@@ -449,13 +454,26 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         chapter = db.get(Chapter, job.chapter_id)
         if chapter is None:
             record_job_phase(sf, job.job_id, "failed", error_code="chapter_missing", error_message="章节不存在"); job.mark_terminal("failed"); return
-        output, attempts = _run_extractor_with_correction(job, chapter, sf)
+        output, attempts, dropped_state_reasons = _run_extractor_with_correction(job, chapter, sf)
         if output is None:
             db.rollback(); job.mark_terminal(); return
         if _should_stop(job): db.rollback(); job.mark_terminal(); return
         updated_ids, event_ids = apply_extractor_output(db, chapter, output); db.commit()
+        completion_context = None
+        if dropped_state_reasons:
+            localized_reasons = list(dict.fromkeys(_extractor_user_reason(reason) for reason in dropped_state_reasons))
+            completion_context = {
+                "stage": "state_salvage",
+                "completion_warning": (
+                    f"本章已接受；{len(dropped_state_reasons)} 项人物当前状态未归档："
+                    + "；".join(localized_reasons)
+                    + "。正文、摘要及其余合格记忆已保存。"
+                ),
+                "dropped_state_components": len(dropped_state_reasons),
+                "dropped_state_reasons": localized_reasons,
+            }
         record_job_phase(
-            sf, job.job_id, "done", attempt=attempts,
+            sf, job.job_id, "done", attempt=attempts, error_context=completion_context,
             updated_character_ids=updated_ids, added_event_ids=event_ids,
         ); job.mark_terminal("done")
     except LLMError as exc:
@@ -479,7 +497,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
 
 def _run_extractor_with_correction(
     job: WriteJob, chapter: Chapter, sf: sessionmaker[Session]
-) -> tuple[dict[str, Any] | None, int]:
+) -> tuple[dict[str, Any] | None, int, list[str]]:
     """Return one fully validated output, correcting only contract failures.
 
     Transport, policy and other upstream errors remain truthful terminal
@@ -488,6 +506,7 @@ def _run_extractor_with_correction(
     message = job.extractor_user_message
     client = getattr(job.extractor, "llm", None)
     last_error: Exception | None = None
+    salvage_candidate: tuple[dict[str, Any], list[str]] | None = None
     for attempt in range(1, MAX_EXTRACTOR_VALIDATION_ATTEMPTS + 1):
         start = time.monotonic()
         try:
@@ -505,13 +524,21 @@ def _run_extractor_with_correction(
                 validate_extractor_output(chapter, output)
             except ExtractorValidationError as exc:
                 last_error = exc
+                try:
+                    salvage_candidate = salvage_online_extractor_state_output(chapter, output)
+                except ExtractorValidationError:
+                    pass
             else:
-                return output, attempt
+                return output, attempt, []
 
         if _should_stop(job):
-            return None, attempt
+            return None, attempt, []
         if attempt < MAX_EXTRACTOR_VALIDATION_ATTEMPTS:
             message += _extractor_correction_message(attempt, last_error)
+
+    if salvage_candidate is not None:
+        salvaged, dropped_reasons = salvage_candidate
+        return salvaged, MAX_EXTRACTOR_VALIDATION_ATTEMPTS, dropped_reasons
 
     exhausted = ExtractorValidationError(str(last_error or "unknown Extractor contract failure"))
     exhausted.attempts = MAX_EXTRACTOR_VALIDATION_ATTEMPTS  # type: ignore[attr-defined]
@@ -547,6 +574,11 @@ def _extractor_user_reason(reason: str) -> str:
         "duplicate character snapshot": "同一人物重复输出即时快照",
         "duplicate persistent state slot": "同一人物重复输出持续状态字段",
         "duplicate relationship pair": "同一人物关系重复输出",
+        "persistent operation has unsupported slot": "持续状态使用了未批准的字段名",
+        "persistent_ops must be an array": "持续状态列表结构不正确",
+        "relationship_ops must be an array": "人物关系列表结构不正确",
+        "state_updates must be an array": "人物当前状态列表结构不正确",
+        "state_updates item must be an object": "人物当前状态条目结构不正确",
         "snapshot value must describe chapter ending only": "即时快照必须只描述章节结束时状态",
         "relationship target must be another selected character": "人物关系对象必须是另一位本章已选人物",
         "state_updates references an unselected character": "人物状态引用了本章未获批准的人物",
@@ -564,6 +596,25 @@ def _extractor_user_reason(reason: str) -> str:
             return f"{label}绑定了人物，但文本没有明确写出该人物姓名"
         if reason == f"{field} references an unselected character":
             return f"{label}引用了本章未获批准的人物"
+    evidence_fields = {
+        "snapshot presence": "人物即时快照的出场",
+        "snapshot 当前位置": "即时快照“当前位置”的",
+        "snapshot 当前行动": "即时快照“当前行动”的",
+        "snapshot 情绪状态": "即时快照“情绪状态”的",
+        "persistent 身体状态": "持续状态“身体状态”的",
+        "persistent 当前目标": "持续状态“当前目标”的",
+        "persistent 秘密状态": "持续状态“秘密状态”的",
+        "relationship": "人物关系的",
+    }
+    evidence_suffixes = {
+        "evidence is required": "原文证据缺失",
+        "evidence lacks a substantial literal draft excerpt": "证据没有包含足够的正文连续原文",
+        "evidence context must identify its owner": "原文证据及近邻语境无法确认所属人物",
+    }
+    for field, label in evidence_fields.items():
+        for suffix, message in evidence_suffixes.items():
+            if reason == f"{field} {suffix}":
+                return label + message
     if reason.startswith("unsupported dynamic field key: "):
         return "人物动态字段使用了未批准的字段名：" + reason.removeprefix("unsupported dynamic field key: ")
     return reason

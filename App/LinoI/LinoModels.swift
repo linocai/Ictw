@@ -378,11 +378,9 @@ struct Violation: Codable, Hashable, Sendable {
     }
 }
 
-/// Additive per-failure context attached to a job's terminal `failed` phase
-/// (backend `job_runs.error_context`, populated for upstream failures and safe
-/// deterministic validation details). Old clients that never decode this key
-/// keep working off `errorMessage` alone; `LinoErrorPresenter` uses the known
-/// upstream fields to name the failing Agent/model and preserve raw reasons.
+/// Additive safe context attached to a terminal job. Failed jobs use the
+/// upstream fields below; a completed Extractor may carry a conservative
+/// state-salvage warning. Old clients ignore unknown keys safely.
 struct JobErrorContext: Codable, Sendable {
     var agentRole: String?
     var modelName: String?
@@ -390,6 +388,8 @@ struct JobErrorContext: Codable, Sendable {
     var finishReason: String?
     var blockReason: String?
     var httpStatus: Int?
+    var completionWarning: String?
+    var droppedStateComponents: Int?
 
     enum CodingKeys: String, CodingKey {
         case agentRole = "agent_role"
@@ -398,6 +398,8 @@ struct JobErrorContext: Codable, Sendable {
         case finishReason = "finish_reason"
         case blockReason = "block_reason"
         case httpStatus = "http_status"
+        case completionWarning = "completion_warning"
+        case droppedStateComponents = "dropped_state_components"
     }
 }
 
@@ -444,6 +446,12 @@ struct WriteJobStatus: Decodable, Sendable {
     var failedCandidateCheckerResult: CheckerResult? {
         guard errorCode == "checker_rejected" else { return nil }
         return checkerResult
+    }
+
+    var completionWarning: String? {
+        guard phase == "done", kind == "extract" else { return nil }
+        let message = errorContext?.completionWarning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return message.isEmpty ? nil : message
     }
 
     /// Preserve concrete structured reasons for Checker rejection and the

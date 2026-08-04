@@ -318,6 +318,29 @@ private func testCheckerOverrideSurvivesExtractorFailure() throws {
     )
 }
 
+private func testExtractorStateSalvageWarningDecodesOnSuccessfulCompletion() throws {
+    let object: [String: Any] = [
+        "chapter_id": "chapter-1",
+        "job_id": "extract-salvaged-1",
+        "outcome_current": true,
+        "kind": "extract",
+        "phase": "done",
+        "attempt": 3,
+        "error_context": [
+            "stage": "state_salvage",
+            "completion_warning": "本章已接受；1 项人物当前状态未归档：即时快照“当前行动”的原文证据及近邻语境无法确认所属人物。正文、摘要及其余合格记忆已保存。",
+            "dropped_state_components": 1,
+        ],
+    ]
+    let data = try JSONSerialization.data(withJSONObject: object)
+    let status = try JSONDecoder().decode(WriteJobStatus.self, from: data)
+    try expect(
+        status.completionWarning == "本章已接受；1 项人物当前状态未归档：即时快照“当前行动”的原文证据及近邻语境无法确认所属人物。正文、摘要及其余合格记忆已保存。",
+        "successful conservative state salvage must surface its exact Chinese warning"
+    )
+    try expect(status.errorContext?.droppedStateComponents == 1, "dropped state count must decode")
+}
+
 private func testDraftReadyDoesNotPretendCheckerPassed() throws {
     let pending = ChapterEditorPresentationState.make(
         phase: .idle,
@@ -437,6 +460,7 @@ private struct ClientStateTestRunner {
         try testRejectedCandidateKeepsSpecificCheckerReasonsSeparate()
         try testExtractorFailureKeepsSpecificBackendRule()
         try testCheckerOverrideSurvivesExtractorFailure()
+        try testExtractorStateSalvageWarningDecodesOnSuccessfulCompletion()
         try testDraftReadyDoesNotPretendCheckerPassed()
         try testLateRefreshCannotOverwriteLocalCharacterEdit()
         try testFailedRegenerationKeepsVisibleDraftActions()
