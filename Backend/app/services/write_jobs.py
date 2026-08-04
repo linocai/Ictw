@@ -31,8 +31,9 @@ from app.services.context import (
 )
 from app.services.extraction import (
     ExtractorValidationError,
+    OnlineExtractorSalvage,
     apply_extractor_output,
-    salvage_online_extractor_state_output,
+    salvage_online_extractor_output,
     validate_extractor_output,
 )
 
@@ -454,13 +455,43 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         chapter = db.get(Chapter, job.chapter_id)
         if chapter is None:
             record_job_phase(sf, job.job_id, "failed", error_code="chapter_missing", error_message="章节不存在"); job.mark_terminal("failed"); return
-        output, attempts, dropped_state_reasons = _run_extractor_with_correction(job, chapter, sf)
+        output, attempts, dropped_event_reasons, dropped_state_reasons = _run_extractor_with_correction(
+            job, chapter, sf
+        )
         if output is None:
             db.rollback(); job.mark_terminal(); return
         if _should_stop(job): db.rollback(); job.mark_terminal(); return
         updated_ids, event_ids = apply_extractor_output(db, chapter, output); db.commit()
         completion_context = None
-        if dropped_state_reasons:
+        if dropped_event_reasons:
+            localized_event_reasons = list(
+                dict.fromkeys(_extractor_user_reason(reason) for reason in dropped_event_reasons)
+            )
+            localized_state_reasons = list(
+                dict.fromkeys(_extractor_user_reason(reason) for reason in dropped_state_reasons)
+            )
+            warning_parts = [
+                f"{len(dropped_event_reasons)} 条人物事件未归档："
+                + "；".join(localized_event_reasons)
+            ]
+            if dropped_state_reasons:
+                warning_parts.append(
+                    f"{len(dropped_state_reasons)} 项人物当前状态未归档："
+                    + "；".join(localized_state_reasons)
+                )
+            completion_context = {
+                "stage": "optional_salvage",
+                "completion_warning": (
+                    "本章已接受；"
+                    + "；".join(warning_parts)
+                    + "。正文、摘要及其余合格记忆已保存。"
+                ),
+                "dropped_event_count": len(dropped_event_reasons),
+                "dropped_event_reasons": localized_event_reasons,
+                "dropped_state_components": len(dropped_state_reasons),
+                "dropped_state_reasons": localized_state_reasons,
+            }
+        elif dropped_state_reasons:
             localized_reasons = list(dict.fromkeys(_extractor_user_reason(reason) for reason in dropped_state_reasons))
             completion_context = {
                 "stage": "state_salvage",
@@ -497,12 +528,12 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
 
 def _run_extractor_with_correction(
     job: WriteJob, chapter: Chapter, sf: sessionmaker[Session]
-) -> tuple[dict[str, Any] | None, int, list[str]]:
+) -> tuple[dict[str, Any] | None, int, list[str], list[str]]:
     """Return one fully validated output within three actual model calls.
 
-    Length-truncated JSON is compacted and retried in-job.  Once a complete
-    archive exists, character-event failures re-extract only that array so a
-    small evidence defect cannot inflate or corrupt the rest of the archive.
+    Length-truncated JSON is compacted and retried in-job. Once a complete
+    archive exists, character events are validated independently; unsafe
+    optional entries are omitted without rewriting or blocking the archive.
     Transport, policy and other upstream errors remain truthful terminal
     failures. Every actual model call receives its own audit row.
     """
@@ -510,7 +541,7 @@ def _run_extractor_with_correction(
     client = getattr(job.extractor, "llm", None)
     last_error: Exception | None = None
     last_output: dict[str, Any] | None = None
-    salvage_candidate: tuple[dict[str, Any], list[str]] | None = None
+    salvage_candidate: OnlineExtractorSalvage | None = None
     repair_events = False
     for attempt in range(1, MAX_EXTRACTOR_VALIDATION_ATTEMPTS + 1):
         repairing_events_now = repair_events and last_output is not None
@@ -532,7 +563,7 @@ def _run_extractor_with_correction(
                 if not repairing_events_now:
                     message += _extractor_length_correction_message(attempt)
                 if _should_stop(job):
-                    return None, attempt, []
+                    return None, attempt, [], []
                 continue
             exc.agent_role, exc.model_name = "extractor", getattr(client, "model_name", None)
             raise
@@ -549,20 +580,32 @@ def _run_extractor_with_correction(
                 last_error = exc
                 repair_events = _is_character_event_validation_error(exc)
                 try:
-                    salvage_candidate = salvage_online_extractor_state_output(chapter, output)
+                    salvage_candidate = salvage_online_extractor_output(chapter, output)
                 except ExtractorValidationError:
                     pass
+                else:
+                    if repair_events and salvage_candidate.dropped_event_reasons:
+                        return (
+                            salvage_candidate.output,
+                            attempt,
+                            salvage_candidate.dropped_event_reasons,
+                            salvage_candidate.dropped_state_reasons,
+                        )
             else:
-                return output, attempt, []
+                return output, attempt, [], []
 
         if _should_stop(job):
-            return None, attempt, []
+            return None, attempt, [], []
         if attempt < MAX_EXTRACTOR_VALIDATION_ATTEMPTS and not repair_events:
             message += _extractor_correction_message(attempt, last_error)
 
     if salvage_candidate is not None:
-        salvaged, dropped_reasons = salvage_candidate
-        return salvaged, MAX_EXTRACTOR_VALIDATION_ATTEMPTS, dropped_reasons
+        return (
+            salvage_candidate.output,
+            MAX_EXTRACTOR_VALIDATION_ATTEMPTS,
+            salvage_candidate.dropped_event_reasons,
+            salvage_candidate.dropped_state_reasons,
+        )
 
     exhausted = ExtractorValidationError(str(last_error or "unknown Extractor contract failure"))
     exhausted.attempts = MAX_EXTRACTOR_VALIDATION_ATTEMPTS  # type: ignore[attr-defined]

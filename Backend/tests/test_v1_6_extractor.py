@@ -35,17 +35,6 @@ class RecordingExtractor:
         return self.payload
 
 
-class SequencedExtractor(RecordingExtractor):
-    def __init__(self, payloads: list[dict]) -> None:
-        super().__init__(payloads[-1])
-        self.payloads = payloads
-
-    def complete_json(self, *, system: str, user: str, schema: dict, **_kwargs):
-        payload = self.payloads[min(self.calls, len(self.payloads) - 1)]
-        self.payload = payload
-        return super().complete_json(system=system, user=user, schema=schema, **_kwargs)
-
-
 class TruncatedThenExtractor(RecordingExtractor):
     def complete_json(self, *, system: str, user: str, schema: dict, **_kwargs):
         if self.calls == 0:
@@ -160,7 +149,7 @@ def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
     assert any(block.text.endswith("钥匙已沉入河底。") for block in edited_blocks)
 
 
-def test_online_extractor_corrects_a_validation_failure_before_committing(
+def test_online_extractor_drops_only_invalid_event_without_another_model_call(
     client, auth_headers, wait_for_terminal
 ):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
@@ -177,28 +166,85 @@ def test_online_extractor_corrects_a_validation_failure_before_committing(
         headers=auth_headers,
         json={"draft_text": "林夕在渡口交出了钥匙，决定等候回信。"},
     ).raise_for_status()
-    invalid = _archive_payload("林夕")
-    invalid["character_events"][0]["event_type"] = "推进"
-    repaired = _archive_payload("林夕")
-    repaired["headline"] = "定向纠偏不得采用这个标题。"
-    repaired["long_summary"] = "定向纠偏不得采用这份摘要。"
-    llm = SequencedExtractor([invalid, repaired])
+    output = _archive_payload("林夕")
+    output["character_events"].append({
+        "character_name": "林夕",
+        "event_type": "推进",
+        "event_text": "林夕继续等待回信。",
+        "evidence": "林夕在渡口交出了钥匙，决定等候回信。",
+    })
+    llm = RecordingExtractor(output)
     client.app.dependency_overrides[get_extractor_client] = lambda: llm
 
     client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
     result = wait_for_terminal(client, chapter["id"], auth_headers)
     assert result["phase"] == "done"
-    assert result["attempt"] == 2
-    assert llm.calls == 2
-    assert set(llm.schemas[0]["properties"]) != {"character_events"}
-    assert set(llm.schemas[1]["properties"]) == {"character_events"}
-    assert "人物事件定向纠偏 2/3" in llm.users[1]
-    assert "event_type must use the canonical taxonomy" in llm.users[1]
+    assert result["attempt"] == 1
+    assert llm.calls == 1
+    assert result["error_context"] == {
+        "stage": "optional_salvage",
+        "completion_warning": "本章已接受；1 条人物事件未归档：人物事件类型不在固定分类中。正文、摘要及其余合格记忆已保存。",
+        "dropped_event_count": 1,
+        "dropped_event_reasons": ["人物事件类型不在固定分类中"],
+        "dropped_state_components": 0,
+        "dropped_state_reasons": [],
+    }
     archived = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert archived["status"] == "finalized"
-    assert archived["headline"] == invalid["headline"]
-    assert archived["long_summary"] == invalid["long_summary"]
-    assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]
+    assert archived["headline"] == output["headline"]
+    assert archived["long_summary"] == output["long_summary"]
+    events = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]
+    assert [event["event_text"] for event in events] == ["林夕在渡口交出钥匙。"]
+
+
+def test_online_extractor_can_finish_when_all_character_events_lack_owner_evidence(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "开门", "character_links": [{"character_id": character["id"]}]},
+    ).json()
+    draft = "林夕" + "风" * 120 + "推开门。"
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": draft},
+    ).raise_for_status()
+    output = {
+        "headline": "林夕推开门。",
+        "long_summary": "林夕最终推开了门。",
+        "state_changes": [],
+        "unresolved_items": [],
+        "atomic_memories": [],
+        "character_events": [{
+            "character_name": "林夕",
+            "event_type": "行动",
+            "event_text": "林夕推开门。",
+            "evidence": "推开门。",
+        }],
+        "state_updates": [],
+    }
+    llm = RecordingExtractor(output)
+    client.app.dependency_overrides[get_extractor_client] = lambda: llm
+
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    result = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert result["phase"] == "done"
+    assert result["attempt"] == 1
+    assert llm.calls == 1
+    assert result["error_context"]["dropped_event_count"] == 1
+    assert result["error_context"]["dropped_event_reasons"] == [
+        "人物事件的原文证据及近邻语境无法确认所属人物"
+    ]
+    archived = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert archived["status"] == "finalized"
+    assert archived["headline"] == output["headline"]
+    assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"] == []
 
 
 def test_online_extractor_retries_length_truncation_with_compact_full_archive(
@@ -403,7 +449,7 @@ def test_extractor_maps_multi_character_names_without_exposing_ids_to_model(
     assert "林骁扬" in llm.user and "周蕴文" in llm.user
 
 
-def test_extractor_rejects_evidence_that_does_not_name_the_assigned_character(
+def test_extractor_drops_event_evidence_assigned_to_the_wrong_character(
     client, auth_headers, wait_for_terminal
 ):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
@@ -440,16 +486,18 @@ def test_extractor_rejects_evidence_that_does_not_name_the_assigned_character(
     llm = RecordingExtractor(payload)
     client.app.dependency_overrides[get_extractor_client] = lambda: llm
     client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
-    failed = wait_for_terminal(client, chapter["id"], auth_headers)
-    assert failed["phase"] == "failed"
-    assert failed["attempt"] == 3
-    assert failed["error_message"].startswith("Extractor 连续 3 次未通过确定性校验：")
-    assert failed["error_context"] == {
-        "stage": "validation",
-        "attempts": 3,
-        "reason": "人物事件的原文证据及近邻语境无法确认所属人物",
-    }
-    assert llm.calls == 3
+    done = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert done["phase"] == "done"
+    assert done["attempt"] == 1
+    assert done["error_context"]["dropped_event_count"] == 1
+    assert done["error_context"]["dropped_event_reasons"] == [
+        "人物事件的原文证据及近邻语境无法确认所属人物"
+    ]
+    assert llm.calls == 1
+    archived = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert archived["status"] == "finalized"
+    assert archived["headline"] == payload["headline"]
+    assert archived["long_summary"] == payload["long_summary"]
     assert client.get(f"/api/v1/characters/{lin['id']}", headers=auth_headers).json()["events"] == []
 
 

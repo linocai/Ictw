@@ -1,5 +1,32 @@
 # Learnings
 
+## [LRN-20260804-005] correction
+
+**Logged**: 2026-08-04T22:50:00+08:00
+**Priority**: critical
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+
+Extractor 的可选人物事件不能因单条证据失败而阻塞整章；模型定向重试仍可能稳定复现同一坏条目。
+
+### Details
+
+Build 29 将人物事件失败收窄为只重提 `character_events`，但生产实测 DeepSeek Flash 与 Pro 在三轮正常结束的请求中仍反复输出无法确定归属人物的事件证据。调用没有截断或上游错误，说明“提示模型删掉不确定事件”不是可靠的终止条件。当前验证器只要遇到一条坏事件便拒绝整份归档，导致标题、摘要、章节记忆和人物状态也无法保存。
+
+### Suggested Action
+
+保持现有事件类型、人物白名单、人物姓名和原文证据门禁，改用后端逐条验证：只保留完整通过同一确定性规则的事件，丢弃不合格事件并记录逐条原因；完整归档和合格状态继续提交，完成 Job 明确提示丢弃数量。回归必须覆盖“部分事件合格”和“所有事件不合格”两种情况。
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: Backend/app/services/extraction.py, Backend/app/services/write_jobs.py, Backend/tests/test_v1_6_extractor.py
+- Tags: extractor, character-events, deterministic-validation, graceful-degradation
+
+---
+
 ## [LRN-20260802-004] correction
 
 **Logged**: 2026-08-02T17:34:56+08:00
