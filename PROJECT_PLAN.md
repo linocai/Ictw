@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-- 基线为双端 `v1.7.1(24)`、Backend `1.7.1`、Alembic `20260801_0008`；`v1.7.1-build24` 已发布。当前目标为双端／Backend `v1.7.2(25)`。
+- 双端／Backend `v1.7.2(25)` 已完成施工、生产迁移、三书状态重建、签名 Archive、本机 macOS 换装、tag 与 GitHub Release；生产 Alembic 为 `20260804_0009`，发布前备份为 `/opt/linoi/backups/20260804-153226`。
 - 已确认故障在整体数据语义而非单一前端：`characters.dynamic_fields` 被 Extractor 逐键增量合并；`character_field_patches` 只保存逆向补丁。未再次写到的旧字段不会退出，删除／重开中间章也不能可靠重算全部后续状态。双端和 Writer 原样读取该混合字典。
 - 现行 Extractor 已有姓名白名单、正文原文证据与三次确定性纠偏；这些安全门禁必须保留。`thinking`/`top_p`、候选稿隔离、Checker 与 v1.6 写作链均不随本项目改变。
 - 用户工作树资产：`.learnings/ERRORS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/`；只读保护，不暂存、覆盖、回退或纳入提交／产物。
@@ -81,7 +81,7 @@
 
 ### Phase 4 — 三本书安全重建
 
-状态：工具完成，待生产维护窗口执行；不可跳过。
+状态：完成。三本书 77 个已定稿章节已生成并复检 0600 v2 bundle；单一事务应用 472 条状态变更、111 条当前有效来源，旧 `character_field_patches` 清零。
 
 - 先用生产库备份副本或维护锁确认三本书精确 ID／标题、已定稿章节数和人物数，仅输出元数据。停止写入并确认无活动 Job；对三本书逐章生成 v2 0600 验证 bundle，所有输出通过确定性校验、章节／正文指纹和覆盖率检查后才允许继续。
 - 一次性校验三份 bundle 后，在**单一数据库事务**中清除三书旧字段补丁与旧物化动态状态，按章节顺序写入状态变更并投影；既有 `CharacterEvent`、章节归档和用户不可变内容不改。任一本／任一章失败即 rollback，绝不产生半书或半套状态。
@@ -89,7 +89,7 @@
 
 ### Phase 5 — 验证、部署与发布
 
-状态：本地验证完成，待主会话执行生产备份／迁移／三书重建、提交、Archive 与发布。
+状态：完成。Backend 105 项测试、compileall、迁移、客户端状态测试、双端 Debug／签名 Release Archive、iOS 开发签名 IPA、macOS universal ZIP／换装、生产内外网健康与发布门禁均通过。
 
 - Backend：新增／更新迁移、投影、生命周期、Extractor、bundle、旧客户端兼容、导出与错误路径测试；完整 `pytest -q`、`compileall`、`alembic heads`、`git diff --check` 必须通过。客户端运行 `App/Tests/run_client_state_tests.sh`、iOS／macOS Debug build。
 - 生产：先停旧服务并备份 `linoi.db`、`.env`、当前代码与 unit/nginx 配置；备份权限 600，并验证 integrity／FK／head。上传已提交 Backend，先 `alembic upgrade head`，执行三书干跑与一次性 apply，再启动单一服务实例。验收内外 HTTPS health=`1.7.2`、head、integrity、FK、零活动任务、`NRestarts=0`、无敏感日志和三书投影统计；失败按停服、还原代码与数据库备份、复核后启动的顺序回滚。
@@ -105,5 +105,6 @@
 
 ## 里程碑索引
 
+- `v1.7.2(25)` 将人物动态字段升级为可重放当前状态投影；生产 `3 books / 77 chapters / 31 characters / 340 events / 472 state changes / 111 effective states`，不可变内容与备份哈希一致，非法键／占位值为零；备份 `/opt/linoi/backups/20260804-153226`。
 - `v1.7.1(24)` Extractor 错误可见性与三次纠偏已发布；备份 `/opt/linoi/backups/20260804-083059`。
 - `v1.7.0(21/22)` iOS／macOS 纸墨视觉、Archive、tag 与 GitHub Release 已完成；`v1.6.0–v1.6.5` 写作链／摘要迁移已完成。详细记录在 `archive/` 与 Git tag。
