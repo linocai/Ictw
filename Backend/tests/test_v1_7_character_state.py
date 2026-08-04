@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
+import pytest
+
+from app.agents.extractor import ExtractorContractError, bind_extractor_character_names
 from app.models import CharacterStateChange
 from app.services.character_state_projection import project_state_changes, rebuild_book_projection
 
@@ -33,6 +38,31 @@ def test_projection_replaces_snapshot_preserves_persistent_and_mirrors_one_relat
     assert projected["a"] == {"当前位置": "地点 B", "当前行动": "起床", "情绪状态": "警觉", "与乙关系": "合作"}
     assert projected["b"] == {"与甲关系": "合作"}
     assert len(effective) == 5
+
+
+def test_relationship_binding_deduplicates_identical_pair_but_rejects_conflict():
+    output = {
+        "headline": "关系变化",
+        "long_summary": "甲与乙合作。",
+        "state_changes": [], "unresolved_items": [], "atomic_memories": [], "character_events": [],
+        "state_updates": [
+            {
+                "character_name": "甲", "snapshot": None, "persistent_ops": [],
+                "relationship_ops": [{"other_character_name": "乙", "operation": "set", "value": "合作", "evidence": "甲与乙合作。"}],
+            },
+            {
+                "character_name": "乙", "snapshot": None, "persistent_ops": [],
+                "relationship_ops": [{"other_character_name": "甲", "operation": "set", "value": "合作", "evidence": "甲与乙合作。"}],
+            },
+        ],
+    }
+    bound = bind_extractor_character_names(deepcopy(output), [("a", "甲"), ("b", "乙")])
+    assert sum(len(item["relationship_ops"]) for item in bound["state_updates"]) == 1
+
+    conflicting = deepcopy(output)
+    conflicting["state_updates"][1]["relationship_ops"][0]["value"] = "敌对"
+    with pytest.raises(ExtractorContractError, match="conflicting duplicate"):
+        bind_extractor_character_names(conflicting, [("a", "甲"), ("b", "乙")])
 
 
 def test_character_rename_and_delete_reprojects_relationship(client, auth_headers):

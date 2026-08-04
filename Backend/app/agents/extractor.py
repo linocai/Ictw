@@ -55,6 +55,10 @@ def extractor_schema(selected_character_names: list[str]) -> dict[str, Any]:
     }
     relationship_op = {
         "type": "object",
+        "description": (
+            "无向人物关系。同一人物对在整份 state_updates 中只能出现一次，"
+            "并归到人物白名单顺序更靠前的一方；value 描述双方共同关系，不写各自视角。"
+        ),
         "properties": {"other_character_name": name, **_operation_schema()["properties"]},
         "required": ["other_character_name", "operation", "value", "evidence"], "additionalProperties": False,
     }
@@ -163,7 +167,7 @@ def bind_extractor_character_names(output: dict[str, Any], selected_characters: 
     if not isinstance(raw_updates, list):
         raise ExtractorContractError("state_updates must be an array")
     bound: list[dict[str, Any]] = []
-    legacy_pairs: set[tuple[str, str]] = set()
+    seen_relationships: dict[tuple[str, str], tuple[Any, Any]] = {}
     for raw in raw_updates:
         item = bind(raw, allow_null=False)
         relationship_ops = item.get("relationship_ops")
@@ -178,9 +182,17 @@ def bind_extractor_character_names(output: dict[str, Any], selected_characters: 
                 raise ExtractorContractError("relationship target must be another selected character")
             operation["other_character_id"] = name_to_id[other]
             pair = tuple(sorted((item["character_id"], operation["other_character_id"])))
-            if result.get("_legacy_state_adapter") and pair in legacy_pairs:
-                continue
-            legacy_pairs.add(pair)
+            signature = (operation.get("operation"), operation.get("value"))
+            previous = seen_relationships.get(pair)
+            if previous is not None:
+                # Old clients emitted mirrored relationship fields.  New model
+                # output may still repeat the exact same undirected fact; that
+                # is safe to canonicalize once.  Different values remain a hard
+                # conflict and must be corrected by Extractor.
+                if result.get("_legacy_state_adapter") or previous == signature:
+                    continue
+                raise ExtractorContractError("relationship pair has conflicting duplicate updates")
+            seen_relationships[pair] = signature
             filtered_relationship_ops.append(operation)
         item["relationship_ops"] = filtered_relationship_ops
         bound.append(item)

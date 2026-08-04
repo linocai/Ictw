@@ -526,7 +526,9 @@ def _extractor_correction_message(attempt: int, error: Exception | None) -> str:
         "只保留正文中能逐字举证的事实；找不到合格证据的条目必须删除，宁缺毋滥。"
         "每条带人物归属的 text 与 event_text 必须明确写出并以所属人物精确姓名开头；"
         "event_type 只能使用 schema 枚举；state_updates 的即时快照必须完整包含位置、行动、情绪三槽，"
-        "持续状态与唯一人物关系只能 set/clear；event 与状态操作的 evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，"
+        "持续状态与唯一人物关系只能 set/clear；同一无向人物对整份输出只能写一次，"
+        "放在人物白名单顺序更靠前的一方，value 写双方共同关系状态；"
+        "event 与状态操作的 evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，"
         "不得转述、概括、添加标签、引号或解释。"
     )
 

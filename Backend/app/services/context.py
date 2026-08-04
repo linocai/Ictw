@@ -513,6 +513,8 @@ def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
                 "人物相关的 text 与 event_text 必须以该人物精确姓名开头。人物事件只使用约定的中文类型。"
                 "state_updates 只写本章实际在场人物的当前状态：snapshot 一旦提供必须完整给出当前位置、当前行动、情绪状态三槽，"
                 "每槽 set 或 clear；persistent_ops 只允许身体状态、当前目标、秘密状态；relationship_ops 是唯一人物对关系。"
+                "同一无向人物对在整份 state_updates 中只输出一次：必须放在上方白名单顺序更靠前的人物下，"
+                "另一人物不得重复该关系；value 只写双方共同关系状态，不写两份不同视角。"
                 "snapshot 只描述章节结束时，禁止过程串。掌握信息只进 atomic_memories；不得输出其他状态、未知、未明确或占位值。"
                 "所有 set/clear 的 evidence 必须是正文中的原文片段，"
                 "且必须包含所属人物姓名；宁可不记，也不得猜测归属。未选择人物时人物更新数组必须为空。"
