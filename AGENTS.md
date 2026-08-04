@@ -49,6 +49,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
+- 双端／Backend `v1.7.2(29)` 已于 2026-08-04 完成 Extractor 截断／事件定向纠偏快修：完整归档输出预算提高到 8192 token，长度截断真实分类并在三次调用预算内自动压缩重试；取得完整归档后，人物事件校验失败只重提 `character_events`，不得改写其余归档，原有事件证据与人物白名单门禁不放松。Backend 无 migration，生产备份 `/opt/linoi/backups/20260804-222215`；tag 与 GitHub Release 为 `v1.7.2-build29`，公开资产仅含 macOS ZIP。
 - 双端／Backend `v1.7.2(28)` 已于 2026-08-04 完成 Extractor 保守降级快修：仍先严格纠偏三次；只有摘要、章节归档和人物事件全部合格时，才逐组件丢弃不安全的可选人物状态，即时快照保持整组原子性，持续状态／关系逐项复检。不得改写证据、猜测归属或放松白名单；完成 Job 必须记录丢弃数量和中文原因供双端提示。Backend 无 migration，生产备份 `/opt/linoi/backups/20260804-183358`；tag 与 GitHub Release 为 `v1.7.2-build28`，公开资产仅含 macOS ZIP。
 - 双端／Backend `v1.7.2(27)` 已于 2026-08-04 修复“忽略 Bible 并接受”在 Extractor 失败后丢失的问题：授权绑定完整写作输入指纹，同稿可直接重试 Extractor，任一输入变化即失效；兼容 Build 26 缺少指纹的现网 override 记录，但必须由当前不可变候选证明输入未变。Backend 无 migration，生产备份 `/opt/linoi/backups/20260804-181721`；双端签名归档、iOS 本机 IPA、macOS 通用架构 ZIP／换装均完成。tag 与 GitHub Release 为 `v1.7.2-build27`，公开资产仅含 macOS ZIP。
 - 双端 `v1.7.2(26)` 已于 2026-08-04 修复手改正文后 Checker 仍检查服务器旧稿、导致无法接受本章的问题；市场版本不变，仅 Build 从 25 升至 26。Backend 与数据库未改、未部署；客户端状态测试、双端 Debug／签名 Release Archive、iOS 本机 IPA、macOS 通用架构 ZIP／换装均通过。tag 与 GitHub Release 为 `v1.7.2-build26`，公开资产仅含 macOS ZIP。
