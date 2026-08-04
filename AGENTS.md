@@ -49,8 +49,8 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
-- 双端 `v1.7.1(23)` 已于 2026-08-03 完成客户端状态测试、双端 Debug、签名 Release Archive、版本／Bundle ID／架构／签名复核；iOS 开发签名 IPA仅本机保留、未上传 App Store Connect，macOS 通用架构 App 已正式换装。统一 tag 与 GitHub Release 为 `v1.7.1`，公开资产仅含 macOS ZIP。
-- Backend `v1.7.1` 人物记忆快修已于 2026-08-03 部署，无 migration；《骁扬》8 个已定稿章节已通过 0600 验证包与指纹门禁原子重建为 54 条人物事件、22 条字段补丁。正文、Bible、标题、大事记、摘要保持不变，另两本书业务表哈希不变；生产备份在 `/opt/linoi/backups/20260803-152134`。
+- 双端 `v1.7.1(24)` 已于 2026-08-04 完成 Extractor 快修发版；市场版本不变，仅 Build 从 23 升至 24。客户端状态测试、双端 Debug、签名 Release Archive、版本／Bundle ID／架构／签名复核通过；iOS 开发签名 IPA 仅本机保留、未上传 App Store Connect，macOS 通用架构 App 已换装。tag 与 GitHub Release 为 `v1.7.1-build24`，公开资产仅含 macOS ZIP。
+- Backend `v1.7.1` 当前在线 Extractor 对确定性合约／证据校验最多执行三次（首次加两次纠正），仍失败时整事务回滚并返回具体规则原因；上游错误不参与此重试。该快修无 migration，生产备份在 `/opt/linoi/backups/20260804-083059`，Alembic 保持 `20260801_0008`。
 - macOS `v1.7.0(22)` 已于 2026-08-03 完成「纸与墨」视觉升级、双端回归、正式通用架构 Archive、本机正式 App 换装、`v1.7.0-macos-build22` tag 与 GitHub Release；Backend、Alembic 与 iOS 无发布动作。
 - `v1.7.0(22)` 已于 2026-08-02 修复 iOS 书架“新建书”卡片在网格换行时被压缩的问题，完成独立 Review、正式 Archive、本机开发签名 IPA、`v1.7.0-build22` tag 与 GitHub Release；市场版本仍为 `1.7.0`，Backend、Alembic 与 macOS App 未变更；未上传 App Store Connect 或安装设备。
 - `v1.7.0(21)` 已于 2026-08-02 完成 iOS「纸与墨」原生视觉升级、全新 App Icon、正式 Archive、本机开发签名 IPA、tag 与 GitHub Release；Backend、Alembic 与 macOS App 未变更，仍维持 `v1.6.5(20)`；未上传 App Store Connect 或安装设备。
