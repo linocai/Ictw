@@ -49,6 +49,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
+- 双端／Backend `v1.7.2(27)` 已于 2026-08-04 修复“忽略 Bible 并接受”在 Extractor 失败后丢失的问题：授权绑定完整写作输入指纹，同稿可直接重试 Extractor，任一输入变化即失效；兼容 Build 26 缺少指纹的现网 override 记录，但必须由当前不可变候选证明输入未变。Backend 无 migration，生产备份 `/opt/linoi/backups/20260804-181721`；双端签名归档、iOS 本机 IPA、macOS 通用架构 ZIP／换装均完成。tag 与 GitHub Release 为 `v1.7.2-build27`，公开资产仅含 macOS ZIP。
 - 双端 `v1.7.2(26)` 已于 2026-08-04 修复手改正文后 Checker 仍检查服务器旧稿、导致无法接受本章的问题；市场版本不变，仅 Build 从 25 升至 26。Backend 与数据库未改、未部署；客户端状态测试、双端 Debug／签名 Release Archive、iOS 本机 IPA、macOS 通用架构 ZIP／换装均通过。tag 与 GitHub Release 为 `v1.7.2-build26`，公开资产仅含 macOS ZIP。
 - 双端／Backend `v1.7.2(25)` 已于 2026-08-04 完成人物当前状态投影升级、Alembic `20260804_0009`、三本书 77 章安全重建、签名 Archive、本机 macOS 换装、`v1.7.2` tag 与 GitHub Release。生产为 `472 character_state_changes / 111 effective / 0 character_field_patches`，340 条人物事件及正文／Bible／摘要／人物固定卡与备份哈希一致；备份 `/opt/linoi/backups/20260804-153226`。
 - v1.7.2 离线重建只请求／校验 `state_updates`；三次纠偏后逐组件保守丢弃不合格状态，冲突关系整对丢弃。0600 断点／完整 bundle 只存云端维护目录，不进 Git；线上 Extractor 仍保持整次严格校验，不使用离线 salvage。

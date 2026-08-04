@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-- `v1.7.2(27)` 强制接受快修正在发布：让“忽略 Bible 并接受”按完整写作输入指纹持久记录；Extractor 失败不再抹掉用户决定，同一正文可直接重试 Extractor，正文／Bible／世界观／人物选择变化后授权自动失效。兼容 Build 26 已产生但缺少指纹的 override 记录，仅在当前不可变候选能证明所有输入未变时继承。Backend 无 migration，双端市场版本保持 `1.7.2`，仅 Build 从 26 升至 27。
+- `v1.7.2(27)` 强制接受快修已完成：让“忽略 Bible 并接受”按完整写作输入指纹持久记录；Extractor 失败不再抹掉用户决定，同一正文可直接重试 Extractor，正文／Bible／世界观／人物选择变化后授权自动失效。兼容 Build 26 已产生但缺少指纹的 override 记录，仅在当前不可变候选能证明所有输入未变时继承。Backend 无 migration，生产备份为 `/opt/linoi/backups/20260804-181721`；106 项后端测试、客户端状态测试、双端 Debug／签名 Release Archive、iOS 本机 IPA、macOS 通用架构 ZIP／换装均通过。双端市场版本保持 `1.7.2`，Build 从 26 升至 27；tag 与 GitHub Release 为 `v1.7.2-build27`。
 - `v1.7.2(26)` 客户端快修已完成：市场版本保持 `1.7.2`，仅将 iOS／macOS Build 从 25 升至 26；修正双端手改正文后 Checker 仍检查服务器旧稿的问题。“重新检查”现先保存当前正文再检查，“编辑后检查”在编辑态明确变为“保存并检查”。Backend 与数据库未改、未部署。双端正式 Archive、iOS 本机 IPA、macOS ZIP／换装、`v1.7.2-build26` tag 与 GitHub Release 均已完成。
 - 双端／Backend `v1.7.2(25)` 已完成施工、生产迁移、三书状态重建、签名 Archive、本机 macOS 换装、tag 与 GitHub Release；生产 Alembic 为 `20260804_0009`，发布前备份为 `/opt/linoi/backups/20260804-153226`。
 - 已确认故障在整体数据语义而非单一前端：`characters.dynamic_fields` 被 Extractor 逐键增量合并；`character_field_patches` 只保存逆向补丁。未再次写到的旧字段不会退出，删除／重开中间章也不能可靠重算全部后续状态。双端和 Writer 原样读取该混合字典。
