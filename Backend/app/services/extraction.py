@@ -210,6 +210,24 @@ def validate_extractor_output(chapter: Chapter, output: dict[str, Any]) -> Valid
     return ValidatedExtractorOutput(headline.strip(), long_summary.strip(), archive_values, events, _validated_state_updates(chapter, output.get("state_updates"), character_map))
 
 
+def validate_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> ValidatedExtractorOutput:
+    """Validate only state rows for the offline rebuild.
+
+    Existing events and archive fields are intentionally outside this contract
+    because the apply path never changes them.
+    """
+    if not isinstance(output, dict) or set(output) != {"state_updates"}:
+        raise ExtractorValidationError("state rebuild output must contain only state_updates")
+    character_map = {link.character_id: link.character for link in chapter.character_links}
+    return ValidatedExtractorOutput(
+        chapter.headline or "state-rebuild",
+        chapter.long_summary or "state-rebuild",
+        {},
+        [],
+        _validated_state_updates(chapter, output.get("state_updates"), character_map),
+    )
+
+
 def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:
     validated = validate_extractor_output(chapter, output)
     db.execute(delete(CharacterEvent).where(CharacterEvent.chapter_id == chapter.id))

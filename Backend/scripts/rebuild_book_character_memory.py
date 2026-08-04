@@ -18,7 +18,7 @@ from app.services.context import draft_fingerprint, extractor_user_message
 from app.services.extraction import (
     ExtractorValidationError,
     persist_validated_state_changes,
-    validate_extractor_output,
+    validate_state_rebuild_output,
 )
 from app.services.personas import get_persona
 
@@ -106,7 +106,7 @@ def load_validated_bundle(
         output = entry.get("output")
         if not isinstance(output, dict):
             raise RuntimeError("validated bundle output is invalid")
-        validated = validate_extractor_output(chapter, output)
+        validated = validate_state_rebuild_output(chapter, output)
         outputs[chapter.id] = output
         print(
             f"loaded chapter={chapter.index} events={len(validated.events)} "
@@ -152,16 +152,16 @@ def main() -> int:
                 selected = [(link.character_id, link.character.name) for link in chapter.character_links]
                 message = extractor_user_message(db, book, chapter)
                 for attempt in range(MAX_EXTRACTION_ATTEMPTS):
-                    output = extractor.extract(message, selected)
+                    output = extractor.extract_state_updates(message, selected)
                     try:
-                        validated = validate_extractor_output(chapter, output)
+                        validated = validate_state_rebuild_output(chapter, output)
                         break
                     except ExtractorValidationError as exc:
                         if attempt == MAX_EXTRACTION_ATTEMPTS - 1:
                             raise
                         message += (
                             f"\n\n# 第 {attempt + 1} 次格式纠偏\n上一次输出未通过确定性校验：{exc}。"
-                            "只保留能在正文中找到逐字证据的 event 和 state_updates；找不到就删除该条，宁缺毋滥。"
+                            "只输出 state_updates，只保留能在正文中找到逐字证据的状态；找不到就删除该条，宁缺毋滥。"
                             "即时快照必须完整包含位置、行动、情绪三槽；持续状态与人物关系只能 set/clear。"
                             "同一无向人物对整份输出只能写一次，放在人物白名单顺序更靠前的一方，"
                             "另一侧不得重复，value 写双方共同关系状态。"

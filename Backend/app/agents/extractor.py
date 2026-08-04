@@ -90,6 +90,17 @@ def extractor_schema(selected_character_names: list[str]) -> dict[str, Any]:
     }
 
 
+def extractor_state_rebuild_schema(selected_character_names: list[str]) -> dict[str, Any]:
+    """Narrow offline-rebuild contract: existing archives/events stay untouched."""
+    state_updates = extractor_schema(selected_character_names)["properties"]["state_updates"]
+    return {
+        "type": "object",
+        "properties": {"state_updates": state_updates},
+        "required": ["state_updates"],
+        "additionalProperties": False,
+    }
+
+
 def _legacy_updates(result: dict[str, Any]) -> list[dict[str, Any]]:
     """Read old in-flight payloads without preserving their merge semantics.
 
@@ -217,3 +228,39 @@ class ExtractorAgent:
             max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
         )
         return bind_extractor_character_names(output, selected)
+
+    def extract_state_updates(
+        self, user_message: str, selected_characters: list[SelectedCharacter] | None = None
+    ) -> dict[str, Any]:
+        """Extract only replayable state for the offline v1.7.2 rebuild."""
+        selected = selected_characters or []
+        names = [name.strip() for _, name in selected]
+        if any(not name for name in names) or len(set(names)) != len(names):
+            raise ExtractorContractError("selected character names must be non-empty and unique")
+        output = self.llm.complete_json(
+            system=(
+                self.system_prompt
+                + "\n\n本次是离线当前状态重建：只输出 state_updates。"
+                "既有人物事件、摘要和章节归档全部保留，不得重新生成。"
+            ),
+            user=(
+                "# 本次唯一输出\n只从最终接受正文提取 state_updates；不得输出 headline、摘要、"
+                "人物事件或其他归档字段。\n\n" + user_message
+            ),
+            schema=extractor_state_rebuild_schema(names),
+            temperature=0.2,
+            timeout=EXTRACTOR_TIMEOUT_SECONDS,
+            hard_timeout=True,
+            max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
+        )
+        wrapped = {
+            "headline": "state-rebuild",
+            "long_summary": "state-rebuild",
+            "state_changes": [],
+            "unresolved_items": [],
+            "atomic_memories": [],
+            "character_events": [],
+            "state_updates": output.get("state_updates"),
+        }
+        bound = bind_extractor_character_names(wrapped, selected)
+        return {"state_updates": bound["state_updates"]}

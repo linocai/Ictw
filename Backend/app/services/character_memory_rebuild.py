@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Book, Chapter, Character, CharacterEvent, CharacterFieldPatch, CharacterStateChange
 from app.services.character_state_projection import rebuild_book_projection
-from app.services.extraction import persist_validated_state_changes, validate_extractor_output
+from app.services.extraction import persist_validated_state_changes, validate_state_rebuild_output
 
 
 class CharacterMemoryRebuildError(ValueError):
@@ -46,7 +46,7 @@ def rebuild_book_character_memory(
     updated_characters: set[str] = set()
     change_count = 0
     for chapter in chapters:
-        validated = validate_extractor_output(chapter, outputs_by_chapter_id[chapter.id])
+        validated = validate_state_rebuild_output(chapter, outputs_by_chapter_id[chapter.id])
         persist_validated_state_changes(db, chapter, validated)
         updated_characters.update({item.character_id for item in validated.state_changes})
         change_count += len(validated.state_changes)

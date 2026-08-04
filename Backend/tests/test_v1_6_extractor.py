@@ -411,7 +411,8 @@ def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
 
     db = db_module.SessionLocal()
     try:
-        output = bind_extractor_character_names(_archive_payload("林夕"), [(character["id"], "林夕")])
+        full_output = bind_extractor_character_names(_archive_payload("林夕"), [(character["id"], "林夕")])
+        output = {"state_updates": full_output["state_updates"]}
         orm_book = db.get(Book, book["id"])
         orm_chapter = db.get(Chapter, chapter["id"])
         bundle_path = tmp_path / "validated-rebuild.json"

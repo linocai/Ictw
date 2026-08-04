@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.agents.memory_selector import MEMORY_SELECTION_FIXED_CONTRACT, MemorySelectorAgent
-from app.agents.extractor import extractor_schema
+from app.agents.extractor import extractor_schema, extractor_state_rebuild_schema
 from app.db import Base, make_engine
 from app.llm.base import LLMError
 from app.llm.openai_compatible import OpenAICompatibleClient, _extract_content, _http_error
@@ -65,6 +65,13 @@ def test_extractor_schema_for_no_characters_forces_empty_arrays():
     schema = extractor_schema([])
     assert schema["properties"]["character_events"]["maxItems"] == 0
     assert schema["properties"]["state_updates"]["maxItems"] == 0
+
+
+def test_state_rebuild_schema_cannot_regenerate_archives_or_events():
+    schema = extractor_state_rebuild_schema(["甲"])
+    assert set(schema["properties"]) == {"state_updates"}
+    assert schema["required"] == ["state_updates"]
+    assert schema["additionalProperties"] is False
 
 
 def test_hard_request_timeout_has_truthful_error_code(monkeypatch):
