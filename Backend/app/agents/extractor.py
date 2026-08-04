@@ -10,7 +10,7 @@ from app.services.personas import compose_system_prompt
 
 CANONICAL_EVENT_TYPES = ("经历", "行动", "决定", "关系", "情绪", "认知", "状态")
 EXTRACTOR_TIMEOUT_SECONDS = 120
-EXTRACTOR_MAX_OUTPUT_TOKENS = 4096
+EXTRACTOR_MAX_OUTPUT_TOKENS = 8192
 SelectedCharacter = tuple[str, str]
 
 
@@ -28,6 +28,25 @@ def _operation_schema() -> dict[str, Any]:
         },
         "required": ["operation", "value", "evidence"],
         "additionalProperties": False,
+    }
+
+
+def _character_events_schema(selected_character_names: list[str]) -> dict[str, Any]:
+    name = {"type": "string", "enum": selected_character_names}
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "character_name": name,
+                "event_type": {"type": "string", "enum": list(CANONICAL_EVENT_TYPES)},
+                "event_text": {"type": "string"},
+                "evidence": {"type": "string"},
+            },
+            "required": ["character_name", "event_type", "event_text", "evidence"],
+            "additionalProperties": False,
+        },
+        **({"maxItems": 0} if not selected_character_names else {}),
     }
 
 
@@ -79,13 +98,20 @@ def extractor_schema(selected_character_names: list[str]) -> dict[str, Any]:
             "state_changes": {"type": "array", "items": archive_item},
             "unresolved_items": {"type": "array", "items": archive_item},
             "atomic_memories": {"type": "array", "items": archive_item},
-            "character_events": {"type": "array", "items": {
-                "type": "object", "properties": {"character_name": name, "event_type": {"type": "string", "enum": list(CANONICAL_EVENT_TYPES)}, "event_text": {"type": "string"}, "evidence": {"type": "string"}},
-                "required": ["character_name", "event_type", "event_text", "evidence"], "additionalProperties": False,
-            }, **arrays_extra},
+            "character_events": _character_events_schema(selected_character_names),
             "state_updates": {"type": "array", "items": state_update, **arrays_extra},
         },
         "required": ["headline", "long_summary", "state_changes", "unresolved_items", "atomic_memories", "character_events", "state_updates"],
+        "additionalProperties": False,
+    }
+
+
+def extractor_event_repair_schema(selected_character_names: list[str]) -> dict[str, Any]:
+    """Narrow online correction contract: preserve every non-event archive field."""
+    return {
+        "type": "object",
+        "properties": {"character_events": _character_events_schema(selected_character_names)},
+        "required": ["character_events"],
         "additionalProperties": False,
     }
 
@@ -244,6 +270,38 @@ class ExtractorAgent:
             max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
         )
         return bind_extractor_character_names(output, selected)
+
+    def repair_character_events(
+        self, user_message: str, selected_characters: list[SelectedCharacter] | None = None
+    ) -> list[dict[str, Any]]:
+        """Re-extract only strict character events after an event-gate failure."""
+        selected = selected_characters or []
+        names = [name.strip() for _, name in selected]
+        if any(not name for name in names) or len(set(names)) != len(names):
+            raise ExtractorContractError("selected character names must be non-empty and unique")
+        output = self.llm.complete_json(
+            system=(
+                self.system_prompt
+                + "\n\n本次只纠正 character_events。其他摘要、章节归档与人物状态已固定，"
+                "不得重新生成，也不得在输出中出现。"
+            ),
+            user=user_message,
+            schema=extractor_event_repair_schema(names),
+            temperature=0.1,
+            timeout=EXTRACTOR_TIMEOUT_SECONDS,
+            hard_timeout=True,
+            max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
+        )
+        wrapped = {
+            "headline": "event-repair",
+            "long_summary": "event-repair",
+            "state_changes": [],
+            "unresolved_items": [],
+            "atomic_memories": [],
+            "character_events": output.get("character_events"),
+            "state_updates": [],
+        }
+        return bind_extractor_character_names(wrapped, selected)["character_events"]
 
     def extract_state_updates(
         self, user_message: str, selected_characters: list[SelectedCharacter] | None = None

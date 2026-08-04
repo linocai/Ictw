@@ -246,6 +246,8 @@ enum LinoErrorPresenter {
             return Entry(reason: "上游未返回有效正文内容", suggestion: "请重试；若持续出现，请检查模型配置")
         case "llm_invalid_response":
             return Entry(reason: "上游返回的数据无法解析", suggestion: "请稍后重试；若持续出现，请联系模型服务商")
+        case "llm_output_truncated":
+            return Entry(reason: "Extractor 输出达到长度上限，归档数据被截断", suggestion: "系统会自动压缩重试；若仍失败，请再次提取归档")
         case "llm_transport":
             return Entry(reason: "连接模型服务失败", suggestion: "请检查网络后重试")
         case "llm_upstream_error":

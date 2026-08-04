@@ -65,13 +65,30 @@ class OpenAICompatibleClient:
             hard_timeout=bool(kwargs.get("hard_timeout", False)),
         )
         self.last_usage = _extract_usage(data)
+        self.last_finish_reason = _extract_finish_reason(data)
         try:
-            self.last_finish_reason = _extract_finish_reason(data)
             parsed = json.loads(_extract_content(data))
         except json.JSONDecodeError as exc:
-            raise LLMError(f"LLM returned invalid JSON: {exc}", retryable=False) from exc
+            if _is_length_finish_reason(self.last_finish_reason):
+                raise LLMError(
+                    "LLM JSON output was truncated",
+                    code="llm_output_truncated",
+                    retryable=True,
+                    finish_reason=self.last_finish_reason,
+                ) from exc
+            raise LLMError(
+                "LLM returned invalid JSON",
+                code="llm_invalid_response",
+                retryable=False,
+                finish_reason=self.last_finish_reason,
+            ) from exc
         if not isinstance(parsed, dict):
-            raise LLMError("LLM JSON response was not an object", retryable=False)
+            raise LLMError(
+                "LLM JSON response was not an object",
+                code="llm_invalid_response",
+                retryable=False,
+                finish_reason=self.last_finish_reason,
+            )
         return parsed
 
     def complete_stream(
@@ -268,6 +285,13 @@ def _extract_finish_reason(data: dict[str, Any]) -> str | None:
         else:
             value = None
     return str(value) if value is not None else None
+
+
+def _is_length_finish_reason(value: str | None) -> bool:
+    if value is None:
+        return False
+    normalized = value.strip().lower().replace("-", "_")
+    return normalized in {"length", "max_tokens", "max_output_tokens", "max_token"}
 
 
 def _http_error(

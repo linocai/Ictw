@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.agents.extractor import ExtractorAgent, bind_extractor_character_names, extractor_schema
+from app.llm.base import LLMError
 from app.llm.factory import get_extractor_client
 from app.services.character_memory_rebuild import rebuild_book_character_memory
 from app.services.context import memory_candidates
@@ -20,6 +21,8 @@ class RecordingExtractor:
         self.system = ""
         self.user = ""
         self.users: list[str] = []
+        self.schemas: list[dict] = []
+        self.max_tokens: list[int | None] = []
         self.schema: dict = {}
         self.calls = 0
 
@@ -27,6 +30,8 @@ class RecordingExtractor:
         self.calls += 1
         self.system, self.user, self.schema = system, user, schema
         self.users.append(user)
+        self.schemas.append(schema)
+        self.max_tokens.append(_kwargs.get("max_tokens"))
         return self.payload
 
 
@@ -38,6 +43,23 @@ class SequencedExtractor(RecordingExtractor):
     def complete_json(self, *, system: str, user: str, schema: dict, **_kwargs):
         payload = self.payloads[min(self.calls, len(self.payloads) - 1)]
         self.payload = payload
+        return super().complete_json(system=system, user=user, schema=schema, **_kwargs)
+
+
+class TruncatedThenExtractor(RecordingExtractor):
+    def complete_json(self, *, system: str, user: str, schema: dict, **_kwargs):
+        if self.calls == 0:
+            self.calls += 1
+            self.system, self.user, self.schema = system, user, schema
+            self.users.append(user)
+            self.schemas.append(schema)
+            self.max_tokens.append(_kwargs.get("max_tokens"))
+            raise LLMError(
+                "LLM JSON output was truncated",
+                code="llm_output_truncated",
+                retryable=True,
+                finish_reason="length",
+            )
         return super().complete_json(system=system, user=user, schema=schema, **_kwargs)
 
 
@@ -157,7 +179,10 @@ def test_online_extractor_corrects_a_validation_failure_before_committing(
     ).raise_for_status()
     invalid = _archive_payload("林夕")
     invalid["character_events"][0]["event_type"] = "推进"
-    llm = SequencedExtractor([invalid, _archive_payload("林夕")])
+    repaired = _archive_payload("林夕")
+    repaired["headline"] = "定向纠偏不得采用这个标题。"
+    repaired["long_summary"] = "定向纠偏不得采用这份摘要。"
+    llm = SequencedExtractor([invalid, repaired])
     client.app.dependency_overrides[get_extractor_client] = lambda: llm
 
     client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
@@ -165,11 +190,45 @@ def test_online_extractor_corrects_a_validation_failure_before_committing(
     assert result["phase"] == "done"
     assert result["attempt"] == 2
     assert llm.calls == 2
-    assert "自动纠偏 1/2" in llm.users[1]
+    assert set(llm.schemas[0]["properties"]) != {"character_events"}
+    assert set(llm.schemas[1]["properties"]) == {"character_events"}
+    assert "人物事件定向纠偏 2/3" in llm.users[1]
     assert "event_type must use the canonical taxonomy" in llm.users[1]
     archived = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert archived["status"] == "finalized"
+    assert archived["headline"] == invalid["headline"]
+    assert archived["long_summary"] == invalid["long_summary"]
     assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]
+
+
+def test_online_extractor_retries_length_truncation_with_compact_full_archive(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "交钥匙", "character_links": [{"character_id": character["id"]}]},
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": "林夕在渡口交出了钥匙，决定等候回信。"},
+    ).raise_for_status()
+    llm = TruncatedThenExtractor(_archive_payload("林夕"))
+    client.app.dependency_overrides[get_extractor_client] = lambda: llm
+
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    result = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert result["phase"] == "done"
+    assert result["attempt"] == 2
+    assert llm.calls == 2
+    assert "输出截断自动重试 1/2" in llm.users[1]
+    assert all(tokens == 8192 for tokens in llm.max_tokens)
+    assert all(set(schema["properties"]) != {"character_events"} for schema in llm.schemas)
 
 
 def test_online_extractor_salvages_only_unsafe_optional_state_after_three_attempts(

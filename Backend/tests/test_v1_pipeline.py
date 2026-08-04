@@ -8,7 +8,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.agents.memory_selector import MEMORY_SELECTION_FIXED_CONTRACT, MemorySelectorAgent
-from app.agents.extractor import extractor_schema, extractor_state_rebuild_schema
+from app.agents.extractor import (
+    EXTRACTOR_MAX_OUTPUT_TOKENS,
+    extractor_event_repair_schema,
+    extractor_schema,
+    extractor_state_rebuild_schema,
+)
 from app.db import Base, make_engine
 from app.llm.base import LLMError
 from app.llm.openai_compatible import OpenAICompatibleClient, _extract_content, _http_error
@@ -72,6 +77,39 @@ def test_state_rebuild_schema_cannot_regenerate_archives_or_events():
     assert set(schema["properties"]) == {"state_updates"}
     assert schema["required"] == ["state_updates"]
     assert schema["additionalProperties"] is False
+
+
+def test_event_repair_schema_cannot_regenerate_other_archive_fields():
+    schema = extractor_event_repair_schema(["甲"])
+    assert set(schema["properties"]) == {"character_events"}
+    assert schema["required"] == ["character_events"]
+    assert schema["additionalProperties"] is False
+    assert EXTRACTOR_MAX_OUTPUT_TOKENS == 8192
+
+
+def test_truncated_json_preserves_finish_reason_and_retry_classification(monkeypatch):
+    client = OpenAICompatibleClient(
+        base_url="https://example.invalid/v1", api_key="secret", model_name="model"
+    )
+    monkeypatch.setattr(
+        client,
+        "_post",
+        lambda *_args, **_kwargs: {
+            "choices": [{"finish_reason": "length", "message": {"content": '{"headline":"截断'}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 4096, "total_tokens": 4106},
+        },
+    )
+    with pytest.raises(LLMError) as caught:
+        client.complete_json(system="s", user="u", schema={"type": "object"})
+    assert caught.value.code == "llm_output_truncated"
+    assert caught.value.retryable is True
+    assert caught.value.finish_reason == "length"
+    assert client.last_finish_reason == "length"
+    assert client.last_usage == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4096,
+        "total_tokens": 4106,
+    }
 
 
 def test_hard_request_timeout_has_truthful_error_code(monkeypatch):

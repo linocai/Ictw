@@ -498,32 +498,56 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
 def _run_extractor_with_correction(
     job: WriteJob, chapter: Chapter, sf: sessionmaker[Session]
 ) -> tuple[dict[str, Any] | None, int, list[str]]:
-    """Return one fully validated output, correcting only contract failures.
+    """Return one fully validated output within three actual model calls.
 
+    Length-truncated JSON is compacted and retried in-job.  Once a complete
+    archive exists, character-event failures re-extract only that array so a
+    small evidence defect cannot inflate or corrupt the rest of the archive.
     Transport, policy and other upstream errors remain truthful terminal
-    failures.  Every actual model call receives its own audit row.
+    failures. Every actual model call receives its own audit row.
     """
     message = job.extractor_user_message
     client = getattr(job.extractor, "llm", None)
     last_error: Exception | None = None
+    last_output: dict[str, Any] | None = None
     salvage_candidate: tuple[dict[str, Any], list[str]] | None = None
+    repair_events = False
     for attempt in range(1, MAX_EXTRACTOR_VALIDATION_ATTEMPTS + 1):
+        repairing_events_now = repair_events and last_output is not None
         start = time.monotonic()
         try:
-            output = job.extractor.extract(message, job.selected_characters)
+            if repairing_events_now:
+                repaired_events = job.extractor.repair_character_events(
+                    _extractor_event_repair_message(job.extractor_user_message, attempt, last_error),
+                    job.selected_characters,
+                )
+                output = {**last_output, "character_events": repaired_events}
+            else:
+                output = job.extractor.extract(message, job.selected_characters)
         except LLMError as exc:
             _record_llm(sf, "extractor", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
+            if exc.code == "llm_output_truncated" and attempt < MAX_EXTRACTOR_VALIDATION_ATTEMPTS:
+                last_error = exc
+                repair_events = repairing_events_now
+                if not repairing_events_now:
+                    message += _extractor_length_correction_message(attempt)
+                if _should_stop(job):
+                    return None, attempt, []
+                continue
             exc.agent_role, exc.model_name = "extractor", getattr(client, "model_name", None)
             raise
         except ExtractorContractError as exc:
             _record_llm(sf, "extractor", client, start, None, job)
             last_error = exc
+            repair_events = repairing_events_now
         else:
             _record_llm(sf, "extractor", client, start, None, job)
+            last_output = output
             try:
                 validate_extractor_output(chapter, output)
             except ExtractorValidationError as exc:
                 last_error = exc
+                repair_events = _is_character_event_validation_error(exc)
                 try:
                     salvage_candidate = salvage_online_extractor_state_output(chapter, output)
                 except ExtractorValidationError:
@@ -533,7 +557,7 @@ def _run_extractor_with_correction(
 
         if _should_stop(job):
             return None, attempt, []
-        if attempt < MAX_EXTRACTOR_VALIDATION_ATTEMPTS:
+        if attempt < MAX_EXTRACTOR_VALIDATION_ATTEMPTS and not repair_events:
             message += _extractor_correction_message(attempt, last_error)
 
     if salvage_candidate is not None:
@@ -544,6 +568,41 @@ def _run_extractor_with_correction(
     exhausted.attempts = MAX_EXTRACTOR_VALIDATION_ATTEMPTS  # type: ignore[attr-defined]
     exhausted.last_reason = str(last_error or exhausted)  # type: ignore[attr-defined]
     raise exhausted
+
+
+def _is_character_event_validation_error(error: Exception) -> bool:
+    reason = str(error)
+    return reason.startswith(
+        (
+            "character_events ",
+            "selected character event ",
+            "character event evidence ",
+            "event_type ",
+        )
+    )
+
+
+def _extractor_event_repair_message(
+    original_message: str, attempt: int, error: Exception | None
+) -> str:
+    return (
+        f"# 人物事件定向纠偏 {attempt}/{MAX_EXTRACTOR_VALIDATION_ATTEMPTS}\n"
+        f"上一版 character_events 未通过确定性校验：{error}。\n"
+        "只重新提取 character_events，不得输出或改写任何其他字段。"
+        "event_type 只能使用 schema 枚举；event_text 必须明确写出并以所属人物精确姓名开头；"
+        "evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，不得转述、加标签或解释。"
+        "无法逐字举证的事件直接省略，允许返回空数组。\n\n"
+        + original_message
+    )
+
+
+def _extractor_length_correction_message(attempt: int) -> str:
+    return (
+        f"\n\n# 输出截断自动重试 {attempt}/{MAX_EXTRACTOR_VALIDATION_ATTEMPTS - 1}\n"
+        "上一次 JSON 达到模型输出长度上限而被截断。请重新输出完整合法 JSON；"
+        "删除重复、近义和无法逐字举证的条目，每项只保留最精确的事实，禁止解释性赘述。"
+        "所有 schema 必填字段仍须存在，不得输出局部补丁。"
+    )
 
 
 def _extractor_correction_message(attempt: int, error: Exception | None) -> str:
