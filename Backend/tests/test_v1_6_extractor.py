@@ -13,11 +13,26 @@ class RecordingExtractor:
         self.payload = payload
         self.system = ""
         self.user = ""
+        self.users: list[str] = []
         self.schema: dict = {}
+        self.calls = 0
 
     def complete_json(self, *, system: str, user: str, schema: dict, **_kwargs):
+        self.calls += 1
         self.system, self.user, self.schema = system, user, schema
+        self.users.append(user)
         return self.payload
+
+
+class SequencedExtractor(RecordingExtractor):
+    def __init__(self, payloads: list[dict]) -> None:
+        super().__init__(payloads[-1])
+        self.payloads = payloads
+
+    def complete_json(self, *, system: str, user: str, schema: dict, **_kwargs):
+        payload = self.payloads[min(self.calls, len(self.payloads) - 1)]
+        self.payload = payload
+        return super().complete_json(system=system, user=user, schema=schema, **_kwargs)
 
 
 def _archive_payload(character_name: str) -> dict:
@@ -115,6 +130,40 @@ def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
     finally:
         db.close()
     assert any(block.text.endswith("钥匙已沉入河底。") for block in edited_blocks)
+
+
+def test_online_extractor_corrects_a_validation_failure_before_committing(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "交钥匙", "character_links": [{"character_id": character["id"]}]},
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": "林夕在渡口交出了钥匙，决定等候回信。"},
+    ).raise_for_status()
+    invalid = _archive_payload("林夕")
+    invalid["character_events"][0]["event_type"] = "推进"
+    llm = SequencedExtractor([invalid, _archive_payload("林夕")])
+    client.app.dependency_overrides[get_extractor_client] = lambda: llm
+
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    result = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert result["phase"] == "done"
+    assert result["attempt"] == 2
+    assert llm.calls == 2
+    assert "自动纠偏 1/2" in llm.users[1]
+    assert "event_type must use the canonical taxonomy" in llm.users[1]
+    archived = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert archived["status"] == "finalized"
+    assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]
 
 
 def test_extractor_keeps_chapter_level_archive_and_rolls_back_on_bad_archive(
@@ -267,9 +316,19 @@ def test_extractor_rejects_evidence_that_does_not_name_the_assigned_character(
         }],
         "dynamic_fields_patch": [],
     }
-    client.app.dependency_overrides[get_extractor_client] = lambda: RecordingExtractor(payload)
+    llm = RecordingExtractor(payload)
+    client.app.dependency_overrides[get_extractor_client] = lambda: llm
     client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
-    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "failed"
+    failed = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert failed["phase"] == "failed"
+    assert failed["attempt"] == 3
+    assert failed["error_message"].startswith("Extractor 连续 3 次未通过确定性校验：")
+    assert failed["error_context"] == {
+        "stage": "validation",
+        "attempts": 3,
+        "reason": "人物事件的原文证据及近邻语境无法确认所属人物",
+    }
+    assert llm.calls == 3
     assert client.get(f"/api/v1/characters/{lin['id']}", headers=auth_headers).json()["events"] == []
 
 

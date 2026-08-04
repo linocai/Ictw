@@ -377,10 +377,10 @@ struct Violation: Codable, Hashable, Sendable {
 }
 
 /// Additive per-failure context attached to a job's terminal `failed` phase
-/// (backend `job_runs.error_context`, populated only for `LLMError`-sourced
-/// failures). Old clients that never decode this key keep working off
-/// `errorMessage` alone; `LinoErrorPresenter` uses it to name the failing
-/// Agent/model and to surface the raw upstream/block reason verbatim.
+/// (backend `job_runs.error_context`, populated for upstream failures and safe
+/// deterministic validation details). Old clients that never decode this key
+/// keep working off `errorMessage` alone; `LinoErrorPresenter` uses the known
+/// upstream fields to name the failing Agent/model and preserve raw reasons.
 struct JobErrorContext: Codable, Sendable {
     var agentRole: String?
     var modelName: String?
@@ -444,9 +444,14 @@ struct WriteJobStatus: Decodable, Sendable {
         return checkerResult
     }
 
-    /// Preserve concrete structured reasons for Checker rejection. Other
-    /// failures continue through the established localized error table.
+    /// Preserve concrete structured reasons for Checker rejection and the
+    /// backend's safe deterministic Extractor rule after automatic correction
+    /// is exhausted. Other failures continue through the localized table.
     var specificFailureReason: String? {
+        if errorCode == "extract_failed" {
+            let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return message.isEmpty ? nil : message
+        }
         guard errorCode == "checker_rejected" else { return nil }
         let reasons = checkerResult?.issues?
             .map { $0.reason.trimmingCharacters(in: .whitespacesAndNewlines) }

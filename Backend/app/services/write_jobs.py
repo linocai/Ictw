@@ -10,6 +10,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.checker import CheckerAgent
+from app.agents.extractor import ExtractorContractError
 from app.agents.memory_selector import MemorySelection, MemorySelectorAgent
 from app.agents.writer import WriterAgent
 from app.llm.base import LLMError
@@ -28,10 +29,11 @@ from app.services.context import (
     pack_writer_context,
     writer_user_message,
 )
-from app.services.extraction import apply_extractor_output
+from app.services.extraction import ExtractorValidationError, apply_extractor_output, validate_extractor_output
 
 
 TERMINAL_PHASES = {"done", "failed", "cancelled"}
+MAX_EXTRACTOR_VALIDATION_ATTEMPTS = 3
 
 
 class WriteJobConflict(Exception):
@@ -443,24 +445,111 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         chapter = db.get(Chapter, job.chapter_id)
         if chapter is None:
             record_job_phase(sf, job.job_id, "failed", error_code="chapter_missing", error_message="章节不存在"); job.mark_terminal("failed"); return
-        start, client = time.monotonic(), getattr(job.extractor, "llm", None)
-        try:
-            output = job.extractor.extract(job.extractor_user_message, job.selected_characters)
-        except LLMError as exc:
-            _record_llm(sf, "extractor", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
-            exc.agent_role, exc.model_name = "extractor", getattr(client, "model_name", None); raise
-        _record_llm(sf, "extractor", client, start, None, job)
+        output, attempts = _run_extractor_with_correction(job, chapter, sf)
+        if output is None:
+            db.rollback(); job.mark_terminal(); return
         if _should_stop(job): db.rollback(); job.mark_terminal(); return
         updated_ids, event_ids = apply_extractor_output(db, chapter, output); db.commit()
-        record_job_phase(sf, job.job_id, "done", updated_character_ids=updated_ids, added_event_ids=event_ids); job.mark_terminal("done")
+        record_job_phase(
+            sf, job.job_id, "done", attempt=attempts,
+            updated_character_ids=updated_ids, added_event_ids=event_ids,
+        ); job.mark_terminal("done")
     except LLMError as exc:
         db.rollback(); _restore_draft_ready(db, job)
         record_job_phase(sf, job.job_id, "failed", error_code=exc.code, error_message=str(exc), error_context=_error_context(exc)); job.mark_terminal("failed")
+    except ExtractorValidationError as exc:
+        db.rollback(); _restore_draft_ready(db, job)
+        attempts = int(getattr(exc, "attempts", MAX_EXTRACTOR_VALIDATION_ATTEMPTS))
+        reason = _extractor_user_reason(str(getattr(exc, "last_reason", exc)))
+        record_job_phase(
+            sf, job.job_id, "failed", attempt=attempts, error_code="extract_failed",
+            error_message=f"Extractor 连续 {attempts} 次未通过确定性校验：{reason}",
+            error_context={"stage": "validation", "attempts": attempts, "reason": reason},
+        ); job.mark_terminal("failed")
     except Exception as exc:
         db.rollback(); _restore_draft_ready(db, job)
         record_job_phase(sf, job.job_id, "failed", error_code="extract_failed", error_message=f"提取失败：{exc}"); job.mark_terminal("failed")
     finally:
         db.close()
+
+
+def _run_extractor_with_correction(
+    job: WriteJob, chapter: Chapter, sf: sessionmaker[Session]
+) -> tuple[dict[str, Any] | None, int]:
+    """Return one fully validated output, correcting only contract failures.
+
+    Transport, policy and other upstream errors remain truthful terminal
+    failures.  Every actual model call receives its own audit row.
+    """
+    message = job.extractor_user_message
+    client = getattr(job.extractor, "llm", None)
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_EXTRACTOR_VALIDATION_ATTEMPTS + 1):
+        start = time.monotonic()
+        try:
+            output = job.extractor.extract(message, job.selected_characters)
+        except LLMError as exc:
+            _record_llm(sf, "extractor", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
+            exc.agent_role, exc.model_name = "extractor", getattr(client, "model_name", None)
+            raise
+        except ExtractorContractError as exc:
+            _record_llm(sf, "extractor", client, start, None, job)
+            last_error = exc
+        else:
+            _record_llm(sf, "extractor", client, start, None, job)
+            try:
+                validate_extractor_output(chapter, output)
+            except ExtractorValidationError as exc:
+                last_error = exc
+            else:
+                return output, attempt
+
+        if _should_stop(job):
+            return None, attempt
+        if attempt < MAX_EXTRACTOR_VALIDATION_ATTEMPTS:
+            message += _extractor_correction_message(attempt, last_error)
+
+    exhausted = ExtractorValidationError(str(last_error or "unknown Extractor contract failure"))
+    exhausted.attempts = MAX_EXTRACTOR_VALIDATION_ATTEMPTS  # type: ignore[attr-defined]
+    exhausted.last_reason = str(last_error or exhausted)  # type: ignore[attr-defined]
+    raise exhausted
+
+
+def _extractor_correction_message(attempt: int, error: Exception | None) -> str:
+    return (
+        f"\n\n# 自动纠偏 {attempt}/{MAX_EXTRACTOR_VALIDATION_ATTEMPTS - 1}\n"
+        f"上一次完整 JSON 未通过确定性校验：{error}。请重新输出完整 JSON，不是局部补丁。"
+        "只保留正文中能逐字举证的事实；找不到合格证据的条目必须删除，宁缺毋滥。"
+        "每条带人物归属的 text 与 event_text 必须明确写出并以所属人物精确姓名开头；"
+        "event_type 只能使用 schema 枚举；event 与动态字段的 evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，"
+        "不得转述、概括、添加标签、引号或解释。"
+    )
+
+
+def _extractor_user_reason(reason: str) -> str:
+    exact = {
+        "event_type must use the canonical taxonomy": "人物事件类型不在固定分类中",
+        "selected character event text must name its owner": "人物事件文本没有明确写出所属人物姓名",
+        "character event evidence is required": "人物事件缺少正文原文证据",
+        "character event evidence lacks a substantial literal draft excerpt": "人物事件证据没有包含足够的正文连续原文",
+        "character event evidence context must identify its owner": "人物事件的原文证据及近邻语境无法确认所属人物",
+        "dynamic fields patch evidence is required": "人物动态字段缺少正文原文证据",
+        "dynamic fields patch evidence lacks a substantial literal draft excerpt": "人物动态字段证据没有包含足够的正文连续原文",
+        "dynamic fields patch evidence context must identify its owner": "人物动态字段的原文证据及近邻语境无法确认所属人物",
+    }
+    if reason in exact:
+        return exact[reason]
+    archive_names = {
+        "state_changes": "状态变化",
+        "unresolved_items": "未解决事项",
+        "atomic_memories": "原子记忆",
+    }
+    for field, label in archive_names.items():
+        if reason == f"{field} character attribution must name its owner":
+            return f"{label}绑定了人物，但文本没有明确写出该人物姓名"
+    if reason.startswith("unsupported dynamic field key: "):
+        return "人物动态字段使用了未批准的字段名：" + reason.removeprefix("unsupported dynamic field key: ")
+    return reason
 
 
 def _should_stop(job: WriteJob) -> bool:

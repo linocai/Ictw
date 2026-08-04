@@ -255,6 +255,28 @@ private func testRejectedCandidateKeepsSpecificCheckerReasonsSeparate() throws {
     )
 }
 
+private func testExtractorFailureKeepsSpecificBackendRule() throws {
+    let status = WriteJobStatus(
+        chapterId: "chapter-1",
+        jobId: "extract-1",
+        outcomeCurrent: true,
+        kind: "extract",
+        phase: "failed",
+        attempt: 3,
+        errorCode: "extract_failed",
+        errorMessage: "Extractor 连续 3 次未通过确定性校验：证据未明确所属人物",
+        errorContext: nil,
+        violations: nil,
+        chapter: nil,
+        updatedCharacterIds: nil,
+        addedEventIds: nil
+    )
+    try expect(
+        status.specificFailureReason == "Extractor 连续 3 次未通过确定性校验：证据未明确所属人物",
+        "Extractor failures must surface the exact safe backend validation rule"
+    )
+}
+
 private func testDraftReadyDoesNotPretendCheckerPassed() throws {
     let pending = ChapterEditorPresentationState.make(
         phase: .idle,
@@ -372,6 +394,7 @@ private struct ClientStateTestRunner {
         try testCachedFailureInvalidatesOnAnyInputChangeOrFinalization()
         try testV16ContextAndCheckerDecode()
         try testRejectedCandidateKeepsSpecificCheckerReasonsSeparate()
+        try testExtractorFailureKeepsSpecificBackendRule()
         try testDraftReadyDoesNotPretendCheckerPassed()
         try testLateRefreshCannotOverwriteLocalCharacterEdit()
         try testFailedRegenerationKeepsVisibleDraftActions()
