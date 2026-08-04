@@ -63,7 +63,13 @@ def test_relationship_binding_deduplicates_identical_pair_but_rejects_conflict()
     conflicting = deepcopy(output)
     conflicting["state_updates"][1]["relationship_ops"][0]["value"] = "敌对"
     with pytest.raises(ExtractorContractError, match="conflicting duplicate"):
-        bind_extractor_character_names(conflicting, [("a", "甲"), ("b", "乙")])
+        bind_extractor_character_names(deepcopy(conflicting), [("a", "甲"), ("b", "乙")])
+    salvaged = bind_extractor_character_names(
+        conflicting,
+        [("a", "甲"), ("b", "乙")],
+        drop_conflicting_relationships=True,
+    )
+    assert sum(len(item["relationship_ops"]) for item in salvaged["state_updates"]) == 0
 
 
 def test_state_rebuild_salvage_drops_invalid_snapshot_but_keeps_valid_persistent_state():

@@ -5,7 +5,12 @@ from app.llm.factory import get_extractor_client
 from app.services.character_memory_rebuild import rebuild_book_character_memory
 from app.services.context import memory_candidates
 from app.services.personas import PROGRAM_PROTOCOLS
-from scripts.rebuild_book_character_memory import load_validated_bundle, write_validated_bundle
+from scripts.rebuild_book_character_memory import (
+    load_rebuild_checkpoint,
+    load_validated_bundle,
+    write_rebuild_checkpoint,
+    write_validated_bundle,
+)
 
 
 class RecordingExtractor:
@@ -415,6 +420,11 @@ def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
         output = {"state_updates": full_output["state_updates"]}
         orm_book = db.get(Book, book["id"])
         orm_chapter = db.get(Chapter, chapter["id"])
+        checkpoint_path = tmp_path / "validated-rebuild.json.partial"
+        write_rebuild_checkpoint(
+            checkpoint_path, orm_book, [orm_chapter], [orm_chapter], {chapter["id"]: output}
+        )
+        assert load_rebuild_checkpoint(checkpoint_path, orm_book, [orm_chapter]) == {chapter["id"]: output}
         bundle_path = tmp_path / "validated-rebuild.json"
         write_validated_bundle(str(bundle_path), orm_book, [orm_chapter], {chapter["id"]: output})
         assert bundle_path.stat().st_mode & 0o777 == 0o600

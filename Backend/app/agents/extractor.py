@@ -132,7 +132,12 @@ def _legacy_updates(result: dict[str, Any]) -> list[dict[str, Any]]:
     return updates
 
 
-def bind_extractor_character_names(output: dict[str, Any], selected_characters: list[SelectedCharacter]) -> dict[str, Any]:
+def bind_extractor_character_names(
+    output: dict[str, Any],
+    selected_characters: list[SelectedCharacter],
+    *,
+    drop_conflicting_relationships: bool = False,
+) -> dict[str, Any]:
     """Map model-facing names to persisted IDs without exposing UUIDs to it."""
     if not isinstance(output, dict):
         raise ExtractorContractError("Extractor output must be an object")
@@ -178,7 +183,10 @@ def bind_extractor_character_names(output: dict[str, Any], selected_characters: 
     if not isinstance(raw_updates, list):
         raise ExtractorContractError("state_updates must be an array")
     bound: list[dict[str, Any]] = []
-    seen_relationships: dict[tuple[str, str], tuple[Any, Any]] = {}
+    seen_relationships: dict[
+        tuple[str, str], tuple[tuple[Any, Any], list[dict[str, Any]], dict[str, Any]]
+    ] = {}
+    conflicted_relationships: set[tuple[str, str]] = set()
     for raw in raw_updates:
         item = bind(raw, allow_null=False)
         relationship_ops = item.get("relationship_ops")
@@ -193,6 +201,8 @@ def bind_extractor_character_names(output: dict[str, Any], selected_characters: 
                 raise ExtractorContractError("relationship target must be another selected character")
             operation["other_character_id"] = name_to_id[other]
             pair = tuple(sorted((item["character_id"], operation["other_character_id"])))
+            if pair in conflicted_relationships:
+                continue
             signature = (operation.get("operation"), operation.get("value"))
             previous = seen_relationships.get(pair)
             if previous is not None:
@@ -200,11 +210,17 @@ def bind_extractor_character_names(output: dict[str, Any], selected_characters: 
                 # output may still repeat the exact same undirected fact; that
                 # is safe to canonicalize once.  Different values remain a hard
                 # conflict and must be corrected by Extractor.
-                if result.get("_legacy_state_adapter") or previous == signature:
+                previous_signature, previous_container, previous_operation = previous
+                if result.get("_legacy_state_adapter") or previous_signature == signature:
+                    continue
+                if drop_conflicting_relationships:
+                    previous_container.remove(previous_operation)
+                    conflicted_relationships.add(pair)
+                    seen_relationships.pop(pair, None)
                     continue
                 raise ExtractorContractError("relationship pair has conflicting duplicate updates")
-            seen_relationships[pair] = signature
             filtered_relationship_ops.append(operation)
+            seen_relationships[pair] = (signature, filtered_relationship_ops, operation)
         item["relationship_ops"] = filtered_relationship_ops
         bound.append(item)
     result["state_updates"] = bound
@@ -262,5 +278,7 @@ class ExtractorAgent:
             "character_events": [],
             "state_updates": output.get("state_updates"),
         }
-        bound = bind_extractor_character_names(wrapped, selected)
+        bound = bind_extractor_character_names(
+            wrapped, selected, drop_conflicting_relationships=True
+        )
         return {"state_updates": bound["state_updates"]}

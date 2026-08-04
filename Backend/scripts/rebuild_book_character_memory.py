@@ -40,25 +40,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def write_validated_bundle(
-    path: str, book: Book, chapters: list[Chapter], outputs: dict[str, dict[str, Any]]
-) -> None:
+def _write_bundle_payload(path: str | Path, payload: dict[str, Any]) -> None:
     target = Path(path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": BUNDLE_VERSION,
-        "book_id": book.id,
-        "book_title": book.title,
-        "chapters": [
-            {
-                "id": chapter.id,
-                "index": chapter.index,
-                "fingerprint": draft_fingerprint(chapter, chapter.draft_text),
-                "output": outputs[chapter.id],
-            }
-            for chapter in chapters
-        ],
-    }
     temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -72,6 +56,65 @@ def write_validated_bundle(
         temporary.unlink(missing_ok=True)
 
 
+def _bundle_payload(
+    book: Book,
+    chapters: list[Chapter],
+    outputs: dict[str, dict[str, Any]],
+    *,
+    complete: bool,
+    total_chapters: int,
+) -> dict[str, Any]:
+    return {
+        "version": BUNDLE_VERSION,
+        "complete": complete,
+        "total_chapters": total_chapters,
+        "book_id": book.id,
+        "book_title": book.title,
+        "chapters": [
+            {
+                "id": chapter.id,
+                "index": chapter.index,
+                "fingerprint": draft_fingerprint(chapter, chapter.draft_text),
+                "output": outputs[chapter.id],
+            }
+            for chapter in chapters
+        ],
+    }
+
+
+def write_validated_bundle(
+    path: str, book: Book, chapters: list[Chapter], outputs: dict[str, dict[str, Any]]
+) -> None:
+    _write_bundle_payload(
+        path,
+        _bundle_payload(book, chapters, outputs, complete=True, total_chapters=len(chapters)),
+    )
+
+
+def _checkpoint_path(output_file: str) -> Path:
+    target = Path(output_file).expanduser().resolve()
+    return target.with_name(f"{target.name}.partial")
+
+
+def write_rebuild_checkpoint(
+    path: Path,
+    book: Book,
+    all_chapters: list[Chapter],
+    completed_chapters: list[Chapter],
+    outputs: dict[str, dict[str, Any]],
+) -> None:
+    _write_bundle_payload(
+        path,
+        _bundle_payload(
+            book,
+            completed_chapters,
+            outputs,
+            complete=False,
+            total_chapters=len(all_chapters),
+        ),
+    )
+
+
 def load_validated_bundle(
     path: str, book: Book, chapters: list[Chapter]
 ) -> dict[str, dict[str, Any]]:
@@ -82,6 +125,8 @@ def load_validated_bundle(
     if (
         not isinstance(payload, dict)
         or payload.get("version") != BUNDLE_VERSION
+        or payload.get("complete") is not True
+        or payload.get("total_chapters") != len(chapters)
         or payload.get("book_id") != book.id
         or payload.get("book_title") != book.title
     ):
@@ -116,6 +161,38 @@ def load_validated_bundle(
     return outputs
 
 
+def load_rebuild_checkpoint(
+    path: Path, book: Book, chapters: list[Chapter]
+) -> dict[str, dict[str, Any]]:
+    if path.stat().st_mode & 0o077:
+        raise RuntimeError("rebuild checkpoint permissions must not allow group or other access")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or payload.get("version") != BUNDLE_VERSION
+        or payload.get("complete") is not False
+        or payload.get("total_chapters") != len(chapters)
+        or payload.get("book_id") != book.id
+        or payload.get("book_title") != book.title
+    ):
+        raise RuntimeError("rebuild checkpoint identity check failed")
+    entries = payload.get("chapters")
+    if not isinstance(entries, list) or len(entries) > len(chapters):
+        raise RuntimeError("rebuild checkpoint chapters are invalid")
+    outputs: dict[str, dict[str, Any]] = {}
+    for chapter, entry in zip(chapters[:len(entries)], entries, strict=True):
+        if not isinstance(entry, dict) or entry.get("id") != chapter.id or entry.get("index") != chapter.index:
+            raise RuntimeError("rebuild checkpoint is not an exact chapter prefix")
+        if entry.get("fingerprint") != draft_fingerprint(chapter, chapter.draft_text):
+            raise RuntimeError(f"chapter {chapter.index} changed after checkpoint")
+        output = entry.get("output")
+        if not isinstance(output, dict):
+            raise RuntimeError("rebuild checkpoint output is invalid")
+        validate_state_rebuild_output(chapter, output)
+        outputs[chapter.id] = output
+    return outputs
+
+
 def main() -> int:
     args = parse_args()
     db = SessionLocal()
@@ -147,9 +224,23 @@ def main() -> int:
             for character in db.scalars(select(Character).where(Character.book_id == book.id)).all():
                 character.dynamic_fields = {}
             db.flush()
+            if args.output_file and Path(args.output_file).expanduser().resolve().exists():
+                load_validated_bundle(args.output_file, book, chapters)
+                print(f"validated bundle reused chapters={len(chapters)}; database unchanged")
+                db.rollback()
+                return 0
+            checkpoint = _checkpoint_path(args.output_file) if args.output_file else None
+            outputs = load_rebuild_checkpoint(checkpoint, book, chapters) if checkpoint and checkpoint.exists() else {}
+            completed_count = len(outputs)
+            for chapter in chapters[:completed_count]:
+                validated = validate_state_rebuild_output(chapter, outputs[chapter.id])
+                persist_validated_state_changes(db, chapter, validated)
+                db.flush()
+                rebuild_book_projection(db, book.id)
+            if completed_count:
+                print(f"resumed checkpoint chapters={completed_count}")
             extractor = ExtractorAgent(build_llm_client(db, "extractor"), get_persona(db, "extractor"))
-            outputs = {}
-            for chapter in chapters:
+            for chapter in chapters[completed_count:]:
                 selected = [(link.character_id, link.character.name) for link in chapter.character_links]
                 message = extractor_user_message(db, book, chapter)
                 for attempt in range(MAX_EXTRACTION_ATTEMPTS):
@@ -183,9 +274,13 @@ def main() -> int:
                     f"validated chapter={chapter.index} events={len(validated.events)} "
                     f"state_changes={len(validated.state_changes)}"
                 )
+                if checkpoint is not None:
+                    position = chapters.index(chapter) + 1
+                    write_rebuild_checkpoint(checkpoint, book, chapters, chapters[:position], outputs)
 
         if args.output_file:
             write_validated_bundle(args.output_file, book, chapters, outputs)
+            _checkpoint_path(args.output_file).unlink(missing_ok=True)
             print(f"validated bundle saved chapters={len(chapters)}; database unchanged")
             db.rollback()
             return 0
