@@ -226,6 +226,7 @@ struct Character: Codable, Identifiable, Hashable, Sendable {
     var role: String
     var fixedProfile: String
     var dynamicFields: [String: JSONValue]
+    var dynamicFieldsUpdatedChapterIndex: Int?
     var events: [CharacterEvent]
 
     enum CodingKeys: String, CodingKey {
@@ -233,6 +234,7 @@ struct Character: Codable, Identifiable, Hashable, Sendable {
         case bookId = "book_id"
         case fixedProfile = "fixed_profile"
         case dynamicFields = "dynamic_fields"
+        case dynamicFieldsUpdatedChapterIndex = "dynamic_fields_updated_chapter_index"
     }
 }
 

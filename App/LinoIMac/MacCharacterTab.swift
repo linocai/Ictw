@@ -40,7 +40,7 @@ struct MacCharacterTab: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
                 LinoISectionLabel("角色")
-                Text("固定设定由你维护，动态字段与故事线由 Extractor 更新。")
+                Text("固定设定由你维护，当前状态与故事线由 Extractor 更新。")
                     .font(.system(size: 11))
                     .foregroundStyle(LinoTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -170,9 +170,16 @@ private struct MacCharacterCard: View {
 
     private var dynamicFieldsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            LinoISectionLabel("动态字段")
+            HStack {
+                LinoISectionLabel("当前状态 · Extractor")
+                if let index = character.dynamicFieldsUpdatedChapterIndex {
+                    Text("更新于第 \(index) 章")
+                        .font(.system(size: 11))
+                        .foregroundStyle(LinoTheme.faint)
+                }
+            }
             if character.dynamicFields.isEmpty {
-                hint("还没有 Extractor 维护的动态状态。")
+                hint("还没有当前有效状态。")
             } else {
                 VStack(spacing: 8) {
                     ForEach(character.dynamicFields.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in

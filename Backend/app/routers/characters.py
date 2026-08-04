@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Book, Character, CharacterEvent, Chapter
+from app.models import Book, Character, CharacterEvent, CharacterStateChange, Chapter
 from app.schemas.character import (
     CharacterCreate,
     CharacterEventPatch,
@@ -15,6 +15,7 @@ from app.schemas.character import (
     CharacterRead,
 )
 from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
+from app.services.character_state_projection import rebuild_book_projection
 
 router = APIRouter(tags=["characters"])
 
@@ -41,6 +42,15 @@ def _character_read(db: Session, character: Character) -> CharacterRead:
         .order_by(Chapter.index)
     ).all()
     data = CharacterRead.model_validate(character)
+    data.dynamic_fields_updated_chapter_index = db.scalar(
+        select(func.max(Chapter.index))
+        .join(CharacterStateChange, CharacterStateChange.chapter_id == Chapter.id)
+        .where(
+            CharacterStateChange.book_id == character.book_id,
+            CharacterStateChange.is_effective.is_(True),
+            or_(CharacterStateChange.character_id == character.id, CharacterStateChange.other_character_id == character.id),
+        )
+    )
     data.events = []
     for event in events:
         data.events.append(
@@ -69,7 +79,10 @@ def list_characters(book_id: str, db: Session = Depends(get_db)) -> list[Charact
 def create_character(book_id: str, payload: CharacterCreate, db: Session = Depends(get_db)) -> CharacterRead:
     if db.get(Book, book_id) is None:
         raise HTTPException(status_code=404, detail="book not found")
-    character = Character(book_id=book_id, **payload.model_dump())
+    # Old installations still send this field when saving a fixed character
+    # card.  It is a materialized Extractor projection and never client-owned.
+    values = payload.model_dump(exclude={"dynamic_fields"})
+    character = Character(book_id=book_id, **values)
     db.add(character)
     db.commit()
     db.refresh(character)
@@ -104,8 +117,12 @@ def patch_character(character_id: str, payload: CharacterPatch, db: Session = De
     character = db.get(Character, character_id)
     if character is None:
         raise HTTPException(status_code=404, detail="character not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    old_name = character.name
+    for key, value in payload.model_dump(exclude_unset=True, exclude={"dynamic_fields"}).items():
         setattr(character, key, value)
+    if character.name != old_name:
+        db.flush()
+        rebuild_book_projection(db, character.book_id)
     db.commit()
     db.refresh(character)
     return _character_read(db, character)
@@ -115,7 +132,10 @@ def patch_character(character_id: str, payload: CharacterPatch, db: Session = De
 def delete_character(character_id: str, db: Session = Depends(get_db)) -> Response:
     character = db.get(Character, character_id)
     if character is not None:
+        book_id = character.book_id
         db.delete(character)
+        db.flush()
+        rebuild_book_projection(db, book_id)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

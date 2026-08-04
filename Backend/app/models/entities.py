@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -133,6 +133,63 @@ class CharacterFieldPatch(Base):
     character_id: Mapped[str] = mapped_column(String(36), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False, index=True)
     prior_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     prior_missing: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class CharacterStateChange(Base):
+    """An Extractor-owned, replayable change to a character's current state.
+
+    ``characters.dynamic_fields`` remains the public materialized projection;
+    this table is its only v1.7.2 source of truth.  Relationship endpoints are
+    stored in lexical ID order so a pair has exactly one state slot.
+    """
+
+    __tablename__ = "character_state_changes"
+    __table_args__ = (
+        CheckConstraint("scope IN ('snapshot', 'persistent', 'relationship')", name="ck_state_change_scope"),
+        CheckConstraint("operation IN ('set', 'clear')", name="ck_state_change_operation"),
+        CheckConstraint(
+            "(operation = 'set' AND value IS NOT NULL AND length(trim(value)) > 0) "
+            "OR (operation = 'clear' AND value IS NULL)",
+            name="ck_state_change_value_matches_operation",
+        ),
+        CheckConstraint("length(trim(evidence)) > 0", name="ck_state_change_evidence_nonempty"),
+        CheckConstraint(
+            "(scope = 'snapshot' AND other_character_id IS NULL "
+            "AND slot IN ('当前位置', '当前行动', '情绪状态') AND batch_id <> '') "
+            "OR (scope = 'persistent' AND other_character_id IS NULL "
+            "AND slot IN ('身体状态', '当前目标', '秘密状态') AND batch_id = '') "
+            "OR (scope = 'relationship' AND other_character_id IS NOT NULL "
+            "AND other_character_id <> character_id AND slot = 'relationship' AND batch_id = '')",
+            name="ck_state_change_shape",
+        ),
+        Index(
+            "uq_state_change_nonrelationship",
+            "chapter_id", "character_id", "scope", "slot", "batch_id",
+            unique=True,
+            sqlite_where=text("other_character_id IS NULL"),
+        ),
+        Index(
+            "uq_state_change_relationship",
+            "chapter_id", "character_id", "other_character_id", "scope", "slot", "batch_id",
+            unique=True,
+            sqlite_where=text("other_character_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    book_id: Mapped[str] = mapped_column(String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    chapter_id: Mapped[str] = mapped_column(String(36), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True)
+    character_id: Mapped[str] = mapped_column(String(36), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False, index=True)
+    other_character_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("characters.id", ondelete="CASCADE"), nullable=True, index=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    slot: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation: Mapped[str] = mapped_column(String(8), nullable=False)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    batch_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
+    is_effective: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 

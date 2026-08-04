@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.agents.extractor import ExtractorAgent
@@ -17,7 +17,7 @@ from app.llm.factory import (
     get_memory_selector_client,
     get_writer_client,
 )
-from app.models import Book, Chapter, ChapterCharacter, ChapterDraftCandidate, Character, CharacterFieldPatch, JobRun
+from app.models import Book, Chapter, ChapterCharacter, ChapterDraftCandidate, Character, CharacterStateChange, JobRun
 from app.models.entities import utc_now, uuid_str
 from app.schemas.chapter import (
     ChapterCreate,
@@ -43,6 +43,7 @@ from app.services.context import (
     validate_character_preflight,
 )
 from app.services.personas import get_persona
+from app.services.character_state_projection import projected_fields_before_chapter, rebuild_book_projection
 from app.services.write_jobs import WriteJob, WriteJobConflict, record_job_phase, write_registry
 
 router = APIRouter(tags=["chapters"])
@@ -205,50 +206,6 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
 
 
 
-def _revert_dynamic_fields(db: Session, chapter: Chapter) -> None:
-    """Roll back this chapter's dynamic-field merges, key by key.
-
-    A key is restored to its pre-chapter value (or removed if the chapter
-    introduced it) unless a LATER chapter also patched the same key — the later
-    chapter's state must win and stays untouched.
-    """
-    patches = db.scalars(
-        select(CharacterFieldPatch).where(CharacterFieldPatch.chapter_id == chapter.id)
-    ).all()
-    if not patches:
-        return
-    later_rows = db.scalars(
-        select(CharacterFieldPatch)
-        .join(Chapter, CharacterFieldPatch.chapter_id == Chapter.id)
-        .where(
-            CharacterFieldPatch.character_id.in_([row.character_id for row in patches]),
-            Chapter.book_id == chapter.book_id,
-            Chapter.index > chapter.index,
-        )
-    ).all()
-    later_keys: dict[str, set[str]] = {}
-    for row in later_rows:
-        keys = set(row.prior_values or {}) | set(row.prior_missing or [])
-        later_keys.setdefault(row.character_id, set()).update(keys)
-    for row in patches:
-        character = db.get(Character, row.character_id)
-        if character is None:
-            continue
-        blocked = later_keys.get(row.character_id, set())
-        fields = dict(character.dynamic_fields or {})
-        changed = False
-        for key, value in (row.prior_values or {}).items():
-            if key not in blocked and fields.get(key) != value:
-                fields[key] = value
-                changed = True
-        for key in row.prior_missing or []:
-            if key not in blocked and key in fields:
-                fields.pop(key)
-                changed = True
-        if changed:
-            character.dynamic_fields = fields
-
-
 @router.delete("/chapters/{chapter_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
     job = write_registry.get_live(chapter_id)
@@ -261,7 +218,6 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     book_id = chapter.book_id
     old_index = chapter.index
-    _revert_dynamic_fields(db, chapter)
     db.delete(chapter)
     db.flush()
     following = db.scalars(
@@ -272,6 +228,7 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
     for item in following:
         item.index -= 1
         db.flush()
+    rebuild_book_projection(db, book_id)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -333,7 +290,10 @@ def write_chapter(
     budget = memory_budget()
     bible_snapshot = chapter.user_prompt
     bible_sha256 = hashlib.sha256(bible_snapshot.encode()).hexdigest()
-    selector_message = memory_selector_user_message(chapter, candidates, budget, bible=bible_snapshot)
+    selector_message = memory_selector_user_message(
+        chapter, candidates, budget, bible=bible_snapshot,
+        dynamic_fields_by_character=projected_fields_before_chapter(db, chapter),
+    )
     baseline_text = chapter.draft_text
     baseline_status = "draft_ready" if baseline_text.strip() else "draft"
     job_id = uuid_str()
@@ -567,6 +527,8 @@ def reopen_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRea
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     chapter.status = "draft_ready"
+    db.execute(delete(CharacterStateChange).where(CharacterStateChange.chapter_id == chapter.id))
+    rebuild_book_projection(db, chapter.book_id)
     db.commit()
     db.refresh(chapter)
     return _chapter_read(chapter)

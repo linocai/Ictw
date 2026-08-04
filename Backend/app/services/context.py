@@ -256,10 +256,11 @@ def prefilter_memory_candidates(
 
 
 def memory_selector_user_message(
-    chapter: Chapter, blocks: list[MemoryBlock], budget: int, *, bible: str | None = None
+    chapter: Chapter, blocks: list[MemoryBlock], budget: int, *, bible: str | None = None,
+    dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     selected = _selected_characters(chapter)
-    cards = _character_cards(selected, include_ids=True)
+    cards = _character_cards(selected, include_ids=True, dynamic_fields_by_character=dynamic_fields_by_character)
     ending_blocks = [block for block in blocks if block.memory_type == "previous_ending"]
     ordinary_blocks = [block for block in blocks if block.memory_type != "previous_ending"]
     candidates = "\n\n".join(f"[{block.id}]\n{block.text}" for block in ordinary_blocks) or "（没有可用历史记忆）"
@@ -409,6 +410,7 @@ def writer_user_message(
     previous_ending: str = "",
     *,
     bible: str | None = None,
+    dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     characters = _selected_characters(chapter)
     allow = "、".join(character.name for character in characters) or "（没有已知人物卡；Bible 明写的临时角色仍可出现）"
@@ -422,7 +424,7 @@ def writer_user_message(
                 f"{allow}\n"
                 "白名单表示允许出现或被提及，不要求全部使用。历史记忆中出现的人物不会因此获得本章出场权限。"
             ),
-            "# 人物卡（固定设定与当前动态状态）\n" + (_character_cards(characters) or "（无）"),
+            "# 人物卡（固定设定与本章开始前当前动态状态）\n" + (_character_cards(characters, dynamic_fields_by_character=dynamic_fields_by_character) or "（无）"),
             (
                 "# 历史参考资料（只读，低于本章 Bible）\n"
                 "## 紧邻上一章结尾原文（仅用于开场衔接）\n"
@@ -490,6 +492,8 @@ def _truncate_from_end(text: str, n: int) -> str:
 
 def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
     characters = _selected_characters(chapter)
+    from app.services.character_state_projection import projected_fields_before_chapter
+    prior_fields = projected_fields_before_chapter(db, chapter)
     # Names are identity labels only.  The model never receives or chooses UUIDs;
     # ExtractorAgent maps an exact selected name back to its ID mechanically.
     character_names = "\n".join(f"- {character.name}" for character in characters) or "（无已选人物）"
@@ -498,14 +502,19 @@ def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
             "# 事实来源（唯一）\n以下“最终接受正文”是唯一可以归档事实的材料。"
             "不得使用、复述或根据未提供的 Bible、世界观、人物卡或历史记忆补写事实。",
             "# 人物姓名白名单（仅用于身份归属，不是事实来源）\n" + character_names,
+            "# 本章开始前有效状态（仅作更新基线，不是可归档事实）\n" + (
+                "\n".join(f"- {character.name}：{_format_dynamic_fields(prior_fields.get(character.id, {}))}" for character in characters)
+                if characters else "（无已选人物）"
+            ),
             (
                 "# 提取输出约束\nheadline/long_summary 必填；long_summary 是本章唯一摘要，不限制机械字数；"
                 "state_changes、unresolved_items、atomic_memories "
                 "逐项只记录正文中明确发生、明确改变或明确尚未解决的事实。人物归属只能使用上面列出的精确姓名；"
                 "人物相关的 text 与 event_text 必须以该人物精确姓名开头。人物事件只使用约定的中文类型。"
-                "动态字段只写本章明确改变的当前状态，使用约定字段；人物关系通过 relationships 输出，"
-                "正文明确证明旧状态已经结束时可用 null 清除对应固定字段。"
-                "不得自造拼音 key、last_event、role 或 new_acquaintance。event 与动态字段的 evidence 必须是正文中的原文片段，"
+                "state_updates 只写本章实际在场人物的当前状态：snapshot 一旦提供必须完整给出当前位置、当前行动、情绪状态三槽，"
+                "每槽 set 或 clear；persistent_ops 只允许身体状态、当前目标、秘密状态；relationship_ops 是唯一人物对关系。"
+                "snapshot 只描述章节结束时，禁止过程串。掌握信息只进 atomic_memories；不得输出其他状态、未知、未明确或占位值。"
+                "所有 set/clear 的 evidence 必须是正文中的原文片段，"
                 "且必须包含所属人物姓名；宁可不记，也不得猜测归属。未选择人物时人物更新数组必须为空。"
                 f"每条 event_text 不超过 {CHARACTER_EVENT_MAX_CHARS} 个去空白字符。"
             ),
@@ -638,7 +647,10 @@ def _selected_characters(chapter: Chapter) -> list[Character]:
     return [link.character for link in chapter.character_links]
 
 
-def _character_cards(characters: Iterable[Character], include_ids: bool = False) -> str:
+def _character_cards(
+    characters: Iterable[Character], include_ids: bool = False,
+    dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
+) -> str:
     blocks: list[str] = []
     for character in characters:
         lines = [f"## {character.name}（{character.role}）"]
@@ -649,7 +661,7 @@ def _character_cards(characters: Iterable[Character], include_ids: bool = False)
                 "固定设定：",
                 character.fixed_profile or "（暂无）",
                 "动态状态：",
-                _format_dynamic_fields(character.dynamic_fields),
+                _format_dynamic_fields((dynamic_fields_by_character or {}).get(character.id, character.dynamic_fields)),
             ]
         )
         blocks.append("\n".join(lines))

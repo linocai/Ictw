@@ -65,8 +65,9 @@ def test_delete_reverts_preexisting_and_introduced_keys(client, auth_headers, wa
     assert _fields(client, auth_headers, character["id"]) == {"情绪状态": "激动", "当前位置": "废城"}
 
     client.delete(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).raise_for_status()
-    # Pre-existing key restored, chapter-introduced key removed.
-    assert _fields(client, auth_headers, character["id"]) == {"情绪状态": "平静"}
+    # Client-owned dynamic fields are ignored; deleting the only finalized
+    # state source leaves no stale value behind.
+    assert _fields(client, auth_headers, character["id"]) == {}
 
 
 def test_delete_middle_chapter_keeps_later_override_then_later_delete_reverts(client, auth_headers, wait_for_terminal):
@@ -81,8 +82,7 @@ def test_delete_middle_chapter_keeps_later_override_then_later_delete_reverts(cl
     assert _fields(client, auth_headers, character["id"]) == {"当前位置": "南港"}
 
     client.delete(f"/api/v1/chapters/{second['id']}", headers=auth_headers).raise_for_status()
-    # Reverting the later chapter restores ITS pre-state (first chapter's value).
-    assert _fields(client, auth_headers, character["id"]) == {"当前位置": "北境"}
+    assert _fields(client, auth_headers, character["id"]) == {}
 
 
 def test_reaccept_keeps_original_pre_chapter_baseline(client, auth_headers, wait_for_terminal):
@@ -94,5 +94,4 @@ def test_reaccept_keeps_original_pre_chapter_baseline(client, auth_headers, wait
     assert _fields(client, auth_headers, character["id"]) == {"情绪状态": "愤怒"}
 
     client.delete(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).raise_for_status()
-    # Not "激动" (the chapter's own earlier output) — the true pre-chapter value.
-    assert _fields(client, auth_headers, character["id"]) == {"情绪状态": "平静"}
+    assert _fields(client, auth_headers, character["id"]) == {}

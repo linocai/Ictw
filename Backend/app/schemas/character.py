@@ -55,6 +55,7 @@ class CharacterRead(ORMModel):
     role: str
     fixed_profile: str
     dynamic_fields: dict[str, Any]
+    dynamic_fields_updated_chapter_index: int | None = None
     created_at: datetime
     updated_at: datetime
     events: list[CharacterEventRead] = Field(default_factory=list)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Iterator
 from threading import Event
@@ -38,7 +39,11 @@ class OpenAICompatibleClient:
     def complete(self, *, system: str, user: str, **kwargs: Any) -> str:
         self.last_usage = None
         payload = self._payload(system=system, user=user, stream=False, **kwargs)
-        data = self._post(payload, timeout=kwargs.get("timeout", 300))
+        data = self._post(
+            payload,
+            timeout=kwargs.get("timeout", 300),
+            hard_timeout=bool(kwargs.get("hard_timeout", False)),
+        )
         self.last_finish_reason = _extract_finish_reason(data)
         self.last_usage = _extract_usage(data)
         return _extract_content(data)
@@ -54,7 +59,11 @@ class OpenAICompatibleClient:
             response_format={"type": "json_object"},
             **kwargs,
         )
-        data = self._post(payload, timeout=kwargs.get("timeout", 300))
+        data = self._post(
+            payload,
+            timeout=kwargs.get("timeout", 300),
+            hard_timeout=bool(kwargs.get("hard_timeout", False)),
+        )
         self.last_usage = _extract_usage(data)
         try:
             self.last_finish_reason = _extract_finish_reason(data)
@@ -182,10 +191,24 @@ class OpenAICompatibleClient:
             payload["top_p"] = NON_THINKING_TOP_P
         return payload
 
-    def _post(self, payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
+    def _post(
+        self, payload: dict[str, Any], *, timeout: int | float, hard_timeout: bool = False
+    ) -> dict[str, Any]:
         url = f"{self.base_url}/chat/completions"
         try:
-            response = httpx.post(url, headers=self._headers(), json=payload, timeout=timeout)
+            if hard_timeout:
+                async def request() -> httpx.Response:
+                    per_operation = httpx.Timeout(connect=15, read=timeout, write=30, pool=15)
+                    async with httpx.AsyncClient(timeout=per_operation) as client:
+                        return await client.post(url, headers=self._headers(), json=payload)
+
+                response = asyncio.run(asyncio.wait_for(request(), timeout=float(timeout)))
+            else:
+                response = httpx.post(url, headers=self._headers(), json=payload, timeout=timeout)
+        except TimeoutError as exc:
+            raise LLMError("LLM request timed out", code="llm_timeout", retryable=True) from exc
+        except httpx.TimeoutException as exc:
+            raise LLMError("LLM request timed out", code="llm_timeout", retryable=True) from exc
         except httpx.HTTPError as exc:
             raise LLMError("LLM transport failed", code="llm_transport", retryable=True) from exc
         if response.status_code >= 400:

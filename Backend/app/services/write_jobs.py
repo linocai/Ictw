@@ -322,7 +322,11 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             record_job_phase(sf, job.job_id, "writing", memory_context=manifest, bible_sha256=job.bible_sha256)
         if _should_stop(job):
             _restore_baseline(db, job); job.mark_terminal(); return
-        message = writer_user_message(chapter.book, chapter, memories, previous_ending, bible=job.bible_snapshot)
+        from app.services.character_state_projection import projected_fields_before_chapter
+        message = writer_user_message(
+            chapter.book, chapter, memories, previous_ending, bible=job.bible_snapshot,
+            dynamic_fields_by_character=projected_fields_before_chapter(db, chapter),
+        )
         last_candidate: ChapterDraftCandidate | None = None
         for attempt in (1, 2):
             record_job_phase(sf, job.job_id, "writing", attempt=attempt)
@@ -521,7 +525,8 @@ def _extractor_correction_message(attempt: int, error: Exception | None) -> str:
         f"上一次完整 JSON 未通过确定性校验：{error}。请重新输出完整 JSON，不是局部补丁。"
         "只保留正文中能逐字举证的事实；找不到合格证据的条目必须删除，宁缺毋滥。"
         "每条带人物归属的 text 与 event_text 必须明确写出并以所属人物精确姓名开头；"
-        "event_type 只能使用 schema 枚举；event 与动态字段的 evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，"
+        "event_type 只能使用 schema 枚举；state_updates 的即时快照必须完整包含位置、行动、情绪三槽，"
+        "持续状态与唯一人物关系只能 set/clear；event 与状态操作的 evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，"
         "不得转述、概括、添加标签、引号或解释。"
     )
 
@@ -536,6 +541,14 @@ def _extractor_user_reason(reason: str) -> str:
         "dynamic fields patch evidence is required": "人物动态字段缺少正文原文证据",
         "dynamic fields patch evidence lacks a substantial literal draft excerpt": "人物动态字段证据没有包含足够的正文连续原文",
         "dynamic fields patch evidence context must identify its owner": "人物动态字段的原文证据及近邻语境无法确认所属人物",
+        "snapshot must contain all three current-state slots": "即时快照必须完整包含位置、行动和情绪三项",
+        "duplicate character snapshot": "同一人物重复输出即时快照",
+        "duplicate persistent state slot": "同一人物重复输出持续状态字段",
+        "duplicate relationship pair": "同一人物关系重复输出",
+        "snapshot value must describe chapter ending only": "即时快照必须只描述章节结束时状态",
+        "relationship target must be another selected character": "人物关系对象必须是另一位本章已选人物",
+        "state_updates references an unselected character": "人物状态引用了本章未获批准的人物",
+        "character_events references an unselected character": "人物事件引用了本章未获批准的人物",
     }
     if reason in exact:
         return exact[reason]
@@ -547,6 +560,8 @@ def _extractor_user_reason(reason: str) -> str:
     for field, label in archive_names.items():
         if reason == f"{field} character attribution must name its owner":
             return f"{label}绑定了人物，但文本没有明确写出该人物姓名"
+        if reason == f"{field} references an unselected character":
+            return f"{label}引用了本章未获批准的人物"
     if reason.startswith("unsupported dynamic field key: "):
         return "人物动态字段使用了未批准的字段名：" + reason.removeprefix("unsupported dynamic field key: ")
     return reason

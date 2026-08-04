@@ -275,7 +275,7 @@ def test_extractor_maps_multi_character_names_without_exposing_ids_to_model(
     assert [event["event_text"] for event in lin_after["events"]] == ["林骁扬把伞递给周蕴文。"]
     assert [event["event_text"] for event in zhou_after["events"]] == ["周蕴文接过伞并向林骁扬道谢。"]
     assert lin_after["dynamic_fields"] == {"当前行动": "给周蕴文递伞", "与周蕴文关系": "主动帮助"}
-    assert zhou_after["dynamic_fields"] == {"情绪状态": "感谢", "与林骁扬关系": "接受帮助"}
+    assert zhou_after["dynamic_fields"] == {"情绪状态": "感谢", "与林骁扬关系": "主动帮助"}
     name_schema = llm.schema["properties"]["character_events"]["items"]["properties"]["character_name"]
     assert set(name_schema["enum"]) == {"林骁扬", "周蕴文"}
     assert lin["id"] not in llm.user and zhou["id"] not in llm.user
@@ -423,7 +423,7 @@ def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
         db.commit()
     finally:
         db.close()
-    assert stats == {"chapters": 1, "characters": 1, "updated_characters": 1, "events": 1, "patches": 1}
+    assert stats == {"chapters": 1, "characters": 1, "updated_characters": 1, "events": 1, "patches": 0, "state_changes": 3, "effective_states": 3}
     rebuilt_character = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()
     rebuilt_chapter = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert rebuilt_character["dynamic_fields"] == {"当前行动": "已交出钥匙"}

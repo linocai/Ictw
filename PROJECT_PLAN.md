@@ -1,130 +1,109 @@
 # ICTW PROJECT_PLAN
 
-> 本文件是唯一现行计划与状态来源；与归档冲突时以本文为准。完整 v1.6 施工与发版记录见 [`archive/v1.6.0施工plan.md`](archive/v1.6.0施工plan.md)。本次仅收口本文件，不新建平行计划或归档。
+> 本文件是唯一现行计划与状态来源；与归档冲突时以本文为准。历史实施记录仅在 `archive/` 查询。
 
 ## 当前状态
 
-- `v1.7.1(24)` Extractor 快修已完成：市场版本保持 `1.7.1`，双端 Build 从 23 升至 24。在线 Extractor 遇到确定性合约／证据校验失败时，会在同一输入上最多自动纠正两次；连续三次仍失败才整事务回滚，并把具体规则原因直接返回双端，不再只显示“校验未通过”。模型调用失败、内容过滤等上游错误仍保留真实分类，不伪装为校验失败。
-- Backend 已于 2026-08-04 停服备份并部署本快修，生产备份为 `/opt/linoi/backups/20260804-083059`；无 migration，Alembic 保持 `20260801_0008`。内外网健康均为 `1.7.1`，SQLite integrity／foreign keys、零活动任务、`NRestarts=0` 和部署后错误日志均通过。
-- Backend `v1.7.1` 人物记忆快修已完成并部署。根因是 v1.6 Extractor 只收到无姓名映射的 UUID 白名单，模型无法把正文姓名可靠绑定到人物 ID，而后端只校验 ID 在白名单内便直接落库；前端只是原样展示，不是故障源。
-- 现行合约：Extractor 只输出白名单内精确人物姓名，后端机械映射 UUID；人物事件／动态字段必须有可定位的正文证据，事件文本必须明确所属人物；事件类型、中文动态字段和关系键固定化。代词证据只在所属人物出现在该证据或其前置近邻正文时接受，非法条目整次回滚。
-- 单书重建采用“在线演练生成 0600 验证包 → 章节／Bible／人物状态指纹复核 → 停服原样原子提交”，正式落库不再二次调用模型。生产备份为 `/opt/linoi/backups/20260803-152134`；《骁扬》8 个已定稿章节已重建为 54 条事件、22 条字段补丁，10 人物中 8 人有动态更新。
-- 最终门禁：Backend 98 项测试、compileall、客户端状态测试、双端 Debug 与 Apple Development 签名 Release Archive、`git diff --check` 全绿；iOS 为 arm64，macOS 为 `arm64 + x86_64`，版本／Bundle ID／签名均正确。生产 Alembic 为 `20260801_0008`，内外网 `1.7.1` 健康，SQLite integrity／foreign keys、零活动任务与零服务错误均通过。
-- 上一目标完成记录：`LinoIMac` 的原生 SwiftUI 前端已升级为 iOS `v1.7.0(22)` 已验收的“纸与墨”体系；代码、自动回归、正式 Archive、本机换装、Git Tag 与 GitHub Release 全部完成，发布号为 `1.7.0(22)`。
-- 视觉事实源仅为仓库内的 iOS 成品：`App/LinoI/LinoTheme.swift`、`LinoComponents.swift`、`NoticeBus.swift` 及 Shelf／Workspace／Characters／Settings+Agent／Editor／Reader 页面；无新的外部设计稿。
-- macOS Debug/Release 与本机正式 App、`LinoI` Debug/Release 当前均为 `1.7.1(24)`；Backend 为 `1.7.1`，Alembic head 保持 `20260801_0008`。
-- 用户工作树不干净：`.learnings/ERRORS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/` 均为用户资产；不得查看以外改动、暂存、覆盖、回退或纳入验收产物。
-- 本轮代码变更：`LinoTheme` macOS 动态纸墨 token／阅读 token、`NoticeBus` macOS Toast 与 `App/LinoIMac` 的窗口 chrome、书架、三栏、人物、Agent、编辑器纸面层级；iOS 条件路径、业务 Store、导出与命令路由未改。
-- 已验证：`Tests/run_client_state_tests.sh`、iOS Debug build、macOS Debug build 和 `git diff --check` 通过；禁止路径（Backend、工程设置、iOS 页面、`MacCommandBus`、`MacExportSaver`）零 diff，`LinoIMac` 仍为 `1.6.5(20)`。
-- 隔离 QA 使用独立 bundle、临时 token、仅绑定 `127.0.0.1` 的临时 SQLite 完成，不读取既有 Keychain／数据；已实测浅／深书架、三栏与最小断点、长名称、人物／书设定／Agent、旧正文保留失败与 Checker 输入、reader day/sepia/night／字号／导航／Esc、新建与设置 sheet、File 菜单、连接失败与恢复，以及原生 `NSSavePanel` 打开后取消。结果留在 `/tmp/ictw-visualqa.qyoSop/screenshots`。
-- QA 发现并修复两项 macOS 反馈缺陷：新建作品卡的 `3:4` 比例原施加在 label 导致卡片横置，现移至 Button；连接失败时曾同时显示“未连接”和成功文案，现以本次 `NoticeBus` 真实错误取代成功反馈，隔离 `127.0.0.1:1` 已复验。
-- 隔离 QA 与双端回归门禁均已完成；未调用外部模型，Writer／Checker／Extractor 使用无副作用的种子状态核验；发布授权前未驱动当前机器的 `/Applications/ICTW.app`。
-- 2026-08-03 用户授权正式发版：仅 `LinoIMac` 的 Debug/Release 升至 `1.7.0(22)`；客户端状态测试、iOS/macOS Debug 与签名 macOS Release Archive 全绿。Archive 为 `arm64 + x86_64`、Apple Development 签名，包内版本与 Bundle ID 正确。本机 `/Applications/ICTW.app` 已换装、验签并启动 `1.7.0(22)`，旧版备份位于 `/tmp/ictw-app-backup-v170-macos.QcSXpq/ICTW-v1.6.5-build20.app`。发布 ZIP 为 2,290,209 B，SHA-256 `b26f4d379c8040c820b2bb9f25157a5a795a4ee0c10bb636b5b1c09a77863956`；实现提交 `1ff31b9`，annotated tag `v1.7.0-macos-build22` 指向该提交，main、tag 与 GitHub Release <https://github.com/linocai/Ictw/releases/tag/v1.7.0-macos-build22> 均已发布，云端资产 digest 与本地一致。Backend 与 iOS 无发布动作。
-- 2026-08-03 双端发版产物：iOS IPA 2,532,604 B，SHA-256 `f41ca04a1df5e6b427c0732090761c31e08b17d294edfb095f75d21b62fb36a2`；macOS ZIP 2,290,210 B，SHA-256 `57fe07bccb0aa56f690ea099b8f0a8c65ffb41392553aea8683e6fb85cd55f8f`。双端 Archive、IPA 与 ZIP 固定保留在 `/Users/linotsai/Downloads/ICTW-v1.7.1-build23`；本机旧 macOS App 备份位于 `/tmp/ictw-app-backup-v171.Tif6J5/ICTW-v1.7.0-build22.app`。
-- 2026-08-04 Build 24 发版产物：iOS 开发签名 IPA 2,532,661 B，SHA-256 `ee91fbcc41cd30c72ed51960d32fdfa1c5388223bd04e09a1827c129ecbf70e5`；macOS ZIP 2,290,444 B，SHA-256 `e5686cd673b2d3c03a52ccdffdeaa91d9414e569075e9f772dd9b15d11d42874`。双端 Archive、IPA 与 ZIP 固定保留在 `/Users/linotsai/Downloads/ICTW-v1.7.1-build24`；iOS 未上传 App Store Connect，本机 macOS App 已换装并启动，旧版备份位于 `/tmp/ictw-app-backup-v171-build24.i0RVLS/ICTW-v1.7.1-build23.app`。新 annotated tag 与 GitHub Release 使用 `v1.7.1-build24`，公开资产仅含 macOS ZIP。
-- 下一步：无进行中的版本施工；等待用户安装 iOS Build 24，并用后续章节验证 Extractor 自动纠正和具体失败原因展示。
+- 基线为双端 `v1.7.1(24)`、Backend `1.7.1`、Alembic `20260801_0008`；`v1.7.1-build24` 已发布。当前目标为双端／Backend `v1.7.2(25)`。
+- 已确认故障在整体数据语义而非单一前端：`characters.dynamic_fields` 被 Extractor 逐键增量合并；`character_field_patches` 只保存逆向补丁。未再次写到的旧字段不会退出，删除／重开中间章也不能可靠重算全部后续状态。双端和 Writer 原样读取该混合字典。
+- 现行 Extractor 已有姓名白名单、正文原文证据与三次确定性纠偏；这些安全门禁必须保留。`thinking`/`top_p`、候选稿隔离、Checker 与 v1.6 写作链均不随本项目改变。
+- 用户工作树资产：`.learnings/ERRORS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/`；只读保护，不暂存、覆盖、回退或纳入提交／产物。
 
-## v1.7 iOS 完成记录（凝缩保留）
+## 目标与边界
 
-- `v1.7.0(21)`：iOS 纸墨视觉、全状态逐屏验收、新 App Icon、正式 Archive、本机开发签名 IPA、tag 与 GitHub Release 已完成。
-- `v1.7.0(22)`：修复书架“新建”卡片尺寸，独立复审、正式 Archive、本机开发签名 IPA、`v1.7.0-build22` tag 与 GitHub Release 已完成；Backend 与 macOS 未变更。
-- iOS 的 palette、排版、实体卡片、阅读器层级与反馈语义是本轮唯一基线；其 target、版本、资源和业务逻辑均冻结，后续共享文件改动必须证明 iOS 零回归。
+- 根治人物动态字段的累积与矛盾：人物事件继续累积；动态字段成为章节顺序可重放的“当前有效状态投影”。前端只展示最新有效状态，Writer 只获得目标章节开始前的有效状态；历史仅留在事件／状态变更记录中。
+- 仅改 Backend、共享 Swift 客户端与版本配置。保持已有 API 的 `dynamic_fields` 响应字段、所有 target／Bundle ID／Keychain／草稿目录与既有正文、Bible、摘要、事件编辑接口兼容；不读取或在日志／计划中呈现任何书籍正文。
+- 三本现存书必须用已接受正文安全重建状态，不改正文、Bible、章节标题、`headline`、`long_summary`、章节摘要、用户人物固定设定或用户手工事件。重建会调用 Extractor，输入和验证包均不得输出到日志或 Git。
 
-## 目标、边界与发布门禁
+## 稳定设计决定
 
-- macOS 交付：在保留单窗口、三栏／侧栏、抽屉、鼠标悬停、键盘快捷键、菜单、原生 sheet 与 `NSSavePanel` 的前提下，使所有工作界面呈现同一套纸墨语言；不是把手机两栏或底部 Tab 放大到桌面。
-- 保持所有模型、Store、API、写作状态机、草稿恢复、任务所有权、Checker／Extractor 行为、连接与导出行为原样；只调整 macOS 视觉结构和允许的共享视觉条件分支。
-- 本轮绝不改 `App/LinoI.xcodeproj/project.pbxproj`、scheme、Bundle ID、Keychain／UserDefaults／本地草稿／wire 标识或版本号。仅在全部验收通过且用户另行明确授权发版后，才可将 **LinoIMac 的 Debug 与 Release** 同时改为 `MARKETING_VERSION=1.7.0`、`CURRENT_PROJECT_VERSION=22`；`LinoI` 两组值不得触碰。
-- 禁止触碰 `Backend/**`、Alembic、生产数据、部署文件；禁止改 iOS 专属业务／页面／资源文件、`.learnings/**`、`design_handoff_ios_visual_upgrade/**`、用户 scheme 与未跟踪交接物；不 commit、tag、release、deploy、Archive、安装或上传。
+### 1. 字段语义
 
-## 稳定视觉决定
-
-| 范畴 | iOS 基线 | macOS 落地决定 |
+| 分类 | 字段／存储 | 更新规则 |
 | --- | --- | --- |
-| 色彩与表面 | 暖灰背景、白／深灰纸面、朱红强调、低对比墨线 | `LinoTheme` 的 macOS 分支采用同值动态 light/dark palette；普通工作面改为实体 paper surface，淘汰蓝色渐变和泛用 glass。仅阅读器浮层／原生 transient chrome 可保留克制 material。 |
-| 字体与层级 | SF 作为操作 UI，Songti 为书名、正文和叙事标题；16pt card、14pt control 圆角 | macOS 使用同一字体分工、色阶、1px 边线、16pt card／14pt control；允许更密的信息密度，但不再使用 rounded-SaaS 标题体系。 |
-| 书架与工作区 | 3:4 纸书脊、层级清楚的章节行、纸面分区 | 书架保留自适应多列与 hover/context menu；工作区保留 258pt 左栏、中心编辑区、326pt 右栏及原有断点／抽屉，不复制手机底部导航。 |
-| 编辑与阅读 | 编辑是可操作的分层纸面；阅读器是低干扰独立阅读面 | 编辑保留桌面 toolbar／快捷操作与完整状态链；阅读器保留全屏、Esc、A-/A+、选择文本和 macOS 独立偏好键，只映射主题与 chrome 层级。 |
-| 动画与反馈 | 快速、低幅度、成功／警告／失败颜色语义一致 | 维持现有 hover、focus、键盘与加载可达性；采用同一 `LinoMotion` 节奏，Toast、空态、加载、错误和生成失败统一纸墨语义，禁止以动画掩盖失败。 |
+| 即时快照 | `当前位置`、`当前行动`、`情绪状态` | 人物在本章实际在场且有合法快照时整组替换；未明确的槽写 `clear`，不继承旧地点、动作或情绪。值只能描述章节结束时状态，禁止过程串与“未知／未明确／暂无”。 |
+| 持续状态 | `身体状态`、`当前目标`、`秘密状态` | 只有正文明确设定、变化或结束时才 `set`／`clear`；未触及则保留上一次有效值。 |
+| 人物关系 | 无向人物对的唯一关系槽 | 新状态替换同一人物对的旧状态，结束时 `clear`；投影时才镜像为双方的 `与某人关系`，不得双向各自累积。 |
+| 掌握信息 | 归属人物的 `atomic_memories`；叙事事件可另用 `CharacterEvent(event_type=认知)` | 可累积，不再属于动态字段。 |
+| 其他状态 | 删除 | 禁止 Extractor 输出、禁止投影、旧值在重建时清除。 |
 
-## 允许改动面与共享约束
+### 2. 状态变更数据模型与兼容
 
-- 共享视觉入口仅限 `App/LinoI/LinoTheme.swift`、`LinoComponents.swift`、`NoticeBus.swift`：保留公开 API、回调、iOS 分支和业务语义；新增或改动必须局限 `#if os(macOS)` 路径。`LinoTheme` 的 macOS 动态色使用 AppKit appearance provider，与 iOS token 数值对齐；阅读主题同样对齐，但保留 macOS 既有偏好键。
-- macOS 可改：`LinoIMacApp.swift`、`MacShell.swift`、`LinoMacTheme.swift`、`LinoMacControls.swift`、`MacBookshelfView.swift`、`MacNewBookSheet.swift`、`MacConnectionView.swift`、`MacSettingsSheet.swift`、`MacWorkspaceView.swift`、`MacChapterSidebar.swift`、`MacRightPanel.swift`、`MacBookSettingsTab.swift`、`MacCharacterTab.swift`、`MacAgentTab.swift`、`MacChapterEditor.swift`、`MacReaderView.swift`。
-- 不改 `MacCommandBus.swift`、`MacExportSaver.swift` 的行为或 API；其入口、菜单、快捷键、AppKit 控件、确认框和 `NSSavePanel` 必须仍可达。除非实测发现纯视觉编译阻塞，否则不扩大此名单。
+- 新增迁移和 `CharacterStateChange`（`character_state_changes`）：`book_id`、`chapter_id`、主体人物、可空对方人物、`scope`（snapshot/persistent/relationship）、固定 `slot`、`operation`（set/clear）、可空 JSON `value`、原文 `evidence`、即时快照 `batch_id`、`is_effective`、时间戳及防重复唯一约束／索引。人物对按稳定 ID 排序后唯一化。
+- 即时快照一批恰有三个槽；投影器遇到该批先清空三个即时槽、再应用其中 `set`。持续／关系按章节序与稳定次序回放，最后有效记录标记 `is_effective=true`。`characters.dynamic_fields` 保留为唯一公开的物化当前投影，不再是事实源。
+- 保留表和 wire 字段 `character_field_patches`／`dynamic_fields` 以兼容旧安装，但 v1.7.2 不再写、读或用旧补丁回滚；三本书重建事务清除旧补丁与旧投影。`CharacterCreate/Patch.dynamic_fields` 继续接受以免旧 App 保存人物卡失败，但服务端忽略该输入；新双端保存人物卡不再回传动态字段。
+- 新状态 API 不公开历史正文或候选稿；人物卡、导出和 Writer 使用投影。历史状态只供后端重算、审计与后续受控工具使用。
+
+### 3. Extractor 输入、输出与确定性门禁
+
+- `extractor_user_message` 为每位本章白名单人物提供“本章开始前有效状态”，只作为更新基线，绝非可归档事实。它按目标章节之前的已定稿章节投影，不能误带后续章节状态。
+- 将 `dynamic_fields_patch` 替换为 `state_updates`：每项以精确人物名绑定，含可选完整 `snapshot`（在场证据 + 三个即时槽及每个 set 的正文证据）、`persistent_ops`（字段、set/clear、值、证据）和 `relationship_ops`（对方精确名、set/clear、值、证据）。未在正文中实际在场的人物不得输出操作。
+- 所有 set／clear 均须有可定位且能识别所属人物的正文原文；即时槽的 clear 使用同一人物在场证据。关系对方必须在本章白名单，主体／对方不能相同。空、未知、未明确、过程式快照、非法字段、重复槽／关系对、非完整即时批、未获准人物、无证据或不匹配证据一律整次失败。
+- 保留 JSON schema、姓名→UUID 后端机械映射、固定事件分类、白名单与三次自动纠偏。每轮输出先完整校验再事务落库；上游／内容过滤错误不伪装成校验失败。
+
+### 4. 确定性投影与章节生命周期
+
+- 实现单一纯投影服务：按 `Chapter.index` 回放所有 `finalized` 章节的 `CharacterStateChange`，重建 `dynamic_fields` 与 `is_effective`；任何写入后不得原地 merge。状态、关系和投影在同一事务提交。
+- 接受章节：替换该章 Extractor 产物并重投影整本书。重开章节：撤销该章状态变更、使其不再作为定稿事实，重投影；既有人物事件仍按现有兼容行为保留至重新接受或删除。删除任意章节：删除后重排索引并重投影整本书。重新接受：以原始章节前基线重提取／重投影，绝不读取自己的旧输出或未来状态。
+- Memory Selector／Writer 的人物卡改为目标章节前投影；人物卡、TXT 导出和双端 UI 仅展示当前投影。双端动态区域改名“当前状态 · Extractor”，空态说明无当前有效状态，不增加历史全文页面。
 
 ## 执行计划
 
-### Phase 0 — 保护基线与可回滚边界
+### Phase 0 — 保护基线与契约测试
 
-状态：完成。用户三项工作树资产已隔离，版本与禁止路径已复核；未建立 mock、资源、依赖或 target。
+状态：完成。合成契约覆盖快照替换、持续状态清除、关系唯一镜像、旧客户端动态字段忽略与非法状态拒绝；未读取任何生产正文。
 
-- Builder 首先复读本计划、`git status --short` 与 iOS／macOS 的四组版本配置；记录用户已有三项工作树变更，确保 diff 起点只含自身改动。
-- 建立页面—状态—交互检查表，不建 mock、假数据、图片资产、依赖或新 target；将截图输出放在仓库外临时目录，禁止写入用户未跟踪 handoff。
-- 每阶段结束执行 `git diff --check`，逐文件确认没有 Backend、iOS 专属页面、工程设置或版本配置漂移；发现业务回归即撤销**本阶段自身的可识别改动**，不动用户变更。
+- 复读本计划，记录 `git status --short`、四组版本和生产 Alembic；确认无活动写作任务后再触碰状态数据。创建状态操作契约的 fixture，先锁定快照替换、持续保留／清除、关系唯一、认知记忆、非法值与旧客户端保存的预期。
+- Builder 不查看书籍正文；测试仅用合成文本。所有日志只记录章节索引、计数、哈希和规则错误，不记录 Prompt、正文、token 或密钥。
 
-### Phase 1 — 纸墨基础与窗口 chrome
+### Phase 1 — Backend 状态源与迁移
 
-状态：完成。macOS 动态 light/dark 纸墨 token、实体 toolbar／sidebar／panel、SF/Songti 分工及非强制浅色均已落地。
+状态：完成。本地 head 为 `20260804_0009`；状态变更表、纯投影、接受／重开／删除／重接受重放及 v2 bundle 重建路径已实现。
 
-- 先改共享文件的 macOS 条件分支：令 palette、reading palette、字体、圆角、边线、状态色、Toast／空态／输入／生成卡对齐 iOS；不改变任何 iOS 条件分支、组件签名或 `NoticeBus` 生命周期。
-- 在 `LinoMacTheme` 将 toolbar／sidebar／panel modifier 重定义为分层实体纸面，统一 hover/focus/pressed；在 `LinoMacControls` 重绘 icon、连接状态和分段控件，保留 pointer、help 与 accessibility label。
-- 在 `LinoIMacApp` 与 `MacShell` 移除 `.aqua`／`.preferredColorScheme(.light)` 强制锁定，使系统 light/dark 生效；保留 AppDelegate、Commands、窗口最小 `1080×720`、root state、overlay 顺序和所有命令路由。
-- 验收：macOS light/dark 启动都无蓝色渐变、全局玻璃墙或强制浅色；iOS build 与关键书架／编辑／阅读冒烟截图不变。
+- 新建不可破坏旧数据的 Alembic migration：只增加状态变更表、索引与约束；不在启动时建表，不拷贝不可信旧动态值，不删除旧表。migration 前后执行 SQLite integrity、foreign key check、Alembic head。
+- 用投影服务取代 `CharacterFieldPatch` 的写入／`_revert_dynamic_fields`；修改 Extractor 应用、重开、删除、重接受、人物读取、导出和上下文，使所有动态状态路径只读重放结果。确保失败、取消或验证异常完全回滚。
+- 更新 v2 离线验证包与重建脚本：指纹覆盖书、章节顺序、正文与新输出；0600 文件；先干跑验证所有章节，再仅凭已验证 bundle 写入，严禁二次调用模型。
 
-### Phase 2 — 书架、连接与全局反馈
+### Phase 2 — Extractor 合同与运行时
 
-状态：完成（代码、构建与连接失败隔离实测）。书架改为 3:4 纸书封／虚线新建卡，连接和 Toast 走动态实体纸面；连接失败会在表单内显示既有真实错误。
+状态：完成。`state_updates` 已替代生产写入的旧 patch，包含前态基线、确定性校验、中文错误原因、Extractor 关闭 thinking、120 秒总时限和 4096 token 输出预算。
 
-- `MacBookshelfView`／`MacNewBookSheet` 采用 iOS 纸书脊、3:4 封面、朱红主操作、新建虚线卡和实体空／加载／错误面；保持桌面自适应多列、悬停抬升、右键删除、焦点和提交行为。
-- `MacConnectionView`／`MacSettingsSheet` 改为纸面表单、分组和明确错误反馈；不改 Keychain、连接测试、保存、关闭或原生 sheet 逻辑。
-- 验收：书架正常、空、加载、连接失败和删除确认均有一致 toast／error 语义，宽窗口不降为手机两列。
+- 实现 `state_updates` schema、人格／固定协议、姓名绑定、输入基线和确定性验证；移除 `掌握信息`、`其他状态` 与旧 patch 合同的生产写路径。不得放松已有事件、证据和白名单验证。
+- 保持最多三次格式纠偏；纠偏提示涵盖快照完整性、set/clear 及精确证据。把具体状态规则映射为双端可见中文失败原因，保留真正的上游分类。
+- 处理 Extractor 长耗时：此版本关闭 Extractor thinking，并为单次请求增加严格总时限与 JSON 输出预算；超时如实标记为上游超时，不自动转为状态校验重试。为 timeout、三次纠偏和事务回滚增加测试。
 
-### Phase 3 — 三栏工作台、人物、设定与 Agent
+### Phase 3 — 双端兼容与体验
 
-状态：完成。三栏和 drawer 保持原断点／菜单／快捷键，人物、书设定、Agent inspector 已切换至动态纸面；长文本、最小窗口与 drawer 已由隔离 QA 复核。
+状态：完成。共享客户端保存人物卡不再回传动态字段；双端改为“当前状态 · Extractor”展示和空态；版本均更新为 `1.7.2(25)`。
 
-- `MacWorkspaceView`、`MacChapterSidebar`、`MacRightPanel` 以纸面标题栏、章节行、侧栏 tab／抽屉和分区重构层级；保留 ≥1100 三栏、`1080×720` 右栏抽屉、既有更窄布局代码、菜单和快捷键。
-- `MacCharacterTab` 映射 iOS 人物的列表／细节／空态／导入反馈，保留桌面 chip flow、选择、编辑、删除和菜单；`MacBookSettingsTab` 映射书籍设定分组，同时保留导出入口与 `NSSavePanel`。
-- `MacAgentTab` 映射 iOS Agent 的 profile／绑定／persona 信息层级为桌面 inspector／可展开组，而非强制 push 页面；所有 picker、toggle、effort、temperature、保存和错误行为不变。
-- 验收：超长书名、章节名、人物名与 persona 不截断关键操作；右栏收起时每个 tab 仍可从 drawer 完整操作。
+- iOS 与 macOS 共用模型／Store 调整为保存人物固定卡时不发送 `dynamic_fields`；后端仍容忍旧 App 带来的该字段并不污染投影。动态区仅读当前字段，保留现有人物事件编辑／删除功能。
+- 更新当前状态标签、空态与长关系文本布局；不拉取状态历史、候选稿或正文。共享 Swift 改动必须两 target 构建与客户端状态测试。
 
-### Phase 4 — 编辑状态链与阅读器
+### Phase 4 — 三本书安全重建
 
-状态：完成。编辑器保留既有四阶段、Checker／Extractor、恢复和导入回调并改用纸面层级；阅读器三主题、宋体正文、字号、导航、Esc 与 macOS 偏好键已由隔离 QA 复核。
+状态：工具完成，待生产维护窗口执行；不可跳过。
 
-- `MacChapterEditor` 以 iOS 的标题、Bible、人物 chips、四阶段（Memory Selector → Writer → Bible check → Extractor）、context／Checker trace、预览／编辑和底部行动语义重排为桌面纸面；保留所有现有 callback、任务轮询、确认框、重试、旧正文与错误分类。
-- `MacReaderView` 采用 iOS day／sepia／night paper palette、Songti 正文、低干扰 chrome 与阅读设置层级；保留原生选择／两端对齐、全屏 overlay、主题切换、A-/A+、Esc／Return、章节导航及 `linoi.mac.reader.*` 键。
-- 验收：长正文可连续阅读且不挤压操作栏；生成失败、Checker 未通过、Extractor 完成、阅读设置切换和退出阅读器均可回到原路径。
+- 先用生产库备份副本或维护锁确认三本书精确 ID／标题、已定稿章节数和人物数，仅输出元数据。停止写入并确认无活动 Job；对三本书逐章生成 v2 0600 验证 bundle，所有输出通过确定性校验、章节／正文指纹和覆盖率检查后才允许继续。
+- 一次性校验三份 bundle 后，在**单一数据库事务**中清除三书旧字段补丁与旧物化动态状态，按章节顺序写入状态变更并投影；既有 `CharacterEvent`、章节归档和用户不可变内容不改。任一本／任一章失败即 rollback，绝不产生半书或半套状态。
+- 应用后只产出每书章节数、状态变更数、有效状态数、既有人物事件数前后一致性、非法字段数和 fingerprint 摘要；人工核对这些元数据与重建前清单。验证不通过立即从备份完整回滚，不尝试在线手修字段。
 
-### Phase 5 — 双端回归、视觉签收与待授权发布
+### Phase 5 — 验证、部署与发布
 
-状态：完成。自动回归与隔离视觉 QA 已覆盖核心书架、三栏、inspector／editor、reader、sheet、菜单、连接失败和 `NSSavePanel`；外部模型链以无副作用种子状态核验。版本、Archive、换装、tag 与 GitHub Release 已全部完成。
+状态：本地验证完成，待主会话执行生产备份／迁移／三书重建、提交、Archive 与发布。
 
-- 先完成下列构建和客户端状态回归，再做实际 macOS 交互与截图矩阵；不因视觉通过跳过 iOS shared-file 回归。
+- Backend：新增／更新迁移、投影、生命周期、Extractor、bundle、旧客户端兼容、导出与错误路径测试；完整 `pytest -q`、`compileall`、`alembic heads`、`git diff --check` 必须通过。客户端运行 `App/Tests/run_client_state_tests.sh`、iOS／macOS Debug build。
+- 生产：先停旧服务并备份 `linoi.db`、`.env`、当前代码与 unit/nginx 配置；备份权限 600，并验证 integrity／FK／head。上传已提交 Backend，先 `alembic upgrade head`，执行三书干跑与一次性 apply，再启动单一服务实例。验收内外 HTTPS health=`1.7.2`、head、integrity、FK、零活动任务、`NRestarts=0`、无敏感日志和三书投影统计；失败按停服、还原代码与数据库备份、复核后启动的顺序回滚。
+- 版本：`LinoI` 与 `LinoIMac` 的 Debug／Release 四组同时设 `MARKETING_VERSION=1.7.2`、`CURRENT_PROJECT_VERSION=25`；Backend health 版本同步。不得改 target、Bundle ID、scheme 或用户修改的 scheme。
+- 发布顺序：全部测试 → commit → 生产备份／部署／重建验收 → 双端签名 Release Archive → iOS 开发签名 IPA（仅本机）→ macOS universal ZIP、验签与换装 `/Applications/ICTW.app` → 将产物存至 `/Users/linotsai/Downloads/ICTW-v1.7.2-build25` → push main → annotated tag `v1.7.2` 与 GitHub Release。公开资产仅 macOS ZIP；不上传 iOS App Store Connect。
 
-```bash
-cd App && Tests/run_client_state_tests.sh
+## 验收、风险与回滚
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-xcodebuild -project App/LinoI.xcodeproj -scheme LinoI \
-  -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
+- 必测事实：地点 A→B 只显示 B；睡觉→起床不保留睡觉；受伤→痊愈清除身体状态；敌对→合作只显示合作；认知只进记忆／事件；`未明确`／`其他状态` 为零；未出场人物状态不变；删除／重开／重接受中间章节能重放后续；Writer 得到的仅是该章开始前状态。
+- 最大风险是三书重建的 LLM 输出质量与长耗时；以停写、严格总时限、验证 bundle、一次性 apply、生产备份和完整回滚控制。不得通过放松证据门禁或保留旧字段掩盖失败。
+- 次要风险是旧客户端保存人物卡回传动态字段；服务端兼容忽略、新客户端停止发送并以双端回归覆盖。`character_field_patches` 暂留作数据库兼容壳，待所有旧版本淘汰后另立项删除。
+- 外部网页操作清单：GitHub Release 由现有 CLI 发布；App Store Connect：无。宁波云迁移、视觉功能、写作 SOP 和其它 Backend 功能不随本计划推进。
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-xcodebuild -project App/LinoI.xcodeproj -scheme LinoIMac \
-  -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+## 里程碑索引
 
-git diff --check
-git status --short
-```
-
-- 截图与交互矩阵（每项均需 light/dark，阅读器另含 day/sepia/night）：①书架正常／空／加载／连接错误／新建与删除确认；② `1280×840` 三栏工作台及 `1080×720` 最小窗口右栏 drawer；③长书名、长章节、长人物、长 persona 和长正文；④人物、书籍设定、Agent profile／绑定／persona；⑤ editor idle／生成中／上游失败／Checker 未通过／Extractor 完成／恢复旧正文；⑥ reader 字号、主题、选择、导航、Esc；⑦ Toast、错误、空态、sheet、菜单、快捷键、`NSSavePanel` 入口。
-- 每张图以 iOS 成品源代码的 palette、字体分工、卡片／边线／圆角、编辑—阅读层级及反馈语义评分；桌面排版、三栏密度、hover 与原生控制可不同。任一核心页视觉总分低于 90/100 或功能不可达不得进入发布门禁。
-- 签收前逐项审查 diff：共享文件仅有 macOS 条件变化；LinoI 版本和所有禁止路径无差异。该门禁已通过，用户随后授权将 `LinoIMac` 升至 `1.7.0(22)` 并完成正式发版。
-
-## 风险、回滚与 Backlog
-
-- 最大风险：共享 `LinoTheme`／`LinoComponents`／`NoticeBus` 的视觉改动意外影响 iOS，及将 macOS 纸墨化时误伤三栏断点、键盘菜单或生成状态链。缓解方式是 macOS 条件隔离、每阶段 Mac build、Phase 5 双 target build 与真实状态矩阵。
-- 次要风险：dark mode 解除强制浅色后出现 AppKit／SwiftUI 色彩不一致；以动态 token 和 light/dark 截图逐面校正，绝不恢复全局浅色锁定来掩盖问题。
-- 回滚：只回退本轮可识别的 macOS／macOS 条件视觉 diff；不回退用户已有 worktree 变更，不触碰数据、迁移或发布状态。未获版本授权时回滚不涉及 `project.pbxproj`。
-- Backlog：宁波云迁移、阅读器功能增强、v1.6 记忆参数评估及任何 Backend 改动均不随本计划推进；外部网页操作清单：无。
+- `v1.7.1(24)` Extractor 错误可见性与三次纠偏已发布；备份 `/opt/linoi/backups/20260804-083059`。
+- `v1.7.0(21/22)` iOS／macOS 纸墨视觉、Archive、tag 与 GitHub Release 已完成；`v1.6.0–v1.6.5` 写作链／摘要迁移已完成。详细记录在 `archive/` 与 Git tag。

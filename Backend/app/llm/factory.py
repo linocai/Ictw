@@ -23,6 +23,12 @@ def build_llm_client(db: Session, agent_role: str) -> OpenAICompatibleClient:
         raise RuntimeError(f"Bound LLM profile missing for {agent_role}")
     thinking_enabled, reasoning_effort = effective_binding_settings(binding, profile)
     capabilities = resolve_capabilities(profile.model_name, profile.base_url)
+    # Extraction is bounded archival work.  It has an explicit output budget
+    # and must not spend the request window on provider thinking tokens.
+    if agent_role == "extractor":
+        if not capabilities.thinking_can_disable:
+            raise RuntimeError("Extractor requires a model with disableable thinking")
+        thinking_enabled, reasoning_effort = False, None
     return OpenAICompatibleClient(
         base_url=profile.base_url,
         api_key=decrypt_secret(profile.api_key_encrypted),

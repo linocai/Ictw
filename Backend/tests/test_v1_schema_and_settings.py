@@ -95,6 +95,43 @@ def test_unknown_model_rejects_non_null_thinking_configuration(tmp_path) -> None
         assert exc.value.status_code == 422
 
 
+def test_extractor_binding_reports_and_persists_forced_thinking_off(tmp_path) -> None:
+    engine = make_engine(f"sqlite:///{tmp_path / 'extractor-policy.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        profile = LLMProfile(
+            id="profile",
+            name="DeepSeek",
+            provider="openai-compatible",
+            base_url="https://api.deepseek.example",
+            api_key_encrypted="unused",
+            model_name="deepseek-v4-flash",
+        )
+        db.add(profile)
+        db.commit()
+        db.add(
+            AgentModelBinding(
+                agent_role="extractor",
+                llm_profile_id=profile.id,
+                thinking_enabled=True,
+                reasoning_effort="high",
+            )
+        )
+        db.commit()
+
+        response = patch_binding("extractor", AgentModelBindingPatch(), db)
+        assert response["thinking_enabled"] is False
+        assert response["reasoning_effort"] is None
+        assert response["effective_thinking_enabled"] is False
+        binding = db.get(AgentModelBinding, "extractor")
+        assert binding.thinking_enabled is False
+        assert binding.reasoning_effort is None
+
+        with pytest.raises(HTTPException) as blocked:
+            patch_binding("extractor", AgentModelBindingPatch(thinking_enabled=True), db)
+        assert blocked.value.status_code == 422
+
+
 def test_model_name_change_clears_incompatible_binding_settings(tmp_path) -> None:
     engine = make_engine(f"sqlite:///{tmp_path / 'profile-change.db'}")
     Base.metadata.create_all(engine)

@@ -217,7 +217,7 @@ final class CharactersStore: ObservableObject {
     func create(name: String) async {
         guard let book = session.currentBook else { return }
         do {
-            let payload = CharacterPatchPayload(name: name, role: "", fixed_profile: "", dynamic_fields: [:])
+            let payload = CharacterPatchPayload(name: name, role: "", fixed_profile: "")
             let character: Character = try await session.api.request("/books/\(book.id)/characters", method: "POST", body: payload)
             characters.append(character)
             selectedCharacterId = character.id
@@ -1344,20 +1344,17 @@ private struct CharacterPatchPayload: Encodable, Sendable {
     var name: String
     var role: String
     var fixed_profile: String
-    var dynamic_fields: [String: JSONValue]
 
-    init(name: String, role: String, fixed_profile: String, dynamic_fields: [String: JSONValue]) {
+    init(name: String, role: String, fixed_profile: String) {
         self.name = name
         self.role = role
         self.fixed_profile = fixed_profile
-        self.dynamic_fields = dynamic_fields
     }
 
     init(_ character: Character) {
         name = character.name
         role = character.role
         fixed_profile = character.fixedProfile
-        dynamic_fields = character.dynamicFields
     }
 }
 

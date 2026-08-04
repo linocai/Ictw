@@ -12,7 +12,7 @@ struct LinoICharactersPane: View {
                     Text("人物")
                         .font(LinoType.paneTitle)
                         .foregroundStyle(LinoTheme.ink)
-                    Text("固定设定你维护，动态字段由 Extractor 更新")
+                    Text("固定设定你维护，当前状态由 Extractor 投影")
                         .font(LinoType.ui(12))
                         .foregroundStyle(LinoTheme.muted)
                 }
@@ -181,13 +181,18 @@ private struct LinoICharacterCard: View {
     private var dynamicFieldsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                LinoISectionLabel("动态字段 · EXTRACTOR")
+                LinoISectionLabel("当前状态 · EXTRACTOR")
+                if let index = character.dynamicFieldsUpdatedChapterIndex {
+                    Text("更新于第 \(index) 章")
+                        .font(LinoType.caption)
+                        .foregroundStyle(LinoTheme.faint)
+                }
                 Spacer()
             }
             .padding(.horizontal, 16)
 
             if character.dynamicFields.isEmpty {
-                Text("还没有 Extractor 维护的动态状态。")
+                Text("还没有当前有效状态。")
                     .font(LinoType.ui(12))
                     .foregroundStyle(LinoTheme.faint)
                     .padding(.horizontal, 16)

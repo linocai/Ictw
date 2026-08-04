@@ -6,21 +6,26 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.agents.extractor import ExtractorAgent
 from app.db import SessionLocal
 from app.llm.factory import build_llm_client
-from app.models import Book, Chapter, JobRun
+from app.models import Book, Chapter, Character, CharacterStateChange, JobRun
 from app.services.character_memory_rebuild import rebuild_book_character_memory
+from app.services.character_state_projection import rebuild_book_projection
 from app.services.context import draft_fingerprint, extractor_user_message
-from app.services.extraction import ExtractorValidationError, validate_extractor_output
+from app.services.extraction import (
+    ExtractorValidationError,
+    persist_validated_state_changes,
+    validate_extractor_output,
+)
 from app.services.personas import get_persona
 
 
 ACTIVE_PHASES = {"selecting_memory", "writing", "checking", "extracting"}
-MAX_EXTRACTION_ATTEMPTS = 4
-BUNDLE_VERSION = 1
+MAX_EXTRACTION_ATTEMPTS = 3
+BUNDLE_VERSION = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,7 +110,7 @@ def load_validated_bundle(
         outputs[chapter.id] = output
         print(
             f"loaded chapter={chapter.index} events={len(validated.events)} "
-            f"patches={len(validated.patches_by_character)}"
+            f"state_changes={len(validated.state_changes)}"
         )
     return outputs
 
@@ -133,6 +138,14 @@ def main() -> int:
         if args.apply_file:
             outputs = load_validated_bundle(args.apply_file, book, chapters)
         else:
+            # Build every chapter against the validated projection produced by
+            # earlier chapters in this same dry-run.  These staging writes stay
+            # inside the caller transaction and are always rolled back before a
+            # bundle is returned or an apply begins.
+            db.execute(delete(CharacterStateChange).where(CharacterStateChange.book_id == book.id))
+            for character in db.scalars(select(Character).where(Character.book_id == book.id)).all():
+                character.dynamic_fields = {}
+            db.flush()
             extractor = ExtractorAgent(build_llm_client(db, "extractor"), get_persona(db, "extractor"))
             outputs = {}
             for chapter in chapters:
@@ -148,14 +161,18 @@ def main() -> int:
                             raise
                         message += (
                             f"\n\n# 第 {attempt + 1} 次格式纠偏\n上一次输出未通过确定性校验：{exc}。"
-                            "只保留能在正文中找到逐字证据的 event 和动态字段；找不到就删除该条，宁缺毋滥。"
+                            "只保留能在正文中找到逐字证据的 event 和 state_updates；找不到就删除该条，宁缺毋滥。"
+                            "即时快照必须完整包含位置、行动、情绪三槽；持续状态与人物关系只能 set/clear。"
                             "每条 evidence 只能直接复制正文中包含所属人物姓名的完整原句或连续原文段落，"
                             "不得添加‘原文’标签、引号、解释，不得转述、概括或改写。"
                         )
                 outputs[chapter.id] = output
+                persist_validated_state_changes(db, chapter, validated)
+                db.flush()
+                rebuild_book_projection(db, book.id)
                 print(
                     f"validated chapter={chapter.index} events={len(validated.events)} "
-                    f"patches={len(validated.patches_by_character)}"
+                    f"state_changes={len(validated.state_changes)}"
                 )
 
         if args.output_file:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
+import httpx
 import pytest
 from sqlalchemy.orm import Session
 
-from app.agents.extractor import extractor_schema
 from app.agents.memory_selector import MEMORY_SELECTION_FIXED_CONTRACT, MemorySelectorAgent
+from app.agents.extractor import extractor_schema
 from app.db import Base, make_engine
 from app.llm.base import LLMError
 from app.llm.openai_compatible import OpenAICompatibleClient, _extract_content, _http_error
@@ -62,7 +64,21 @@ def test_memory_brief_enforces_item_and_source_caps_defensively():
 def test_extractor_schema_for_no_characters_forces_empty_arrays():
     schema = extractor_schema([])
     assert schema["properties"]["character_events"]["maxItems"] == 0
-    assert schema["properties"]["dynamic_fields_patch"]["maxItems"] == 0
+    assert schema["properties"]["state_updates"]["maxItems"] == 0
+
+
+def test_hard_request_timeout_has_truthful_error_code(monkeypatch):
+    async def slow_post(self, *args, **kwargs):
+        await asyncio.sleep(0.2)
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", slow_post)
+    client = OpenAICompatibleClient(
+        base_url="https://example.invalid", api_key="test", model_name="model"
+    )
+    with pytest.raises(LLMError) as caught:
+        client._post({}, timeout=0.01, hard_timeout=True)
+    assert caught.value.code == "llm_timeout"
 
 
 def test_thinking_request_snapshots_and_unknown_sends_nothing():

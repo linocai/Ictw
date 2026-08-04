@@ -5,8 +5,9 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Book, Chapter, Character, CharacterEvent, CharacterFieldPatch
-from app.services.extraction import apply_extractor_output
+from app.models import Book, Chapter, Character, CharacterEvent, CharacterFieldPatch, CharacterStateChange
+from app.services.character_state_projection import rebuild_book_projection
+from app.services.extraction import persist_validated_state_changes, validate_extractor_output
 
 
 class CharacterMemoryRebuildError(ValueError):
@@ -33,22 +34,24 @@ def rebuild_book_character_memory(
     if set(outputs_by_chapter_id) != expected_ids:
         raise CharacterMemoryRebuildError("rebuild outputs do not cover every finalized chapter exactly once")
 
-    db.execute(delete(CharacterEvent).where(CharacterEvent.book_id == book.id))
+    # Existing Extractor events and chapter archive are user-visible history;
+    # v1.7.2 rebuilds only the new current-state source and materialization.
     db.execute(delete(CharacterFieldPatch).where(CharacterFieldPatch.book_id == book.id))
+    db.execute(delete(CharacterStateChange).where(CharacterStateChange.book_id == book.id))
     characters = list(db.scalars(select(Character).where(Character.book_id == book.id)).all())
     for character in characters:
         character.dynamic_fields = {}
     db.flush()
 
     updated_characters: set[str] = set()
-    event_count = 0
+    change_count = 0
     for chapter in chapters:
-        preserved = (chapter.headline, chapter.long_summary, chapter.status)
-        updated_ids, event_ids = apply_extractor_output(db, chapter, outputs_by_chapter_id[chapter.id])
-        chapter.headline, chapter.long_summary, chapter.status = preserved
-        updated_characters.update(updated_ids)
-        event_count += len(event_ids)
+        validated = validate_extractor_output(chapter, outputs_by_chapter_id[chapter.id])
+        persist_validated_state_changes(db, chapter, validated)
+        updated_characters.update({item.character_id for item in validated.state_changes})
+        change_count += len(validated.state_changes)
     db.flush()
+    projection = rebuild_book_projection(db, book.id)
 
     patch_count = db.scalar(
         select(func.count()).select_from(CharacterFieldPatch).where(CharacterFieldPatch.book_id == book.id)
@@ -57,6 +60,8 @@ def rebuild_book_character_memory(
         "chapters": len(chapters),
         "characters": len(characters),
         "updated_characters": len(updated_characters),
-        "events": event_count,
+        "events": int(db.scalar(select(func.count()).select_from(CharacterEvent).where(CharacterEvent.book_id == book.id)) or 0),
         "patches": int(patch_count),
+        "state_changes": change_count,
+        "effective_states": projection["effective"],
     }

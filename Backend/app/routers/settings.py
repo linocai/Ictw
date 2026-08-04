@@ -37,12 +37,19 @@ def _binding_response(binding: AgentModelBinding, db: Session) -> dict[str, obje
         profile.base_url if profile else None,
     )
     effective_thinking, effective_effort = effective_binding_settings(binding, profile)
+    configured_thinking, configured_effort = binding.thinking_enabled, binding.reasoning_effort
+    if binding.agent_role == "extractor" and profile is not None and capabilities.thinking_can_disable:
+        # v1.7.2 bounds Extractor latency by making non-thinking mode a
+        # program-owned runtime policy.  Report the policy the request will
+        # actually use instead of a stale pre-upgrade user preference.
+        configured_thinking, configured_effort = False, None
+        effective_thinking, effective_effort = False, None
     adjustable = profile is not None and temperature_sendable(effective_thinking, capabilities)
     return {
         "agent_role": binding.agent_role,
         "llm_profile_id": binding.llm_profile_id,
-        "thinking_enabled": binding.thinking_enabled,
-        "reasoning_effort": binding.reasoning_effort,
+        "thinking_enabled": configured_thinking,
+        "reasoning_effort": configured_effort,
         "temperature": binding.temperature,
         "effective_thinking_enabled": effective_thinking,
         "effective_reasoning_effort": effective_effort,
@@ -227,6 +234,13 @@ def patch_binding(agent_role: str, payload: AgentModelBindingPatch, db: Session 
         effort = payload.reasoning_effort
     if "temperature" in fields:
         temperature = payload.temperature
+
+    if agent_role == "extractor":
+        if profile is not None and not capabilities.thinking_can_disable:
+            raise HTTPException(status_code=422, detail="Extractor 需要绑定支持关闭思考的模型")
+        if payload.thinking_enabled is True or payload.reasoning_effort is not None:
+            raise HTTPException(status_code=422, detail="Extractor 在 v1.7.2 中固定关闭思考")
+        thinking, effort = (False, None) if profile is not None else (None, None)
 
     if capabilities.family == "unknown" and (thinking is not None or effort is not None):
         raise HTTPException(status_code=422, detail="此模型未声明可调思考参数")

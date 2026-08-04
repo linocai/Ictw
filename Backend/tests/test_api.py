@@ -813,8 +813,8 @@ def test_memories_export_contains_headlines_summaries_and_character_memory(clien
     assert "冲突爆发。" in text
     assert "【人物记忆】" in text
     assert "林昭（主角）" in text
-    assert "最近状态：受伤未愈" in text
-    assert "随身物品：[\"短刀\", \"地图\"]" in text
+    assert "最近状态：受伤未愈" not in text
+    assert "随身物品：[\"短刀\", \"地图\"]" not in text
     assert "第 1 章 [story] 雨夜初登场" in text
     # 记忆导出不含正文
     assert "draft" not in text

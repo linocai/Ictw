@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from app.agents.extractor import CANONICAL_DYNAMIC_FIELD_KEYS, CANONICAL_EVENT_TYPES
-from app.models import Chapter, Character, CharacterEvent, CharacterFieldPatch
+from app.agents.extractor import CANONICAL_EVENT_TYPES
+from app.models import Chapter, Character, CharacterEvent, CharacterStateChange
+from app.models.entities import uuid_str
+from app.services.character_state_projection import PERSISTENT_SLOTS, SNAPSHOT_SLOTS, rebuild_book_projection
 from app.services.context import CHARACTER_EVENT_MAX_CHARS, normalize_text, truncate_to_nonspace
 
 
@@ -16,13 +18,24 @@ class ExtractorValidationError(ValueError):
     pass
 
 
-# Kept as a compatibility import for older callers. v1 silently discards
-# unknown/unselected/name-form references instead of asking the user to select.
 class UnselectedCharacterReference(ExtractorValidationError):
-    pass
+    """Compatibility import for callers that used the v1 exception type."""
 
 
 ARCHIVE_LIST_FIELDS = ("state_changes", "unresolved_items", "atomic_memories")
+_FORBIDDEN_VALUE_PARTS = ("未知", "未明确", "不明确", "暂无", "无从得知", "待定")
+
+
+@dataclass(frozen=True)
+class ValidatedStateChange:
+    character_id: str
+    other_character_id: str | None
+    scope: str
+    slot: str
+    operation: str
+    value: str | None
+    evidence: str
+    batch_id: str
 
 
 @dataclass(frozen=True)
@@ -31,23 +44,15 @@ class ValidatedExtractorOutput:
     long_summary: str
     archive_values: dict[str, list[dict[str, str]]]
     events: list[tuple[str, str, str]]
-    patches_by_character: dict[str, dict[str, str | None]]
+    state_changes: list[ValidatedStateChange]
+
+    @property
+    def patches_by_character(self) -> dict[str, dict[str, str | None]]:
+        """Read-only transition helper; no caller may use it to merge state."""
+        return {}
 
 
-def _validated_archive_items(
-    raw: Any,
-    *,
-    field: str,
-    character_map: dict[str, Character],
-) -> list[dict[str, str]]:
-    """Normalize Extractor archive lists without inventing missing facts.
-
-    ``character_id`` is optional (a plot state or unresolved item can be
-    chapter-level), but any supplied ID must be from this chapter's whitelist.
-    Unknown IDs are discarded just like legacy character events.  A malformed
-    selected/global record is a real extraction failure, preserving the old
-    transaction rollback guarantee.
-    """
+def _validated_archive_items(raw: Any, *, field: str, character_map: dict[str, Character]) -> list[dict[str, str]]:
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -58,7 +63,7 @@ def _validated_archive_items(
             raise ExtractorValidationError(f"{field} item must be an object")
         character_id = item.get("character_id")
         if character_id is not None and (not isinstance(character_id, str) or character_id not in character_map):
-            continue
+            raise UnselectedCharacterReference(f"{field} references an unselected character")
         text = item.get("text")
         if not isinstance(text, str) or not text.strip():
             raise ExtractorValidationError(f"{field} item text is required")
@@ -86,198 +91,147 @@ def _validated_evidence(chapter: Chapter, character: Character, raw: Any, *, fie
     match_size = len(normalized_evidence)
     if match_start < 0:
         longest = SequenceMatcher(None, normalized_evidence, normalized_draft, autojunk=False).find_longest_match()
-        minimum_literal_chars = max(8, min(16, len(normalized_evidence) // 3))
-        if longest.size < minimum_literal_chars:
+        minimum = max(8, min(16, len(normalized_evidence) // 3))
+        if longest.size < minimum:
             raise ExtractorValidationError(f"{field} evidence lacks a substantial literal draft excerpt")
-        match_start = longest.b
-        match_size = longest.size
-
-    owner_name = "".join(normalize_text(character.name).split())
-    if owner_name not in normalized_evidence:
-        # Fiction commonly names a character immediately before a quoted action
-        # and then uses a pronoun in the evidence sentence.  Accept that natural
-        # form, but only when the exact owner occurs shortly *before* the matched
-        # excerpt.  A later, nearby occurrence must not retroactively reassign an
-        # earlier action to the wrong character.
-        preceding_context = normalized_draft[max(0, match_start - 96):match_start]
-        if owner_name not in preceding_context:
-            raise ExtractorValidationError(f"{field} evidence context must identify its owner")
+        match_start, match_size = longest.b, longest.size
+    owner = "".join(normalize_text(character.name).split())
+    if owner not in normalized_evidence and owner not in normalized_draft[max(0, match_start - 96):match_start]:
+        raise ExtractorValidationError(f"{field} evidence context must identify its owner")
     return evidence
 
 
-def _validated_dynamic_fields(
-    raw: Any, *, owner: Character, character_map: dict[str, Character]
-) -> dict[str, str | None]:
+def _validated_operation(
+    chapter: Chapter, owner: Character, raw: Any, *, field: str
+) -> tuple[str, str | None, str]:
     if not isinstance(raw, dict):
-        raise ExtractorValidationError("selected character dynamic fields patch must be an object")
-    selected_names = {character.name for character in character_map.values()}
-    allowed = set(CANONICAL_DYNAMIC_FIELD_KEYS)
-    result: dict[str, str | None] = {}
-    for key, value in raw.items():
-        if not isinstance(key, str):
-            raise ExtractorValidationError("dynamic field key must be a string")
-        if key not in allowed:
-            relation_name = key.removeprefix("与").removesuffix("关系") if key.startswith("与") and key.endswith("关系") else ""
-            if relation_name not in selected_names or relation_name == owner.name:
-                raise ExtractorValidationError(f"unsupported dynamic field key: {key}")
-        if value is not None and (not isinstance(value, str) or not value.strip()):
-            raise ExtractorValidationError(f"dynamic field value is invalid: {key}")
-        result[key] = value.strip() if isinstance(value, str) else None
+        raise ExtractorValidationError(f"{field} must be an object")
+    operation = raw.get("operation")
+    value = raw.get("value")
+    if operation not in {"set", "clear"}:
+        raise ExtractorValidationError(f"{field} operation must be set or clear")
+    if operation == "set":
+        if not isinstance(value, str) or not value.strip():
+            raise ExtractorValidationError(f"{field} set value is required")
+        value = value.strip()
+        if any(part in value for part in _FORBIDDEN_VALUE_PARTS):
+            raise ExtractorValidationError(f"{field} value cannot be unknown or unspecified")
+        if field.startswith("snapshot") and ("先" in value and "后" in value):
+            raise ExtractorValidationError("snapshot value must describe chapter ending only")
+    elif value is not None:
+        raise ExtractorValidationError(f"{field} clear value must be null")
+    return operation, value, _validated_evidence(chapter, owner, raw.get("evidence"), field=field)
+
+
+def _validated_state_updates(chapter: Chapter, raw: Any, character_map: dict[str, Character]) -> list[ValidatedStateChange]:
+    if not isinstance(raw, list):
+        raise ExtractorValidationError("state_updates must be an array")
+    result: list[ValidatedStateChange] = []
+    snapshots: set[str] = set()
+    persistent: set[tuple[str, str]] = set()
+    relationships: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ExtractorValidationError("state_updates item must be an object")
+        character_id = item.get("character_id")
+        if not isinstance(character_id, str) or character_id not in character_map:
+            raise UnselectedCharacterReference("state_updates references an unselected character")
+        owner = character_map[character_id]
+        snapshot = item.get("snapshot")
+        if snapshot is not None:
+            if character_id in snapshots:
+                raise ExtractorValidationError("duplicate character snapshot")
+            if not isinstance(snapshot, dict) or set(snapshot) != {"presence_evidence", *SNAPSHOT_SLOTS}:
+                raise ExtractorValidationError("snapshot must contain all three current-state slots")
+            _validated_evidence(chapter, owner, snapshot.get("presence_evidence"), field="snapshot presence")
+            snapshots.add(character_id)
+            batch_id = uuid_str()
+            for slot in SNAPSHOT_SLOTS:
+                operation, value, evidence = _validated_operation(chapter, owner, snapshot[slot], field=f"snapshot {slot}")
+                result.append(ValidatedStateChange(character_id, None, "snapshot", slot, operation, value, evidence, batch_id))
+        raw_persistent = item.get("persistent_ops")
+        if not isinstance(raw_persistent, list):
+            raise ExtractorValidationError("persistent_ops must be an array")
+        for op in raw_persistent:
+            if not isinstance(op, dict) or op.get("slot") not in PERSISTENT_SLOTS:
+                raise ExtractorValidationError("persistent operation has unsupported slot")
+            key = (character_id, op["slot"])
+            if key in persistent:
+                raise ExtractorValidationError("duplicate persistent state slot")
+            persistent.add(key)
+            operation, value, evidence = _validated_operation(chapter, owner, op, field=f"persistent {op['slot']}")
+            result.append(ValidatedStateChange(character_id, None, "persistent", op["slot"], operation, value, evidence, ""))
+        raw_relationships = item.get("relationship_ops")
+        if not isinstance(raw_relationships, list):
+            raise ExtractorValidationError("relationship_ops must be an array")
+        for op in raw_relationships:
+            if not isinstance(op, dict):
+                raise ExtractorValidationError("relationship operation must be an object")
+            other_id = op.get("other_character_id")
+            if not isinstance(other_id, str) or other_id not in character_map or other_id == character_id:
+                raise ExtractorValidationError("relationship target must be another selected character")
+            left, right = sorted((character_id, other_id))
+            if (left, right) in relationships:
+                raise ExtractorValidationError("duplicate relationship pair")
+            relationships.add((left, right))
+            operation, value, evidence = _validated_operation(chapter, owner, op, field="relationship")
+            result.append(ValidatedStateChange(left, right, "relationship", "relationship", operation, value, evidence, ""))
     return result
 
 
 def validate_extractor_output(chapter: Chapter, output: dict[str, Any]) -> ValidatedExtractorOutput:
-    """Validate and normalize an Extractor result without mutating the database."""
     if not isinstance(output, dict):
         raise ExtractorValidationError("Extractor output must be an object")
-    headline = output.get("headline")
+    headline, long_summary = output.get("headline"), output.get("long_summary", output.get("summary"))
     if not isinstance(headline, str) or not headline.strip():
         raise ExtractorValidationError("Extractor output missing headline")
-    # New Extractors emit only long_summary.  Accepting the old key here keeps
-    # in-flight/legacy callers recoverable without asking the model for two
-    # semantically duplicate artifacts.
-    long_summary = output.get("long_summary", output.get("summary"))
     if not isinstance(long_summary, str) or not long_summary.strip():
         raise ExtractorValidationError("Extractor output missing long_summary")
-    raw_events = output.get("character_events")
-    raw_patches = output.get("dynamic_fields_patch")
-    if not isinstance(raw_events, list):
+    if not isinstance(output.get("character_events"), list):
         raise ExtractorValidationError("character_events must be an array")
-    if not isinstance(raw_patches, list):
-        raise ExtractorValidationError("dynamic_fields_patch must be an array")
-
     character_map = {link.character_id: link.character for link in chapter.character_links}
-    selected_ids = set(character_map)
-    archive_values = {
-        field: _validated_archive_items(output.get(field), field=field, character_map=character_map)
-        for field in ARCHIVE_LIST_FIELDS
-    }
-
-    valid_events: list[tuple[str, str, str]] = []
-    for item in raw_events:
+    archive_values = {field: _validated_archive_items(output.get(field), field=field, character_map=character_map) for field in ARCHIVE_LIST_FIELDS}
+    events: list[tuple[str, str, str]] = []
+    for item in output["character_events"]:
         if not isinstance(item, dict):
             raise ExtractorValidationError("character_events item must be an object")
         character_id = item.get("character_id")
-        if not isinstance(character_id, str) or character_id not in selected_ids:
-            continue
-        event_text = item.get("event_text")
+        if not isinstance(character_id, str) or character_id not in character_map:
+            raise UnselectedCharacterReference("character_events references an unselected character")
+        event_text, event_type = item.get("event_text"), item.get("event_type")
         if not isinstance(event_text, str) or not event_text.strip():
             raise ExtractorValidationError("selected character event text is required")
-        character = character_map[character_id]
-        if normalize_text(character.name) not in normalize_text(event_text):
+        if normalize_text(character_map[character_id].name) not in normalize_text(event_text):
             raise ExtractorValidationError("selected character event text must name its owner")
-        _validated_evidence(chapter, character, item.get("evidence"), field="character event")
-        event_type = item.get("event_type")
-        if not isinstance(event_type, str) or event_type not in CANONICAL_EVENT_TYPES:
+        if event_type not in CANONICAL_EVENT_TYPES:
             raise ExtractorValidationError("event_type must use the canonical taxonomy")
-        valid_events.append((character_id, event_type, event_text.strip()))
-
-    valid_patches_by_character: dict[str, dict[str, str | None]] = {}
-    for item in raw_patches:
-        if not isinstance(item, dict):
-            raise ExtractorValidationError("dynamic_fields_patch item must be an object")
-        character_id = item.get("character_id")
-        if not isinstance(character_id, str) or character_id not in selected_ids:
-            continue
-        character = character_map[character_id]
-        _validated_evidence(chapter, character, item.get("evidence"), field="dynamic fields patch")
-        fields = _validated_dynamic_fields(item.get("fields"), owner=character, character_map=character_map)
-        valid_patches_by_character.setdefault(character_id, {}).update(fields)
-
-    return ValidatedExtractorOutput(
-        headline=headline.strip(),
-        long_summary=long_summary.strip(),
-        archive_values=archive_values,
-        events=valid_events,
-        patches_by_character=valid_patches_by_character,
-    )
+        _validated_evidence(chapter, character_map[character_id], item.get("evidence"), field="character event")
+        events.append((character_id, event_type, event_text.strip()))
+    return ValidatedExtractorOutput(headline.strip(), long_summary.strip(), archive_values, events, _validated_state_updates(chapter, output.get("state_updates"), character_map))
 
 
 def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:
     validated = validate_extractor_output(chapter, output)
-    character_map = {link.character_id: link.character for link in chapter.character_links}
-
-    # Replacement and all extracted chapter metadata are committed by the caller
-    # in one transaction. A validation error above leaves existing events intact.
     db.execute(delete(CharacterEvent).where(CharacterEvent.chapter_id == chapter.id))
-    added_event_ids: list[str] = []
+    db.execute(delete(CharacterStateChange).where(CharacterStateChange.chapter_id == chapter.id))
+    event_ids: list[str] = []
     for character_id, event_type, event_text in validated.events:
-        event = CharacterEvent(
-            book_id=chapter.book_id,
-            chapter_id=chapter.id,
-            character_id=character_id,
-            event_type=event_type,
-            event_text=truncate_to_nonspace(event_text, CHARACTER_EVENT_MAX_CHARS),
-        )
-        db.add(event)
-        db.flush()
-        added_event_ids.append(event.id)
-
-    # Re-accepting a chapter must keep the ORIGINAL pre-chapter baseline: the
-    # previous patch row's priors win over the character's current (already
-    # merged) values, otherwise deleting the chapter would revert to the
-    # chapter's own earlier output instead of the state before it.
-    existing_patches = {
-        row.character_id: row
-        for row in db.scalars(
-            select(CharacterFieldPatch).where(CharacterFieldPatch.chapter_id == chapter.id)
-        ).all()
-    }
-    db.execute(delete(CharacterFieldPatch).where(CharacterFieldPatch.chapter_id == chapter.id))
-
-    updated_ids: list[str] = []
-    patched_character_ids: set[str] = set()
-    for character_id, fields in validated.patches_by_character.items():
-        character: Character = character_map[character_id]
-        current = dict(character.dynamic_fields or {})
-        old_row = existing_patches.get(character_id)
-        prior_values: dict[str, Any] = dict(old_row.prior_values or {}) if old_row else {}
-        prior_missing: set[str] = set(old_row.prior_missing or []) if old_row else set()
-        for key in fields:
-            if key in prior_values or key in prior_missing:
-                continue
-            if key in current:
-                prior_values[key] = current[key]
-            else:
-                prior_missing.add(key)
-        db.add(
-            CharacterFieldPatch(
-                book_id=chapter.book_id,
-                chapter_id=chapter.id,
-                character_id=character_id,
-                prior_values=prior_values,
-                prior_missing=sorted(prior_missing),
-            )
-        )
-        patched_character_ids.add(character_id)
-        merged = current
-        for key, value in fields.items():
-            if value is None:
-                merged.pop(key, None)
-            else:
-                merged[key] = value
-        character.dynamic_fields = merged
-        updated_ids.append(character.id)
-
-    # Characters this chapter patched earlier but not in this re-accept keep
-    # their record: the old merge is still in effect and must stay revertible.
-    for character_id, old_row in existing_patches.items():
-        if character_id in patched_character_ids:
-            continue
-        db.add(
-            CharacterFieldPatch(
-                book_id=chapter.book_id,
-                chapter_id=chapter.id,
-                character_id=character_id,
-                prior_values=dict(old_row.prior_values or {}),
-                prior_missing=list(old_row.prior_missing or []),
-            )
-        )
-
-    chapter.headline = validated.headline
-    chapter.long_summary = validated.long_summary
+        event = CharacterEvent(book_id=chapter.book_id, chapter_id=chapter.id, character_id=character_id, event_type=event_type, event_text=truncate_to_nonspace(event_text, CHARACTER_EVENT_MAX_CHARS))
+        db.add(event); db.flush(); event_ids.append(event.id)
+    persist_validated_state_changes(db, chapter, validated)
+    chapter.headline, chapter.long_summary = validated.headline, validated.long_summary
     chapter.state_changes = validated.archive_values["state_changes"]
     chapter.unresolved_items = validated.archive_values["unresolved_items"]
     chapter.atomic_memories = validated.archive_values["atomic_memories"]
     chapter.status = "finalized"
-    return sorted(set(updated_ids)), added_event_ids
+    db.flush()
+    rebuild_book_projection(db, chapter.book_id)
+    updated = sorted({change.character_id for change in validated.state_changes} | {change.other_character_id for change in validated.state_changes if change.other_character_id})
+    return updated, event_ids
+
+
+def persist_validated_state_changes(db: Session, chapter: Chapter, validated: ValidatedExtractorOutput) -> None:
+    """Persist only replayable state facts; used by offline rebuild after validation."""
+    db.execute(delete(CharacterStateChange).where(CharacterStateChange.chapter_id == chapter.id))
+    for change in validated.state_changes:
+        db.add(CharacterStateChange(book_id=chapter.book_id, chapter_id=chapter.id, character_id=change.character_id, other_character_id=change.other_character_id, scope=change.scope, slot=change.slot, operation=change.operation, value=change.value, evidence=change.evidence, batch_id=change.batch_id))
