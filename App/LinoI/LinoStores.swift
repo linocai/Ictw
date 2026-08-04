@@ -541,10 +541,15 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     func rerunChecker() async -> CheckerResult? {
-        guard !writingPhase.isActive, let chapter = currentChapter else { return nil }
-        let startingRevision = localEditRevision
+        guard !writingPhase.isActive else { return nil }
         checkerRefreshing = true
         defer { checkerRefreshing = false }
+        // The editor keeps keystrokes in memory until an explicit transition.
+        // Checker must therefore flush that exact text first; otherwise the
+        // backend checks the previous server draft while the UI incorrectly
+        // presents the result as belonging to the edited text.
+        guard let chapter = await save() else { return nil }
+        let startingRevision = localEditRevision
         do {
             let response = try await session.api.rerunChecker(chapterId: chapter.id)
             guard currentChapter?.id == chapter.id else { return nil }

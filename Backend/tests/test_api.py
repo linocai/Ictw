@@ -440,6 +440,11 @@ def test_manual_edit_recheck_preserves_generated_candidate_and_creates_next_atte
     assert candidates[1]["is_current"] is True
     assert checker.calls == 2
 
+    accepted = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
+    assert accepted.status_code == 200
+    assert accepted.json()["phase"] == "extracting"
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+
 
 def test_manual_recheck_rejects_invalid_text_without_calling_checker(client, auth_headers, wait_for_terminal):
     class RecordingChecker:

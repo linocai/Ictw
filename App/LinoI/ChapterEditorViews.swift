@@ -964,9 +964,19 @@ private struct LinoIChapterEditor: View {
                 .buttonStyle(LinoITintButtonStyle(compact: true))
                 .disabled(editor.checkerRefreshing || !VisibleDraftActionPolicy.canCheck(hasDraft: hasDraft, phase: editor.writingPhase))
 
-                Button("编辑后检查") { draftMode = .edit }
-                    .buttonStyle(LinoITintButtonStyle(compact: true))
-                    .disabled(editor.writingPhase.isActive)
+                Button(draftMode == .edit ? "保存并检查" : "编辑后检查") {
+                    if draftMode == .edit {
+                        Task {
+                            if await editor.rerunChecker() != nil {
+                                draftMode = .preview
+                            }
+                        }
+                    } else {
+                        draftMode = .edit
+                    }
+                }
+                .buttonStyle(LinoITintButtonStyle(compact: true))
+                .disabled(editor.writingPhase.isActive || editor.checkerRefreshing)
             }
 
             if hasDraft && !editor.writingPhase.isActive && editor.checkerAppliesToVisibleDraft && !checkerAllowsAcceptance {

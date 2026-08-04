@@ -439,7 +439,27 @@ struct MacChapterEditor: View {
                 .font(.system(size: 11))
                 .foregroundStyle(LinoTheme.warning)
         }
-        HStack { Button(editor.checkerRefreshing ? "检查中" : "重新检查") { Task { _ = await editor.rerunChecker() } }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.checkerRefreshing || !VisibleDraftActionPolicy.canCheck(hasDraft: hasDraft, phase: editor.writingPhase)); Button("编辑后检查") { draftMode = .edit }.buttonStyle(LinoITintButtonStyle(compact: true)).disabled(editor.writingPhase.isActive) }
+        HStack {
+            Button(editor.checkerRefreshing ? "检查中" : "重新检查") {
+                Task { _ = await editor.rerunChecker() }
+            }
+            .buttonStyle(LinoITintButtonStyle(compact: true))
+            .disabled(editor.checkerRefreshing || !VisibleDraftActionPolicy.canCheck(hasDraft: hasDraft, phase: editor.writingPhase))
+
+            Button(draftMode == .edit ? "保存并检查" : "编辑后检查") {
+                if draftMode == .edit {
+                    Task {
+                        if await editor.rerunChecker() != nil {
+                            draftMode = .preview
+                        }
+                    }
+                } else {
+                    draftMode = .edit
+                }
+            }
+            .buttonStyle(LinoITintButtonStyle(compact: true))
+            .disabled(editor.writingPhase.isActive || editor.checkerRefreshing)
+        }
     }
 
     private func labeledText(_ title: String, _ value: String) -> some View { VStack(alignment: .leading, spacing: 2) { Text(title).font(.system(size: 10, weight: .semibold)).foregroundStyle(LinoTheme.muted); Text(value).font(.system(size: 11)).foregroundStyle(LinoTheme.body).fixedSize(horizontal: false, vertical: true) } }
