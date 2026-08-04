@@ -4,7 +4,7 @@
 
 **Logged**: 2026-08-04T22:50:00+08:00
 **Priority**: critical
-**Status**: in_progress
+**Status**: resolved
 **Area**: backend
 
 ### Summary
@@ -24,6 +24,12 @@ Build 29 将人物事件失败收窄为只重提 `character_events`，但生产�
 - Source: user_feedback
 - Related Files: Backend/app/services/extraction.py, Backend/app/services/write_jobs.py, Backend/tests/test_v1_6_extractor.py
 - Tags: extractor, character-events, deterministic-validation, graceful-degradation
+
+### Resolution
+
+- **Resolved**: 2026-08-04T22:51:00+08:00
+- **Commit**: `c54b01f`
+- **Notes**: 在线归档现逐条复用原确定性验证器筛选人物事件，坏事件不入库且随完成 Job 提示，合格事件与其余归档正常提交；部分合格、全部不合格和证据错挂三类回归均通过，生产已备份并部署。
 
 ---
 
