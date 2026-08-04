@@ -413,6 +413,50 @@ def _next_candidate_attempt(db: Session, chapter_id: str) -> int:
     return int(current_max or 0) + 1
 
 
+def _has_current_checker_override(
+    db: Session,
+    chapter: Chapter,
+    candidate: ChapterDraftCandidate | None,
+    fingerprint: str,
+) -> bool:
+    """Return whether the user already approved this exact writing input.
+
+    Extractor failures must not erase a deliberate Bible-check override.  The
+    approval is kept in the existing immutable JobRun audit trail and scoped
+    by the full draft fingerprint, so editing the body, Bible, title, world or
+    selected-character input automatically invalidates it.
+    """
+    runs = db.scalars(
+        select(JobRun)
+        .where(
+            JobRun.chapter_id == chapter.id,
+            JobRun.kind == "extract",
+        )
+        .order_by(JobRun.created_at.desc(), JobRun.id.desc())
+    ).all()
+    for run in runs:
+        if (run.checker_result or {}).get("override") is not True:
+            continue
+        if run.draft_fingerprint == fingerprint:
+            return True
+        # Build 26 and older did record the explicit override but not its
+        # fingerprint.  Recover that approval only when the immutable current
+        # candidate proves every fingerprinted input is still byte-identical
+        # and predates the override job.  A later recheck/edit cannot inherit
+        # this compatibility path.
+        if (
+            run.draft_fingerprint is None
+            and candidate is not None
+            and candidate.created_at <= run.created_at
+            and candidate.draft_text == chapter.draft_text
+            and candidate.bible_sha256 == hashlib.sha256(chapter.user_prompt.encode()).hexdigest()
+            and candidate.draft_fingerprint == fingerprint
+            and _candidate_fingerprint(chapter, candidate) == fingerprint
+        ):
+            return True
+    return False
+
+
 @router.post("/chapters/{chapter_id}/check", response_model=CheckerRunRead)
 def rerun_checker(chapter_id: str, db: Session = Depends(get_db), checker_client=Depends(get_checker_client)) -> CheckerRunRead:
     chapter = db.get(Chapter, chapter_id)
@@ -478,6 +522,7 @@ def accept_chapter(
     if not chapter.draft_text.strip():
         raise HTTPException(status_code=409, detail="chapter has no draft text")
     candidate = _current_candidate(db, chapter)
+    fingerprint = draft_fingerprint(chapter, chapter.draft_text)
     checker_current = False
     if candidate is not None and candidate.draft_text == chapter.draft_text:
         result = candidate.checker_result or {}
@@ -487,10 +532,11 @@ def accept_chapter(
             and result.get("draft_fingerprint") == candidate.draft_fingerprint
             and result.get("verdict") == "passed"
         )
+    checker_override = payload.override_checker or _has_current_checker_override(db, chapter, candidate, fingerprint)
     # Pre-v1.6 imported drafts have no candidate. Keep old wire clients able to
     # accept those drafts, while all v1.6 candidates require a current pass or
     # an explicit user override.
-    if candidate is not None and not checker_current and not payload.override_checker:
+    if candidate is not None and not checker_current and not checker_override:
         raise HTTPException(status_code=409, detail={"code": "checker_override_required", "message": "Bible 检查未通过、失效或不可用；请明确忽略后接受"})
     book = db.get(Book, chapter.book_id)
     if book is None:
@@ -499,8 +545,16 @@ def accept_chapter(
     selected_characters = [(link.character_id, link.character.name) for link in chapter.character_links]
     message = extractor_user_message(db, book, chapter)
     job_id = uuid_str()
-    run = JobRun(id=job_id, chapter_id=chapter.id, kind="extract", phase="extracting",
-                 checker_result={"override": True} if candidate is not None and not checker_current else None)
+    override_applied = not checker_current and checker_override
+    run = JobRun(
+        id=job_id,
+        chapter_id=chapter.id,
+        kind="extract",
+        phase="extracting",
+        checker_result={"override": True, "draft_fingerprint": fingerprint} if override_applied else None,
+        bible_sha256=hashlib.sha256(chapter.user_prompt.encode()).hexdigest(),
+        draft_fingerprint=fingerprint,
+    )
     db.add(run)
     job = WriteJob(
         chapter_id=chapter.id,
@@ -518,7 +572,13 @@ def accept_chapter(
     chapter.status = "extracting"
     db.commit()
     write_registry.launch(job, SessionLocal)
-    return WriteJobStatus(chapter_id=chapter.id, job_id=job_id, kind="extract", phase="extracting")
+    return WriteJobStatus(
+        chapter_id=chapter.id,
+        job_id=job_id,
+        kind="extract",
+        phase="extracting",
+        checker_result=run.checker_result,
+    )
 
 
 @router.post("/chapters/{chapter_id}/reopen", response_model=ChapterRead)

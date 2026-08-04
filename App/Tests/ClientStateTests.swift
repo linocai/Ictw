@@ -277,6 +277,47 @@ private func testExtractorFailureKeepsSpecificBackendRule() throws {
     )
 }
 
+private func testCheckerOverrideSurvivesExtractorFailure() throws {
+    let object: [String: Any] = [
+        "chapter_id": "chapter-1",
+        "job_id": "extract-override-1",
+        "outcome_current": true,
+        "kind": "extract",
+        "phase": "failed",
+        "attempt": 3,
+        "error_code": "extract_failed",
+        "error_message": "Extractor 连续 3 次未通过确定性校验：证据不足",
+        "checker_result": [
+            "override": true,
+            "draft_fingerprint": "approved-fingerprint",
+        ],
+    ]
+    let data = try JSONSerialization.data(withJSONObject: object)
+    let status = try JSONDecoder().decode(WriteJobStatus.self, from: data)
+    try expect(status.checkerResult?.isOverride == true, "explicit Checker override must decode from extract jobs")
+    try expect(
+        status.specificFailureReason?.contains("强制接受决定已保留") == true,
+        "Extractor failure must explain that the exact-draft override remains reusable"
+    )
+
+    try expect(
+        CheckerOverrideActionPolicy.shouldOffer(
+            hasDraft: true,
+            phase: .idle,
+            checkerAllowsAcceptance: false
+        ),
+        "force accept must remain available when Checker is stale, unavailable or has not run"
+    )
+    try expect(
+        !CheckerOverrideActionPolicy.shouldOffer(
+            hasDraft: true,
+            phase: .failed(code: "extract_failed", message: "失败", stage: .extraction),
+            checkerAllowsAcceptance: false
+        ),
+        "an accepted extraction failure should offer Extractor retry instead of asking for another override"
+    )
+}
+
 private func testDraftReadyDoesNotPretendCheckerPassed() throws {
     let pending = ChapterEditorPresentationState.make(
         phase: .idle,
@@ -395,6 +436,7 @@ private struct ClientStateTestRunner {
         try testV16ContextAndCheckerDecode()
         try testRejectedCandidateKeepsSpecificCheckerReasonsSeparate()
         try testExtractorFailureKeepsSpecificBackendRule()
+        try testCheckerOverrideSurvivesExtractorFailure()
         try testDraftReadyDoesNotPretendCheckerPassed()
         try testLateRefreshCannotOverwriteLocalCharacterEdit()
         try testFailedRegenerationKeepsVisibleDraftActions()

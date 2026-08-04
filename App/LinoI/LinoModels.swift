@@ -452,7 +452,11 @@ struct WriteJobStatus: Decodable, Sendable {
     var specificFailureReason: String? {
         if errorCode == "extract_failed" {
             let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return message.isEmpty ? nil : message
+            guard !message.isEmpty else { return nil }
+            if checkerResult?.isOverride == true {
+                return "正文的强制接受决定已保留；\(message)。可直接重试 Extractor，无需再次检查 Bible"
+            }
+            return message
         }
         guard errorCode == "checker_rejected" else { return nil }
         let reasons = checkerResult?.issues?
@@ -531,9 +535,16 @@ struct CheckerResult: Decodable, Hashable, Sendable {
     var draftFingerprint: String?
     var issues: [CheckerIssue]?
     var errorCode: String?
-    enum CodingKeys: String, CodingKey { case verdict, status, issues; case draftFingerprint = "draft_fingerprint"; case errorCode = "error_code" }
+    var wasOverridden: Bool?
+    enum CodingKeys: String, CodingKey {
+        case verdict, status, issues
+        case draftFingerprint = "draft_fingerprint"
+        case errorCode = "error_code"
+        case wasOverridden = "override"
+    }
     var displayVerdict: String { verdict ?? status ?? "unavailable" }
     var isPassed: Bool { displayVerdict == "passed" }
+    var isOverride: Bool { wasOverridden == true }
 }
 
 struct CheckerRunResult: Decodable, Sendable {
@@ -919,6 +930,17 @@ enum VisibleDraftActionPolicy {
 
     static func canCheck(hasDraft: Bool, phase: ChapterWritingPhase) -> Bool {
         hasDraft && !phase.isActive
+    }
+}
+
+enum CheckerOverrideActionPolicy {
+    static func shouldOffer(
+        hasDraft: Bool,
+        phase: ChapterWritingPhase,
+        checkerAllowsAcceptance: Bool
+    ) -> Bool {
+        guard hasDraft, !phase.isActive, !checkerAllowsAcceptance else { return false }
+        return !(phase.isFailed && phase.currentStage == .extraction)
     }
 }
 

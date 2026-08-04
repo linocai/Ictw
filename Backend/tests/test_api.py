@@ -6,7 +6,7 @@ from sqlalchemy import select
 import app.db as db_module
 from app.llm.base import LLMError
 from app.llm.factory import get_checker_client, get_extractor_client, get_memory_selector_client, get_writer_client
-from app.models import Chapter, ChapterDraftCandidate
+from app.models import Chapter, ChapterDraftCandidate, JobRun
 from app.services.write_jobs import WriteJob, write_registry
 
 
@@ -469,6 +469,95 @@ def test_manual_recheck_rejects_invalid_text_without_calling_checker(client, aut
     assert response.json()["detail"]["code"] == "checker_preflight_failed"
     assert {item["code"] for item in response.json()["detail"]["violations"]} >= {"minimum_length"}
     assert checker.calls == 1
+
+
+def test_checker_override_survives_extractor_failure_and_is_scoped_to_exact_draft(
+    client, auth_headers, wait_for_terminal
+):
+    class ViolationChecker:
+        def complete_json(self, **_kwargs):
+            return {
+                "verdict": "violation",
+                "issues": [{
+                    "kind": "new_plot",
+                    "draft_evidence": "正文证据",
+                    "bible_evidence": "Bible 证据",
+                    "reason": "越界",
+                }],
+            }
+
+    class FailingExtractor:
+        def complete_json(self, **_kwargs):
+            raise RuntimeError("extract failed")
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动"},
+    ).json()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("初" * 4000)
+    client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+
+    edited_text = "改" * 4000
+    client.patch(
+        f"/api/v1/chapters/{chapter['id']}",
+        headers=auth_headers,
+        json={"draft_text": edited_text},
+    ).raise_for_status()
+    client.app.dependency_overrides[get_checker_client] = lambda: ViolationChecker()
+    checked = client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers)
+    assert checked.status_code == 200
+    assert checked.json()["checker_result"]["verdict"] == "violation"
+
+    successful_extractor_factory = client.app.dependency_overrides[get_extractor_client]
+    client.app.dependency_overrides[get_extractor_client] = lambda: FailingExtractor()
+    accepted = client.post(
+        f"/api/v1/chapters/{chapter['id']}/accept",
+        headers=auth_headers,
+        json={"override_checker": True},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["checker_result"]["override"] is True
+    failed = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert failed["phase"] == "failed"
+    assert failed["checker_result"]["override"] is True
+
+    # Existing Build 26 production jobs stored the override but no fingerprint.
+    # The exact immutable candidate is enough to carry those approvals forward
+    # without authorizing any later edit or recheck.
+    db = db_module.SessionLocal()
+    try:
+        legacy_run = db.get(JobRun, failed["job_id"])
+        assert legacy_run is not None
+        legacy_run.draft_fingerprint = None
+        legacy_run.checker_result = {"override": True}
+        db.commit()
+    finally:
+        db.close()
+
+    # Retrying the exact same accepted text no longer asks the user to ignore
+    # Bible again.  The next extract JobRun inherits the durable approval.
+    client.app.dependency_overrides[get_extractor_client] = successful_extractor_factory
+    retry = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
+    assert retry.status_code == 200
+    assert retry.json()["checker_result"]["override"] is True
+    retried = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert retried["phase"] == "done"
+    assert retried["checker_result"]["override"] is True
+
+    # Any later input edit changes the full fingerprint and invalidates the
+    # old approval instead of silently accepting a different manuscript.
+    client.post(f"/api/v1/chapters/{chapter['id']}/reopen", headers=auth_headers).raise_for_status()
+    client.patch(
+        f"/api/v1/chapters/{chapter['id']}",
+        headers=auth_headers,
+        json={"draft_text": "另" * 4000},
+    ).raise_for_status()
+    stale_retry = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
+    assert stale_retry.status_code == 409
+    assert stale_retry.json()["detail"]["code"] == "checker_override_required"
 
 
 def test_checker_fingerprint_requires_recheck_after_world_or_selected_character_changes(client, auth_headers, wait_for_terminal):

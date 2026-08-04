@@ -310,11 +310,11 @@ private struct LinoIChapterEditor: View {
                 LinoIImportDraftSheet()
                     .presentationDetents([.large])
             }
-            .confirmationDialog("忽略 Bible 检查并接受？", isPresented: $confirmingCheckerOverride, titleVisibility: .visible) {
-                Button("确认忽略并接受", role: .destructive) { acceptTapped(overrideChecker: true) }
+            .confirmationDialog("强制接受当前正文？", isPresented: $confirmingCheckerOverride, titleVisibility: .visible) {
+                Button("确认强制接受", role: .destructive) { acceptTapped(overrideChecker: true) }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("这会保留当前正文，并以你的明确决定继续提取归档。")
+                Text("这会忽略 Bible 检查并继续提取；即使 Extractor 失败，本次接受决定也会保留。")
             }
             .onChange(of: draftMode) { old, new in
                 if old == .edit, new == .preview {
@@ -979,7 +979,11 @@ private struct LinoIChapterEditor: View {
                 .disabled(editor.writingPhase.isActive || editor.checkerRefreshing)
             }
 
-            if hasDraft && !editor.writingPhase.isActive && editor.checkerAppliesToVisibleDraft && !checkerAllowsAcceptance {
+            if CheckerOverrideActionPolicy.shouldOffer(
+                hasDraft: hasDraft,
+                phase: editor.writingPhase,
+                checkerAllowsAcceptance: checkerAllowsAcceptance
+            ) {
                 Button("忽略检查并接受") { confirmingCheckerOverride = true }
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(LinoTheme.warning)
@@ -1182,6 +1186,7 @@ private struct LinoIChapterEditor: View {
         if editor.writingPhase == .extracting { return "Extractor 提取中" }
         if editor.writingPhase.isActive { return "生成中…" }
         if editor.currentChapter?.status == "finalized" { return "进入阅读" }
+        if isExtractionRetry { return "重试 Extractor" }
         return "接受本章"
     }
 
@@ -1239,6 +1244,10 @@ private struct LinoIChapterEditor: View {
 
     private var checkerAllowsAcceptance: Bool {
         editor.checkerAppliesToVisibleDraft && editor.checkerResult?.isPassed == true
+    }
+
+    private var isExtractionRetry: Bool {
+        editor.writingPhase.isFailed && editor.writingPhase.currentStage == .extraction
     }
 
     private var canAccept: Bool {
