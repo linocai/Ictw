@@ -5,8 +5,9 @@ from copy import deepcopy
 import pytest
 
 from app.agents.extractor import ExtractorContractError, bind_extractor_character_names
-from app.models import CharacterStateChange
+from app.models import Chapter, ChapterCharacter, Character, CharacterStateChange
 from app.services.character_state_projection import project_state_changes, rebuild_book_projection
+from app.services.extraction import salvage_state_rebuild_output, validate_state_rebuild_output
 
 
 def _change(character_id: str, *, scope: str, slot: str, operation: str, value: str | None, batch_id: str = "", other: str | None = None) -> CharacterStateChange:
@@ -63,6 +64,31 @@ def test_relationship_binding_deduplicates_identical_pair_but_rejects_conflict()
     conflicting["state_updates"][1]["relationship_ops"][0]["value"] = "敌对"
     with pytest.raises(ExtractorContractError, match="conflicting duplicate"):
         bind_extractor_character_names(conflicting, [("a", "甲"), ("b", "乙")])
+
+
+def test_state_rebuild_salvage_drops_invalid_snapshot_but_keeps_valid_persistent_state():
+    character = Character(id="a", book_id="book", name="甲")
+    chapter = Chapter(
+        id="chapter", book_id="book", index=1, title="章", draft_text="甲受了伤。" + "风" * 120 + "乙站在北门。",
+        user_prompt="", status="finalized",
+    )
+    chapter.character_links = [ChapterCharacter(chapter_id=chapter.id, character_id=character.id, character=character)]
+    output = {"state_updates": [{
+        "character_id": "a",
+        "snapshot": {
+            "presence_evidence": "甲受了伤。",
+            "当前位置": {"operation": "set", "value": "北门", "evidence": "乙站在北门。"},
+            "当前行动": {"operation": "clear", "value": None, "evidence": "甲受了伤。"},
+            "情绪状态": {"operation": "clear", "value": None, "evidence": "甲受了伤。"},
+        },
+        "persistent_ops": [{"slot": "身体状态", "operation": "set", "value": "受伤", "evidence": "甲受了伤。"}],
+        "relationship_ops": [],
+    }]}
+    cleaned, dropped = salvage_state_rebuild_output(chapter, output)
+    validated = validate_state_rebuild_output(chapter, cleaned)
+    assert dropped == 1
+    assert len(validated.state_changes) == 1
+    assert validated.state_changes[0].slot == "身体状态"
 
 
 def test_character_rename_and_delete_reprojects_relationship(client, auth_headers):

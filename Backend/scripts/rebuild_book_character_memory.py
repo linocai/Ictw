@@ -18,6 +18,7 @@ from app.services.context import draft_fingerprint, extractor_user_message
 from app.services.extraction import (
     ExtractorValidationError,
     persist_validated_state_changes,
+    salvage_state_rebuild_output,
     validate_state_rebuild_output,
 )
 from app.services.personas import get_persona
@@ -158,7 +159,13 @@ def main() -> int:
                         break
                     except ExtractorValidationError as exc:
                         if attempt == MAX_EXTRACTION_ATTEMPTS - 1:
-                            raise
+                            output, dropped = salvage_state_rebuild_output(chapter, output)
+                            validated = validate_state_rebuild_output(chapter, output)
+                            print(
+                                f"salvaged chapter={chapter.index} dropped_components={dropped} "
+                                f"state_changes={len(validated.state_changes)}"
+                            )
+                            break
                         message += (
                             f"\n\n# 第 {attempt + 1} 次格式纠偏\n上一次输出未通过确定性校验：{exc}。"
                             "只输出 state_updates，只保留能在正文中找到逐字证据的状态；找不到就删除该条，宁缺毋滥。"

@@ -228,6 +228,64 @@ def validate_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> V
     )
 
 
+def salvage_state_rebuild_output(chapter: Chapter, output: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Keep only independently valid state components after correction exhausts.
+
+    Snapshot batches remain all-or-nothing. Persistent slots and relationship
+    operations are admitted one at a time only when the complete accumulated
+    result still passes the same deterministic validator used at apply time.
+    """
+    raw_updates = output.get("state_updates") if isinstance(output, dict) else None
+    if not isinstance(raw_updates, list):
+        return {"state_updates": []}, 1
+    accepted: list[dict[str, Any]] = []
+    dropped = 0
+    for item in raw_updates:
+        if not isinstance(item, dict):
+            dropped += 1
+            continue
+        character_id = item.get("character_id")
+        components: list[dict[str, Any]] = []
+        if item.get("snapshot") is not None:
+            components.append({
+                "character_id": character_id,
+                "snapshot": item.get("snapshot"),
+                "persistent_ops": [],
+                "relationship_ops": [],
+            })
+        persistent_ops = item.get("persistent_ops")
+        if isinstance(persistent_ops, list):
+            components.extend({
+                "character_id": character_id,
+                "snapshot": None,
+                "persistent_ops": [operation],
+                "relationship_ops": [],
+            } for operation in persistent_ops)
+        elif persistent_ops is not None:
+            dropped += 1
+        relationship_ops = item.get("relationship_ops")
+        if isinstance(relationship_ops, list):
+            components.extend({
+                "character_id": character_id,
+                "snapshot": None,
+                "persistent_ops": [],
+                "relationship_ops": [operation],
+            } for operation in relationship_ops)
+        elif relationship_ops is not None:
+            dropped += 1
+        for component in components:
+            trial = {"state_updates": [*accepted, component]}
+            try:
+                validate_state_rebuild_output(chapter, trial)
+            except ExtractorValidationError:
+                dropped += 1
+            else:
+                accepted.append(component)
+    cleaned = {"state_updates": accepted}
+    validate_state_rebuild_output(chapter, cleaned)
+    return cleaned, dropped
+
+
 def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:
     validated = validate_extractor_output(chapter, output)
     db.execute(delete(CharacterEvent).where(CharacterEvent.chapter_id == chapter.id))
