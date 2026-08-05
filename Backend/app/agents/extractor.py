@@ -5,6 +5,7 @@ from typing import Any
 
 from app.llm.base import LLMClient
 from app.services.character_state_projection import PERSISTENT_SLOTS, SNAPSHOT_SLOTS
+from app.services.archive_v2 import FACT_TYPES, MAX_FACTS, MAX_STATE_DELTAS
 from app.services.personas import compose_system_prompt
 
 
@@ -18,6 +19,65 @@ SelectedCharacter = tuple[str, str]
 
 class ExtractorContractError(ValueError):
     pass
+
+
+def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
+    """Single-call v2 ledger contract; evidence is represented by source IDs."""
+    name = {"type": "string", "enum": selected_character_names}
+    participant_array: dict[str, Any] = {
+        "type": "array",
+        "items": name,
+        "uniqueItems": True,
+        "maxItems": min(4, len(selected_character_names)),
+    }
+    fact = {
+        "type": "object",
+        "properties": {
+            "fact_ref": {"type": "string"},
+            "type": {"type": "string", "enum": list(FACT_TYPES)},
+            "importance": {"type": "integer", "minimum": 1, "maximum": 3},
+            "text": {"type": "string"},
+            "participant_names": participant_array,
+            "start_id": {"type": "string"},
+            "end_id": {"type": "string"},
+        },
+        "required": [
+            "fact_ref", "type", "importance", "text", "participant_names", "start_id", "end_id"
+        ],
+        "additionalProperties": False,
+    }
+    delta = {
+        "type": "object",
+        "properties": {
+            "fact_ref": {"type": "string"},
+            "character_name": name,
+            "other_character_name": {"anyOf": [name, {"type": "null"}]},
+            "scope": {"type": "string", "enum": ["snapshot", "persistent", "relationship"]},
+            "slot": {"type": "string"},
+            "operation": {"type": "string", "enum": ["set", "clear"]},
+            "value": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "required": [
+            "fact_ref", "character_name", "other_character_name", "scope", "slot", "operation", "value"
+        ],
+        "additionalProperties": False,
+    }
+    empty_when_no_characters = {"maxItems": 0} if not selected_character_names else {}
+    return {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "facts": {"type": "array", "items": fact, "maxItems": MAX_FACTS},
+            "end_state_delta": {
+                "type": "array",
+                "items": delta,
+                "maxItems": min(MAX_STATE_DELTAS, MAX_STATE_DELTAS if selected_character_names else 0),
+                **empty_when_no_characters,
+            },
+        },
+        "required": ["summary", "facts", "end_state_delta"],
+        "additionalProperties": False,
+    }
 
 
 def _operation_schema() -> dict[str, Any]:
@@ -280,6 +340,23 @@ class ExtractorAgent:
             max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
         )
         return bind_extractor_character_names(output, selected)
+
+    def extract_v2(
+        self, user_message: str, selected_characters: list[SelectedCharacter] | None = None
+    ) -> dict[str, Any]:
+        selected = selected_characters or []
+        names = [name.strip() for _, name in selected]
+        if any(not name for name in names) or len(set(names)) != len(names):
+            raise ExtractorContractError("selected character names must be non-empty and unique")
+        return self.llm.complete_json(
+            system=self.system_prompt,
+            user=user_message,
+            schema=extractor_v2_schema(names),
+            temperature=0.1,
+            timeout=EXTRACTOR_TIMEOUT_SECONDS,
+            hard_timeout=True,
+            max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
+        )
 
     def repair_character_events(
         self, user_message: str, selected_characters: list[SelectedCharacter] | None = None

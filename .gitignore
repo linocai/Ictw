@@ -10,6 +10,8 @@ Backend/.env
 Backend/*.db
 Backend/*.db-*
 Backend/backups/
+Backend/reports/
+*.archive-reextract-report.json
 
 # Python
 Backend/.venv/

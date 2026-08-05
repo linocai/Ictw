@@ -260,6 +260,11 @@ private struct MacCharacterEventRow: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(LinoTheme.accent, in: Capsule())
+            if event.editable == false {
+                Text("已验证事实")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(LinoTheme.accent)
+            }
 
             if isEditing {
                 VStack(alignment: .leading, spacing: 8) {
@@ -299,7 +304,7 @@ private struct MacCharacterEventRow: View {
 
             Spacer(minLength: 0)
 
-            if !isEditing {
+            if !isEditing && event.editable != false {
                 Menu {
                     Button("编辑", systemImage: "pencil") {
                         draftText = event.eventText

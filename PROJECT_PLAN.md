@@ -1,6 +1,6 @@
 # ICTW PROJECT_PLAN
 
-> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。本轮仅立项规划，未实施、未调用 LLM、未读取生产正文或任何书籍正文。
+> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。本轮已进入施工；截至当前仍未调用历史重提 LLM、未读取生产正文或任何书籍正文。
 
 ## 当前状态
 
@@ -8,6 +8,7 @@
 - 现行 `v1.7.2(29)` 是已发布的收敛快修：Extractor 仍同时写 `headline`、摘要、三个松散归档数组、人物事件和状态更新；在线路径可逐项 salvage，Selector 会同时消费摘要、数组和人物事件。这是本版要消除的结构性重复，不再继续叠加提示词补丁。
 - 当前代码事实：`chapters.status` 仍混合正文与 Extractor 阶段；`context.memory_candidates` 会叠加 legacy 摘要／数组／人物事件；`character_state_changes` 是可重放状态的 legacy 事实源。既有姓名白名单、候选稿隔离、Checker 门禁、真实上游错误分类与状态投影铁律继续适用。
 - 用户工作树资产只读保护：`.learnings/ERRORS.md`、`.learnings/LEARNINGS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/`；不得覆盖、回退、暂存或纳入本版。
+- 施工进度：v2 ledger、单调用 Extractor、正文／归档双生命周期、Selector 单源适配、状态混源重放、API／双端 UI、候选报告及确认执行门禁均已实现；Backend 全测、客户端状态测试与 iOS Debug 已通过，正在完成 migration 复核、macOS／签名 Archive、生产部署和发布。
 
 ## 目标与不做事项
 
@@ -51,14 +52,14 @@
 
 ### Phase 0 — 合同锁定与安全基线
 
-状态：待施工。
+状态：已完成。
 
 - 负责人先记录干净／脏工作树、版本四处和 Alembic `20260804_0009`；不触碰受保护资产。以合成正文建立 v2 JSON、span、代词、章节级事实、关系、重复／上限、partial 隔离、fingerprint 失效、legacy/v2 混读和接受解耦的测试基线。
 - 主要边界：`Backend/app/agents/extractor.py`、`services/extraction.py`、`services/write_jobs.py`、`services/context.py`、`services/character_state_projection.py`、`models/entities.py`、`routers/chapters.py`、`schemas/chapter.py`；不复用旧 event-repair 或 state-only rebuild 合同。
 
 ### Phase 1 — Backend v2 数据与生命周期
 
-状态：待施工。
+状态：已完成，待生产 migration 验收。
 
 - 新增一份仅增量的 Alembic migration（head 接在 `20260804_0009`）：revision／fact／participant／state-delta 表、索引、唯一／检查约束和 chapter archive-head 元数据。生产只由 `alembic upgrade head` 建表，启动不 `create_all`，不迁移／清空 legacy 内容。
 - 实现 archive repository、revision 激活／失效与全书投影来源选择；将接受路径拆成“正文 finalized 事务”与独立 extract Job，所有 Job 终态、ownership 和 fingerprint 失配都不可覆盖新正文。移除在线 salvage／二次事件 repair 的生产调用路径。
@@ -66,7 +67,7 @@
 
 ### Phase 2 — API、Selector 与双端体验
 
-状态：待施工。
+状态：已完成，待正式 Archive 验收。
 
 - 在 `ChapterRead`／Job 状态增加向后兼容的 `archive` 读模型与 retry 操作；保留所有旧字段和 `summary`/`chapter_style` 兼容，不返回候选全文。新增事实账本简览只显示已验证活跃 v2 内容，legacy 原接口行为保持。
 - Selector 改为 per-chapter source adapter；导出与人物页明确区分“当前状态投影”与归档来源。确认旧字段手改不被 v2 激活覆盖，且 chapter PATCH／import／reopen／delete 正确置 stale／重放。
@@ -74,14 +75,14 @@
 
 ### Phase 3 — 候选报告与用户确认
 
-状态：待施工，且是生产重提的硬停点。
+状态：报告与逐章执行工具已完成；生产备份报告待部署门禁时复核，用户精确清单确认仍是历史重提硬停点。
 
 - 在备份副本运行只读审计命令，生成权限 0600、Git 忽略的报告；复核 5 个硬候选与观察项数量，不读／打印文本。将精确 ID／序号清单、计数、阈值和排除理由交用户确认。
 - 未获得确认：部署可包含 v2 新写作路径，但不得运行历史 re-extract。确认后只处理清单中的章节，按章单事务切换；非候选、观察项和仅有 salvage 历史的章节保持 legacy。
 
 ### Phase 4 — 验收、部署、选择性重提与发布
 
-状态：待施工。
+状态：进行中；历史选择性重提保持未执行。
 
 - Backend 必跑完整 `pytest -q`、`compileall`、`alembic heads`、migration upgrade、`git diff --check`；覆盖 revision 并发／回滚、Selector 去重、投影混源、旧 client decode、API 状态和候选分类。跑 `App/Tests/run_client_state_tests.sh`、iOS 与 macOS Debug build；共享代码改动后双 target 均需通过，再做签名 Archive。
 - 生产顺序：停止旧服务→备份数据库、`.env`、代码及 unit/nginx（600）→SQLite integrity／foreign key／旧 head→部署已提交 Backend→`alembic upgrade head`→验证新 head/integrity/FK/单实例/健康/无敏感日志→启动服务。先验收新章 accepted+archive failed/complete 不互相回退；再执行经用户确认的逐章 shadow／激活。

@@ -284,20 +284,17 @@ def _finalize_with_event(client, auth_headers, wait_for_terminal, event_text: st
 
     if event_text is not None:
         class LongExtractor:
-            def complete_json(self, **kwargs):
+            def complete_json(self, *, user, **kwargs):
+                import re
+                span_id = re.search(r"\[(P\d{4}-S\d{2})\]", user).group(1)
                 return {
-                    "long_summary": "梗概",
-                    "headline": "大事",
-                    "state_changes": [],
-                    "unresolved_items": [],
-                    "atomic_memories": [],
-                    "character_events": [{
-                        "character_name": "林夕",
-                        "event_type": "经历",
-                        "event_text": "林夕" + event_text,
-                        "evidence": "林夕行动",
+                    "summary": "梗概",
+                    "facts": [{
+                        "fact_ref": "F1", "type": "剧情", "importance": 3,
+                        "text": "林夕" + event_text, "participant_names": ["林夕"],
+                        "start_id": span_id, "end_id": span_id,
                     }],
-                    "dynamic_fields_patch": [],
+                    "end_state_delta": [],
                 }
 
         client.app.dependency_overrides[get_extractor_client] = lambda: LongExtractor()
@@ -318,20 +315,19 @@ def _finalize_with_event(client, auth_headers, wait_for_terminal, event_text: st
     return character
 
 
-def test_character_event_patch_delete_and_truncate(client, auth_headers, wait_for_terminal):
+def test_v2_derived_character_fact_is_read_only(client, auth_headers, wait_for_terminal):
     character = _finalize_with_event(client, auth_headers, wait_for_terminal)
     event = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"][0]
+    assert event["editable"] is False
 
     patched = client.patch(
         f"/api/v1/character-events/{event['id']}", headers=auth_headers, json={"event_text": "字" * 80}
     )
-    assert patched.status_code == 200
-    assert nonspace_len(patched.json()["event_text"]) == CHARACTER_EVENT_MAX_CHARS
-    assert patched.json()["chapter_index"] is not None
+    assert patched.status_code == 404
 
     deleted = client.delete(f"/api/v1/character-events/{event['id']}", headers=auth_headers)
     assert deleted.status_code == 204
-    assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"] == []
+    assert len(client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]) == 1
 
 
 def test_extractor_truncates_long_event_text(client, auth_headers, wait_for_terminal):
@@ -377,7 +373,7 @@ def test_chapter_patch_summary_compatibility_and_headline(client, auth_headers):
 
 
 def test_health_reports_current_version(client, auth_headers):
-    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.7.2"
+    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.8.0"
 
 
 # --- B8 migration from the production revision --------------------------------
@@ -413,9 +409,23 @@ def test_v1_1_migration_upgrades_from_v1_head(tmp_path, monkeypatch):
         table_names = {
             row[0]
             for row in migrated.exec_driver_sql(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('job_runs','llm_call_audits')"
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                "('job_runs','llm_call_audits','chapter_archive_revisions',"
+                "'chapter_archive_facts','chapter_archive_fact_participants',"
+                "'chapter_archive_state_deltas')"
             ).fetchall()
         }
-        assert table_names == {"job_runs", "llm_call_audits"}
+        assert table_names == {
+            "job_runs",
+            "llm_call_audits",
+            "chapter_archive_revisions",
+            "chapter_archive_facts",
+            "chapter_archive_fact_participants",
+            "chapter_archive_state_deltas",
+        }
+        archive_defaults = migrated.exec_driver_sql(
+            "SELECT archive_status, legacy_archive_eligible FROM chapters WHERE id='c'"
+        ).one()
+        assert tuple(archive_defaults) == ("legacy", 1)
         assert migrated.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
     get_settings.cache_clear()

@@ -80,6 +80,13 @@ class Chapter(Base):
         MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
     )
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
+    # v1.8 separates accepted prose from its asynchronous memory archive.
+    # Existing production rows are marked legacy by the migration; newly
+    # created chapters explicitly start stale until their first v2 archive.
+    archive_status: Mapped[str] = mapped_column(String(16), default="stale", nullable=False)
+    active_archive_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    archive_input_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    legacy_archive_eligible: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     source: Mapped[str] = mapped_column(String(32), default="agent", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
@@ -87,6 +94,9 @@ class Chapter(Base):
     book = relationship("Book", back_populates="chapters")
     character_links = relationship("ChapterCharacter", back_populates="chapter", cascade="all, delete-orphan")
     events = relationship("CharacterEvent", back_populates="chapter", cascade="all, delete-orphan")
+    archive_revisions = relationship(
+        "ChapterArchiveRevision", back_populates="chapter", cascade="all, delete-orphan"
+    )
 
 
 class ChapterCharacter(Base):
@@ -194,6 +204,182 @@ class CharacterStateChange(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
+class ChapterArchiveRevision(Base):
+    """Immutable v2 extraction attempt; only a complete revision may be active."""
+
+    __tablename__ = "chapter_archive_revisions"
+    __table_args__ = (
+        UniqueConstraint("chapter_id", "revision", name="uq_archive_revision_number"),
+        CheckConstraint(
+            "status IN ('pending', 'extracting', 'complete', 'partial', 'failed', 'stale')",
+            name="ck_archive_revision_status",
+        ),
+        CheckConstraint(
+            "provenance IN ('live', 'manual_retry', 'selective_reextract')",
+            name="ck_archive_revision_provenance",
+        ),
+        CheckConstraint(
+            "is_active = 0 OR status = 'complete'",
+            name="ck_archive_revision_active_complete",
+        ),
+        CheckConstraint("schema_version = 2", name="ck_archive_revision_schema_v2"),
+        Index(
+            "uq_archive_active_chapter",
+            "chapter_id",
+            unique=True,
+            sqlite_where=text("is_active = 1"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    chapter_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contract_version: Mapped[str] = mapped_column(String(32), default="archive-v2.0", nullable=False)
+    validation_errors: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    chapter = relationship("Chapter", back_populates="archive_revisions")
+    facts = relationship(
+        "ChapterArchiveFact", back_populates="revision", cascade="all, delete-orphan",
+        order_by="ChapterArchiveFact.position",
+    )
+    state_deltas = relationship(
+        "ChapterArchiveStateDelta", back_populates="revision", cascade="all, delete-orphan",
+        order_by="ChapterArchiveStateDelta.position",
+    )
+
+
+class ChapterArchiveFact(Base):
+    __tablename__ = "chapter_archive_facts"
+    __table_args__ = (
+        UniqueConstraint("revision_id", "position", name="uq_archive_fact_position"),
+        UniqueConstraint("revision_id", "fact_ref", name="uq_archive_fact_ref"),
+        CheckConstraint(
+            "fact_type IN ('剧情', '决定', '关系', '认知', '未决', '状态')",
+            name="ck_archive_fact_type",
+        ),
+        CheckConstraint("importance BETWEEN 1 AND 3", name="ck_archive_fact_importance"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    revision_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chapter_archive_revisions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    fact_ref: Mapped[str] = mapped_column(String(16), nullable=False)
+    fact_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    importance: Mapped[int] = mapped_column(Integer, nullable=False)
+    fact_text: Mapped[str] = mapped_column(Text, nullable=False)
+    start_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    end_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    revision = relationship("ChapterArchiveRevision", back_populates="facts")
+    participants = relationship(
+        "ChapterArchiveFactParticipant", back_populates="fact", cascade="all, delete-orphan",
+        order_by="ChapterArchiveFactParticipant.position",
+    )
+    state_deltas = relationship("ChapterArchiveStateDelta", back_populates="fact")
+
+
+class ChapterArchiveFactParticipant(Base):
+    __tablename__ = "chapter_archive_fact_participants"
+    __table_args__ = (
+        UniqueConstraint("fact_id", "character_id", name="uq_archive_fact_participant"),
+        UniqueConstraint("fact_id", "position", name="uq_archive_fact_participant_position"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    fact_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chapter_archive_facts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    character_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    fact = relationship("ChapterArchiveFact", back_populates="participants")
+    character = relationship("Character")
+
+
+class ChapterArchiveStateDelta(Base):
+    __tablename__ = "chapter_archive_state_deltas"
+    __table_args__ = (
+        UniqueConstraint("revision_id", "position", name="uq_archive_delta_position"),
+        CheckConstraint("scope IN ('snapshot', 'persistent', 'relationship')", name="ck_archive_delta_scope"),
+        CheckConstraint("operation IN ('set', 'clear')", name="ck_archive_delta_operation"),
+        CheckConstraint(
+            "(operation = 'set' AND value IS NOT NULL AND length(trim(value)) > 0) "
+            "OR (operation = 'clear' AND value IS NULL)",
+            name="ck_archive_delta_value_matches_operation",
+        ),
+        CheckConstraint(
+            "(scope = 'snapshot' AND other_character_id IS NULL "
+            "AND slot IN ('当前位置', '当前行动', '情绪状态') AND batch_id <> '') "
+            "OR (scope = 'persistent' AND other_character_id IS NULL "
+            "AND slot IN ('身体状态', '当前目标', '秘密状态') AND batch_id = '') "
+            "OR (scope = 'relationship' AND other_character_id IS NOT NULL "
+            "AND other_character_id <> character_id AND slot = 'relationship' AND batch_id = '')",
+            name="ck_archive_delta_shape",
+        ),
+        Index(
+            "uq_archive_delta_nonrelationship",
+            "revision_id", "character_id", "scope", "slot", "batch_id",
+            unique=True,
+            sqlite_where=text("other_character_id IS NULL"),
+        ),
+        Index(
+            "uq_archive_delta_relationship",
+            "revision_id", "character_id", "other_character_id", "scope", "slot", "batch_id",
+            unique=True,
+            sqlite_where=text("other_character_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    revision_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chapter_archive_revisions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    fact_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chapter_archive_facts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    character_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    other_character_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("characters.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    slot: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation: Mapped[str] = mapped_column(String(8), nullable=False)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    batch_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
+    is_effective: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    revision = relationship("ChapterArchiveRevision", back_populates="state_deltas")
+    fact = relationship("ChapterArchiveFact", back_populates="state_deltas")
+    character = relationship("Character", foreign_keys=[character_id])
+    other_character = relationship("Character", foreign_keys=[other_character_id])
+
+
 class AgentPersona(Base):
     __tablename__ = "agent_personas"
 
@@ -246,6 +432,9 @@ class JobRun(Base):
     checker_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     bible_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     draft_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Logical audit link.  Kept without a database FK so the additive SQLite
+    # migration never has to rebuild the high-write job_runs table.
+    archive_revision_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

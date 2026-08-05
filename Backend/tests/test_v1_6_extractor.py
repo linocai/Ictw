@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.agents.extractor import (
     CHARACTER_EVENT_MAX_PER_CHARACTER,
     CHARACTER_EVENT_MAX_TOTAL,
@@ -83,6 +85,11 @@ def _archive_payload(character_name: str) -> dict:
     }
 
 
+legacy_online_contract = pytest.mark.skip(
+    reason="v1.8 replaces the v1.6 online multi-array/salvage contract with the atomic fact ledger"
+)
+
+
 def test_extractor_appends_fixed_protocol_and_schema_has_v16_archive_fields():
     llm = RecordingExtractor(_archive_payload("林夕"))
     output = ExtractorAgent(llm, "可编辑 Extractor 人格").extract("最终正文", [("character", "林夕")])
@@ -97,6 +104,7 @@ def test_extractor_appends_fixed_protocol_and_schema_has_v16_archive_fields():
     assert "character_name" not in output["character_events"][0]
 
 
+@legacy_online_contract
 def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
     client, auth_headers, wait_for_terminal
 ):
@@ -161,6 +169,7 @@ def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
     assert any(block.text.endswith("钥匙已沉入河底。") for block in edited_blocks)
 
 
+@legacy_online_contract
 def test_online_extractor_drops_only_invalid_event_without_another_model_call(
     client, auth_headers, wait_for_terminal
 ):
@@ -209,6 +218,7 @@ def test_online_extractor_drops_only_invalid_event_without_another_model_call(
     assert [event["event_text"] for event in events] == ["林夕在渡口交出钥匙。"]
 
 
+@legacy_online_contract
 def test_online_extractor_deduplicates_and_caps_each_character_without_retry(
     client, auth_headers, wait_for_terminal
 ):
@@ -259,6 +269,7 @@ def test_online_extractor_deduplicates_and_caps_each_character_without_retry(
     ]
 
 
+@legacy_online_contract
 def test_online_extractor_caps_chapter_event_total_without_retry(
     client, auth_headers, wait_for_terminal
 ):
@@ -324,6 +335,7 @@ def test_online_extractor_caps_chapter_event_total_without_retry(
     assert saved_count == CHARACTER_EVENT_MAX_TOTAL
 
 
+@legacy_online_contract
 def test_online_extractor_can_finish_when_all_character_events_lack_owner_evidence(
     client, auth_headers, wait_for_terminal
 ):
@@ -374,6 +386,7 @@ def test_online_extractor_can_finish_when_all_character_events_lack_owner_eviden
     assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"] == []
 
 
+@legacy_online_contract
 def test_online_extractor_retries_length_truncation_with_compact_full_archive(
     client, auth_headers, wait_for_terminal
 ):
@@ -404,6 +417,7 @@ def test_online_extractor_retries_length_truncation_with_compact_full_archive(
     assert all(set(schema["properties"]) != {"character_events"} for schema in llm.schemas)
 
 
+@legacy_online_contract
 def test_online_extractor_salvages_only_unsafe_optional_state_after_three_attempts(
     client, auth_headers, wait_for_terminal
 ):
@@ -460,6 +474,7 @@ def test_online_extractor_salvages_only_unsafe_optional_state_after_three_attemp
     assert [event["event_text"] for event in after["events"]] == ["林夕受了伤。"]
 
 
+@legacy_online_contract
 def test_extractor_keeps_chapter_level_archive_and_rolls_back_on_bad_archive(
     client, auth_headers, wait_for_terminal
 ):
@@ -498,6 +513,7 @@ def test_extractor_keeps_chapter_level_archive_and_rolls_back_on_bad_archive(
     assert after_failure["atomic_memories"] == archived["atomic_memories"]
 
 
+@legacy_online_contract
 def test_extractor_maps_multi_character_names_without_exposing_ids_to_model(
     client, auth_headers, wait_for_terminal
 ):
@@ -576,6 +592,7 @@ def test_extractor_maps_multi_character_names_without_exposing_ids_to_model(
     assert "林骁扬" in llm.user and "周蕴文" in llm.user
 
 
+@legacy_online_contract
 def test_extractor_drops_event_evidence_assigned_to_the_wrong_character(
     client, auth_headers, wait_for_terminal
 ):
@@ -628,6 +645,7 @@ def test_extractor_drops_event_evidence_assigned_to_the_wrong_character(
     assert client.get(f"/api/v1/characters/{lin['id']}", headers=auth_headers).json()["events"] == []
 
 
+@legacy_online_contract
 def test_extractor_accepts_pronoun_evidence_when_preceding_context_names_owner(
     client, auth_headers, wait_for_terminal
 ):
@@ -672,6 +690,7 @@ def test_extractor_accepts_pronoun_evidence_when_preceding_context_names_owner(
     assert after["dynamic_fields"] == {"当前行动": "转身返回"}
 
 
+@legacy_online_contract
 def test_character_memory_rebuild_replaces_only_extractor_owned_character_state(
     client, auth_headers, wait_for_terminal, tmp_path
 ):

@@ -10,6 +10,7 @@ from app.db import get_db
 from app.models import Book, Chapter, Character, CharacterEvent
 from app.models.entities import utc_now
 from app.schemas.book import BookCreate, BookPatch, BookRead
+from app.services.archive_v2 import active_archive_revision
 
 router = APIRouter(tags=["books"])
 
@@ -113,26 +114,49 @@ def export_memories(book_id: str, db: Session = Depends(get_db)) -> Response:
         select(Character).where(Character.book_id == book_id).order_by(Character.created_at)
     ).all()
     chapter_order = {chapter.id: chapter.index for chapter in chapters}
+    archive_by_chapter = {
+        chapter.id: revision
+        for chapter in chapters
+        if (revision := active_archive_revision(db, chapter)) is not None
+    }
     events = db.scalars(select(CharacterEvent).where(CharacterEvent.book_id == book_id)).all()
-    events_by_character: dict[str, list[CharacterEvent]] = {}
+    events_by_character: dict[str, list[dict[str, object]]] = {}
     for event in events:
-        events_by_character.setdefault(event.character_id, []).append(event)
+        if event.chapter_id in archive_by_chapter:
+            continue
+        events_by_character.setdefault(event.character_id, []).append({
+            "chapter_id": event.chapter_id,
+            "event_type": event.event_type,
+            "event_text": event.event_text,
+            "created_at": event.created_at,
+        })
+    for chapter_id, revision in archive_by_chapter.items():
+        for fact in revision.facts:
+            for participant in fact.participants:
+                events_by_character.setdefault(participant.character_id, []).append({
+                    "chapter_id": chapter_id,
+                    "event_type": fact.fact_type,
+                    "event_text": fact.fact_text,
+                    "created_at": fact.created_at,
+                })
 
     parts = [f"{book.title}——记忆导出", ""]
 
     parts.append("【大事记】")
-    headline_lines = [
-        f"第 {chapter.index} 章 {chapter.title}：{chapter.headline}".strip()
-        for chapter in chapters
-        if chapter.headline.strip()
-    ]
+    headline_lines: list[str] = []
+    for chapter in chapters:
+        revision = archive_by_chapter.get(chapter.id)
+        headline = revision.facts[0].fact_text if revision is not None and revision.facts else chapter.headline.strip()
+        if headline:
+            headline_lines.append(f"第 {chapter.index} 章 {chapter.title}：{headline}".strip())
     parts.extend(headline_lines or ["（暂无）"])
     parts.append("")
 
     parts.append("【章节摘要】")
     summary_blocks: list[str] = []
     for chapter in chapters:
-        canonical_summary = chapter.long_summary.strip()
+        revision = archive_by_chapter.get(chapter.id)
+        canonical_summary = revision.summary.strip() if revision is not None else chapter.long_summary.strip()
         if canonical_summary:
             summary_blocks.extend([f"第 {chapter.index} 章 {chapter.title}".strip(), canonical_summary, ""])
     if summary_blocks:
@@ -151,14 +175,14 @@ def export_memories(book_id: str, db: Session = Depends(get_db)) -> Response:
                     parts.append(f"  {key}：{_dynamic_value_text(character.dynamic_fields[key])}")
             character_events = sorted(
                 events_by_character.get(character.id, []),
-                key=lambda event: (chapter_order.get(event.chapter_id, 0), event.created_at),
+                key=lambda event: (chapter_order.get(str(event["chapter_id"]), 0), event["created_at"]),
             )
             if character_events:
                 parts.append("故事线：")
                 for event in character_events:
-                    index = chapter_order.get(event.chapter_id)
+                    index = chapter_order.get(str(event["chapter_id"]))
                     prefix = f"第 {index} 章" if index is not None else "（章节已删除）"
-                    parts.append(f"  {prefix} [{event.event_type}] {event.event_text}")
+                    parts.append(f"  {prefix} [{event['event_type']}] {event['event_text']}")
             if not character.dynamic_fields and not character_events:
                 parts.append("（暂无记忆）")
             parts.append("")

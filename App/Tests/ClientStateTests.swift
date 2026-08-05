@@ -272,8 +272,8 @@ private func testExtractorFailureKeepsSpecificBackendRule() throws {
         addedEventIds: nil
     )
     try expect(
-        status.specificFailureReason == "Extractor 连续 3 次未通过确定性校验：证据未明确所属人物",
-        "Extractor failures must surface the exact safe backend validation rule"
+        status.specificFailureReason == "正文已接受；Extractor 连续 3 次未通过确定性校验：证据未明确所属人物。可直接重新归档，无需再次检查 Bible",
+        "Extractor failures must preserve the exact safe backend rule while explaining that accepted prose is retained"
     )
 }
 
@@ -296,8 +296,8 @@ private func testCheckerOverrideSurvivesExtractorFailure() throws {
     let status = try JSONDecoder().decode(WriteJobStatus.self, from: data)
     try expect(status.checkerResult?.isOverride == true, "explicit Checker override must decode from extract jobs")
     try expect(
-        status.specificFailureReason?.contains("强制接受决定已保留") == true,
-        "Extractor failure must explain that the exact-draft override remains reusable"
+        status.specificFailureReason?.contains("可直接重新归档，无需再次检查 Bible") == true,
+        "Extractor failure must explain that archive retry is independent from Checker approval"
     )
 
     try expect(

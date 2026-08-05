@@ -277,6 +277,12 @@ enum LinoErrorPresenter {
             return Entry(reason: "写作任务出现意外错误", suggestion: "请重试；若持续出现，请联系管理员")
         case "extract_failed":
             return Entry(reason: "提取任务出现意外错误", suggestion: "请重试；若持续出现，请联系管理员")
+        case "archive_validation_failed":
+            return Entry(reason: "正文已接受，但记忆归档未通过确定性校验", suggestion: "可直接重新归档，无需再次检查 Bible")
+        case "archive_input_changed", "prior_state_changed":
+            return Entry(reason: "正文或前置有效状态已变化，旧归档不再适用", suggestion: "正文仍保持已接受；请重新归档")
+        case "archive_cancelled":
+            return Entry(reason: "正文已接受，但记忆归档已取消", suggestion: "可直接重新归档")
         case "chapter_missing":
             return Entry(reason: "章节不存在，可能已被删除", suggestion: "请返回书架重新进入")
         case "interrupted":

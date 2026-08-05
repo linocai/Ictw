@@ -94,6 +94,48 @@ struct ChapterLink: Codable, Hashable, Sendable {
     }
 }
 
+struct ChapterArchiveFact: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    var type: String
+    var importance: Int
+    var text: String
+    var participantIds: [String]
+    var startId: String
+    var endId: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, importance, text
+        case participantIds = "participant_ids"
+        case startId = "start_id"
+        case endId = "end_id"
+    }
+}
+
+struct ChapterArchive: Codable, Hashable, Sendable {
+    var status: String
+    var archiveSchema: String
+    var revisionId: String?
+    var revision: Int?
+    var summary: String
+    var facts: [ChapterArchiveFact]
+    var stateDeltaCount: Int
+    var errorCode: String?
+    var errorMessage: String?
+    var canRetry: Bool
+    var latestAttemptStatus: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, summary, facts, revision
+        case archiveSchema = "schema"
+        case revisionId = "revision_id"
+        case stateDeltaCount = "state_delta_count"
+        case errorCode = "error_code"
+        case errorMessage = "error_message"
+        case canRetry = "can_retry"
+        case latestAttemptStatus = "latest_attempt_status"
+    }
+}
+
 struct Chapter: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let bookId: String
@@ -114,9 +156,10 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
     var updatedAt: String
     var characterLinks: [ChapterLink]
     var exemptedCharacterNames: [String]
+    var archive: ChapterArchive?
 
     enum CodingKeys: String, CodingKey {
-        case id, index, title, summary, status, source, headline
+        case id, index, title, summary, status, source, headline, archive
         case longSummary = "long_summary"
         case stateChanges = "state_changes"
         case unresolvedItems = "unresolved_items"
@@ -159,6 +202,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
         characterLinks = try container.decodeIfPresent([ChapterLink].self, forKey: .characterLinks) ?? []
         exemptedCharacterNames = try container.decodeIfPresent([String].self, forKey: .exemptedCharacterNames) ?? []
+        archive = try container.decodeIfPresent(ChapterArchive.self, forKey: .archive)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -182,6 +226,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encode(characterLinks, forKey: .characterLinks)
         try container.encode(exemptedCharacterNames, forKey: .exemptedCharacterNames)
+        try container.encodeIfPresent(archive, forKey: .archive)
     }
 }
 
@@ -208,9 +253,11 @@ struct CharacterEvent: Codable, Identifiable, Hashable, Sendable {
     var eventType: String
     var eventText: String
     var chapterIndex: Int?
+    var source: String?
+    var editable: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id
+        case id, source, editable
         case characterId = "character_id"
         case chapterId = "chapter_id"
         case eventType = "event_type"
@@ -458,13 +505,10 @@ struct WriteJobStatus: Decodable, Sendable {
     /// backend's safe deterministic Extractor rule after automatic correction
     /// is exhausted. Other failures continue through the localized table.
     var specificFailureReason: String? {
-        if errorCode == "extract_failed" {
+        if ["extract_failed", "archive_validation_failed", "archive_input_changed"].contains(errorCode) {
             let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !message.isEmpty else { return nil }
-            if checkerResult?.isOverride == true {
-                return "正文的强制接受决定已保留；\(message)。可直接重试 Extractor，无需再次检查 Bible"
-            }
-            return message
+            return "正文已接受；\(message)。可直接重新归档，无需再次检查 Bible"
         }
         guard errorCode == "checker_rejected" else { return nil }
         let reasons = checkerResult?.issues?

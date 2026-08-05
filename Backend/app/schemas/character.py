@@ -46,6 +46,8 @@ class CharacterEventRead(ORMModel):
     created_at: datetime
     updated_at: datetime
     chapter_index: int | None = None
+    source: str = "legacy"
+    editable: bool = True
 
 
 class CharacterRead(ORMModel):

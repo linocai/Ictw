@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.auth import require_token
 from app.config import get_settings
 import app.db as db_module
-from app.models import Chapter, JobRun
+from app.models import Chapter, ChapterArchiveRevision, JobRun
 from app.models.entities import utc_now
 from app.routers import books, chapters, characters, settings
 from app.services.personas import seed_defaults
@@ -42,12 +42,23 @@ def recover_interrupted_chapters(db) -> None:
         run.error_code = "interrupted"
         run.error_message = "服务重启，任务中断"
         run.finished_at = utc_now()
+        if run.kind == "extract" and run.archive_revision_id:
+            revision = db.get(ChapterArchiveRevision, run.archive_revision_id)
+            chapter = db.get(Chapter, run.chapter_id)
+            if revision is not None and revision.status in {"pending", "extracting"}:
+                revision.status = "failed"
+                revision.error_code = "interrupted"
+                revision.error_message = "服务重启，归档任务中断"
+                revision.finished_at = utc_now()
+            if chapter is not None:
+                chapter.status = "finalized"
+                chapter.archive_status = "complete" if chapter.active_archive_revision_id else "failed"
     if runs or chapters:
         db.commit()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="LinoI API", version="1.7.2", lifespan=lifespan)
+    app = FastAPI(title="LinoI API", version="1.8.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -60,7 +71,7 @@ def create_app() -> FastAPI:
 
     @app.get(f"{prefix}/health", dependencies=deps)
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "1.7.2"}
+        return {"status": "ok", "version": "1.8.0"}
 
     app.include_router(books.router, prefix=prefix, dependencies=deps)
     app.include_router(characters.router, prefix=prefix, dependencies=deps)

@@ -14,7 +14,7 @@ from app.agents.extractor import ExtractorContractError
 from app.agents.memory_selector import MemorySelection, MemorySelectorAgent
 from app.agents.writer import WriterAgent
 from app.llm.base import LLMError
-from app.models import Chapter, ChapterDraftCandidate, JobRun
+from app.models import Chapter, ChapterArchiveRevision, ChapterDraftCandidate, JobRun
 from app.models.entities import utc_now
 from app.services.audit import record_llm_call
 from app.services.context import (
@@ -36,6 +36,17 @@ from app.services.extraction import (
     salvage_online_extractor_output,
     validate_extractor_output,
 )
+from app.services.archive_v2 import (
+    ArchiveFingerprintMismatch,
+    ArchiveV2ValidationError,
+    activate_archive_revision,
+    invalidate_downstream_archives,
+    mark_revision_extracting,
+    mark_revision_failed,
+    mark_revision_partial,
+    validate_archive_output,
+)
+from app.services.character_state_projection import rebuild_book_projection
 
 
 TERMINAL_PHASES = {"done", "failed", "cancelled"}
@@ -67,6 +78,7 @@ class WriteJob:
         selected_characters: list[tuple[str, str]] | None = None,
         bible_snapshot: str = "",
         bible_sha256: str = "",
+        archive_revision_id: str = "",
     ) -> None:
         self.chapter_id = chapter_id
         self.job_id = job_id
@@ -84,6 +96,7 @@ class WriteJob:
         self.selected_characters = selected_characters or []
         self.bible_snapshot = bible_snapshot
         self.bible_sha256 = bible_sha256 or hashlib.sha256(bible_snapshot.encode()).hexdigest()
+        self.archive_revision_id = archive_revision_id
         self.cancel_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.discard_on_cancel = False
@@ -450,78 +463,163 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
 
 
 def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
+    """Run one v2 archive call; accepted prose is never rolled back."""
     db = sf()
     try:
         chapter = db.get(Chapter, job.chapter_id)
-        if chapter is None:
-            record_job_phase(sf, job.job_id, "failed", error_code="chapter_missing", error_message="章节不存在"); job.mark_terminal("failed"); return
-        output, attempts, dropped_event_reasons, dropped_state_reasons = _run_extractor_with_correction(
-            job, chapter, sf
-        )
-        if output is None:
-            db.rollback(); job.mark_terminal(); return
-        if _should_stop(job): db.rollback(); job.mark_terminal(); return
-        updated_ids, event_ids = apply_extractor_output(db, chapter, output); db.commit()
-        completion_context = None
-        if dropped_event_reasons:
-            localized_event_reasons = list(
-                dict.fromkeys(_extractor_user_reason(reason) for reason in dropped_event_reasons)
+        revision = db.get(ChapterArchiveRevision, job.archive_revision_id) if job.archive_revision_id else None
+        if chapter is None or revision is None:
+            record_job_phase(
+                sf,
+                job.job_id,
+                "failed",
+                error_code="chapter_missing",
+                error_message="章节或归档任务不存在",
             )
-            localized_state_reasons = list(
-                dict.fromkeys(_extractor_user_reason(reason) for reason in dropped_state_reasons)
-            )
-            warning_parts = [
-                f"{len(dropped_event_reasons)} 条人物事件未归档："
-                + "；".join(localized_event_reasons)
-            ]
-            if dropped_state_reasons:
-                warning_parts.append(
-                    f"{len(dropped_state_reasons)} 项人物当前状态未归档："
-                    + "；".join(localized_state_reasons)
+            job.mark_terminal("failed")
+            return
+        mark_revision_extracting(revision, chapter)
+        db.commit()
+
+        client = getattr(job.extractor, "llm", None)
+        started = time.monotonic()
+        try:
+            output = job.extractor.extract_v2(job.extractor_user_message, job.selected_characters)
+        except LLMError as exc:
+            _record_llm(sf, "extractor", client, started, exc.code, job, upstream_reason=exc.upstream_reason)
+            exc.agent_role, exc.model_name = "extractor", getattr(client, "model_name", None)
+            raise
+        except ExtractorContractError:
+            _record_llm(sf, "extractor", client, started, None, job)
+            raise
+        else:
+            _record_llm(sf, "extractor", client, started, None, job)
+        validated = validate_archive_output(chapter, output)
+        if _should_stop(job):
+            db.rollback()
+            chapter = db.get(Chapter, job.chapter_id)
+            revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
+            if chapter is not None and revision is not None and revision.status in {"pending", "extracting"}:
+                mark_revision_failed(
+                    revision,
+                    chapter,
+                    error_code="archive_cancelled",
+                    error_message="归档任务已取消",
                 )
-            completion_context = {
-                "stage": "optional_salvage",
-                "completion_warning": (
-                    "本章已接受；"
-                    + "；".join(warning_parts)
-                    + "。正文、摘要及其余合格记忆已保存。"
-                ),
-                "dropped_event_count": len(dropped_event_reasons),
-                "dropped_event_reasons": localized_event_reasons,
-                "dropped_state_components": len(dropped_state_reasons),
-                "dropped_state_reasons": localized_state_reasons,
-            }
-        elif dropped_state_reasons:
-            localized_reasons = list(dict.fromkeys(_extractor_user_reason(reason) for reason in dropped_state_reasons))
-            completion_context = {
-                "stage": "state_salvage",
-                "completion_warning": (
-                    f"本章已接受；{len(dropped_state_reasons)} 项人物当前状态未归档："
-                    + "；".join(localized_reasons)
-                    + "。正文、摘要及其余合格记忆已保存。"
-                ),
-                "dropped_state_components": len(dropped_state_reasons),
-                "dropped_state_reasons": localized_reasons,
-            }
-        record_job_phase(
-            sf, job.job_id, "done", attempt=attempts, error_context=completion_context,
-            updated_character_ids=updated_ids, added_event_ids=event_ids,
-        ); job.mark_terminal("done")
+                db.commit()
+            return
+
+        def persist_complete() -> None:
+            updated_ids, event_ids = activate_archive_revision(
+                db,
+                chapter,
+                revision,
+                validated,
+                model_name=getattr(client, "model_name", None),
+            )
+            invalidated_downstream = invalidate_downstream_archives(
+                db, chapter.book_id, after_index=chapter.index
+            )
+            rebuild_book_projection(db, chapter.book_id)
+            if not _apply_job_phase(
+                db,
+                job.job_id,
+                "done",
+                attempt=1,
+                updated_character_ids=updated_ids,
+                added_event_ids=event_ids,
+                error_context={
+                    "archive_revision_id": revision.id,
+                    "fact_count": len(validated.facts),
+                    "state_delta_count": len(validated.deltas),
+                    "invalidated_downstream_count": len(invalidated_downstream),
+                },
+            ):
+                raise RuntimeError("archive job terminal row is no longer writable")
+            db.commit()
+
+        if not write_registry.finish_if_current(job, persist_complete, phase="done"):
+            db.rollback()
     except LLMError as exc:
-        db.rollback(); _restore_draft_ready(db, job)
-        record_job_phase(sf, job.job_id, "failed", error_code=exc.code, error_message=str(exc), error_context=_error_context(exc)); job.mark_terminal("failed")
-    except ExtractorValidationError as exc:
-        db.rollback(); _restore_draft_ready(db, job)
-        attempts = int(getattr(exc, "attempts", MAX_EXTRACTOR_VALIDATION_ATTEMPTS))
-        reason = _extractor_user_reason(str(getattr(exc, "last_reason", exc)))
-        record_job_phase(
-            sf, job.job_id, "failed", attempt=attempts, error_code="extract_failed",
-            error_message=f"Extractor 连续 {attempts} 次未通过确定性校验：{reason}",
-            error_context={"stage": "validation", "attempts": attempts, "reason": reason},
-        ); job.mark_terminal("failed")
+        db.rollback()
+        chapter = db.get(Chapter, job.chapter_id)
+        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
+        if chapter is not None and revision is not None:
+            mark_revision_failed(revision, chapter, error_code=exc.code, error_message=str(exc))
+            db.flush()
+            _apply_job_phase(
+                db,
+                job.job_id,
+                "failed",
+                attempt=1,
+                error_code=exc.code,
+                error_message=str(exc),
+                error_context=_error_context(exc),
+            )
+            db.commit()
+        job.mark_terminal("failed")
+    except ArchiveFingerprintMismatch as exc:
+        db.rollback()
+        chapter = db.get(Chapter, job.chapter_id)
+        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
+        if chapter is not None and revision is not None:
+            revision.status = "stale"
+            revision.error_code = "archive_input_changed"
+            revision.error_message = str(exc)
+            revision.finished_at = utc_now()
+            chapter.archive_status = "stale"
+            chapter.active_archive_revision_id = None
+            chapter.legacy_archive_eligible = False
+            db.flush()
+            _apply_job_phase(
+                db,
+                job.job_id,
+                "failed",
+                attempt=1,
+                error_code="archive_input_changed",
+                error_message=str(exc),
+            )
+            rebuild_book_projection(db, chapter.book_id)
+            db.commit()
+        job.mark_terminal("failed")
+    except (ArchiveV2ValidationError, ExtractorContractError) as exc:
+        db.rollback()
+        chapter = db.get(Chapter, job.chapter_id)
+        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
+        reason = str(exc)
+        if chapter is not None and revision is not None:
+            summary = output.get("summary", "") if "output" in locals() and isinstance(output, dict) else ""
+            mark_revision_partial(revision, chapter, reason=reason, summary=summary)
+            db.flush()
+            _apply_job_phase(
+                db,
+                job.job_id,
+                "failed",
+                attempt=1,
+                error_code="archive_validation_failed",
+                error_message=f"归档未通过确定性校验：{reason}",
+                error_context={"stage": "archive_validation", "attempts": 1, "reason": reason},
+            )
+            db.commit()
+        job.mark_terminal("failed")
     except Exception as exc:
-        db.rollback(); _restore_draft_ready(db, job)
-        record_job_phase(sf, job.job_id, "failed", error_code="extract_failed", error_message=f"提取失败：{exc}"); job.mark_terminal("failed")
+        db.rollback()
+        chapter = db.get(Chapter, job.chapter_id)
+        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
+        if chapter is not None and revision is not None:
+            message = f"归档失败：{exc}"
+            mark_revision_failed(revision, chapter, error_code="extract_failed", error_message=message)
+            db.flush()
+            _apply_job_phase(
+                db,
+                job.job_id,
+                "failed",
+                attempt=1,
+                error_code="extract_failed",
+                error_message=message,
+            )
+            db.commit()
+        job.mark_terminal("failed")
     finally:
         db.close()
 

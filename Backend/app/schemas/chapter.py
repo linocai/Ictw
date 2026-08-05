@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -68,6 +69,30 @@ class ChapterSummary(ORMModel):
     updated_at: datetime
 
 
+class ArchiveFactRead(BaseModel):
+    id: str
+    type: str
+    importance: int
+    text: str
+    participant_ids: list[str] = Field(default_factory=list)
+    start_id: str
+    end_id: str
+
+
+class ChapterArchiveRead(BaseModel):
+    status: str
+    archive_schema: str = Field(alias="schema", serialization_alias="schema")
+    revision_id: str | None = None
+    revision: int | None = None
+    summary: str = ""
+    facts: list[ArchiveFactRead] = Field(default_factory=list)
+    state_delta_count: int = 0
+    error_code: str | None = None
+    error_message: str | None = None
+    can_retry: bool = False
+    latest_attempt_status: str | None = None
+
+
 class ChapterRead(ORMModel):
     id: str
     book_id: str
@@ -92,6 +117,7 @@ class ChapterRead(ORMModel):
     created_at: datetime
     updated_at: datetime
     character_links: list[ChapterCharacterLink] = Field(default_factory=list)
+    archive: ChapterArchiveRead | None = None
 
 
 class WriteRequest(BaseModel):
@@ -102,6 +128,14 @@ class CheckerAcceptRequest(BaseModel):
     # Required for an invalid/unavailable Checker state; omitted remains
     # compatible for the normal passed path used by old clients.
     override_checker: bool = False
+
+
+class ArchiveRetryRequest(BaseModel):
+    # The clients omit this body and always receive the normal manual retry.
+    # The selective value is reserved for the count-only, user-confirmed
+    # maintenance flow and requires the report's exact draft hash.
+    provenance: Literal["manual_retry", "selective_reextract"] = "manual_retry"
+    expected_draft_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class CheckerRunRead(ORMModel):

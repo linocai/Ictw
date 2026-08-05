@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import delete, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session, object_session
 
 from app.agents.extractor import ExtractorAgent
 from app.agents.checker import CheckerAgent
@@ -17,7 +17,7 @@ from app.llm.factory import (
     get_memory_selector_client,
     get_writer_client,
 )
-from app.models import Book, Chapter, ChapterCharacter, ChapterDraftCandidate, Character, CharacterStateChange, JobRun
+from app.models import Book, Chapter, ChapterArchiveRevision, ChapterCharacter, ChapterDraftCandidate, Character, JobRun
 from app.models.entities import utc_now, uuid_str
 from app.schemas.chapter import (
     ChapterCreate,
@@ -25,6 +25,7 @@ from app.schemas.chapter import (
     ChapterPatch,
     ChapterRead,
     ChapterSummary,
+    ArchiveRetryRequest,
     CheckerAcceptRequest,
     CheckerRunRead,
     WriteJobStatus,
@@ -32,7 +33,6 @@ from app.schemas.chapter import (
 )
 from app.services.context import (
     CharacterPreflightError,
-    extractor_user_message,
     draft_fingerprint,
     draft_violations,
     memory_budget,
@@ -45,6 +45,14 @@ from app.services.context import (
 from app.services.personas import get_persona
 from app.services.character_state_projection import projected_fields_before_chapter, rebuild_book_projection
 from app.services.write_jobs import WriteJob, WriteJobConflict, record_job_phase, write_registry
+from app.services.archive_v2 import (
+    archive_input_fingerprint,
+    archive_read_model,
+    build_archive_user_message,
+    create_archive_revision,
+    invalidate_downstream_archives,
+    invalidate_archive_if_input_changed,
+)
 
 router = APIRouter(tags=["chapters"])
 
@@ -52,6 +60,7 @@ router = APIRouter(tags=["chapters"])
 def _chapter_read(chapter: Chapter) -> ChapterRead:
     note = chapter.author_note
     canonical_summary = chapter.long_summary.strip()
+    session = object_session(chapter)
     return ChapterRead(
         id=chapter.id,
         book_id=chapter.book_id,
@@ -75,6 +84,7 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
         created_at=chapter.created_at,
         updated_at=chapter.updated_at,
         character_links=[{"character_id": link.character_id, "chapter_note": ""} for link in chapter.character_links],
+        archive=archive_read_model(session, chapter) if session is not None else None,
     )
 
 
@@ -148,6 +158,8 @@ def create_chapter(book_id: str, payload: ChapterCreate, db: Session = Depends(g
         user_prompt=payload.user_prompt,
         target_word_count=payload.target_word_count,
         author_note=payload.author_note or "",
+        archive_status="stale",
+        legacy_archive_eligible=False,
     )
     db.add(chapter)
     db.flush()
@@ -170,6 +182,7 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    previous_archive_fingerprint = archive_input_fingerprint(chapter)
     updates = payload.model_dump(
         exclude_unset=True,
         exclude={"character_links", "author_note", "chapter_style", "summary", "long_summary"},
@@ -200,6 +213,12 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
         _apply_author_note(chapter, payload.author_note)
     if payload.character_links is not None:
         _replace_links(db, chapter, payload.character_links)
+    archive_invalidated = invalidate_archive_if_input_changed(
+        db, chapter, previous_fingerprint=previous_archive_fingerprint
+    )
+    if archive_invalidated:
+        invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+        rebuild_book_projection(db, chapter.book_id)
     db.commit()
     db.refresh(chapter)
     return _chapter_read(chapter)
@@ -228,6 +247,7 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
     for item in following:
         item.index -= 1
         db.flush()
+    invalidate_downstream_archives(db, book_id, after_index=old_index - 1)
     rebuild_book_projection(db, book_id)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -238,6 +258,7 @@ def import_chapter(chapter_id: str, payload: ChapterImportRequest, db: Session =
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    previous_archive_fingerprint = archive_input_fingerprint(chapter)
     chapter.draft_text = payload.draft_text
     chapter.source = "imported"
     chapter.status = "draft_ready"
@@ -249,6 +270,12 @@ def import_chapter(chapter_id: str, payload: ChapterImportRequest, db: Session =
         _apply_author_note(chapter, payload.author_note)
     if payload.character_links is not None:
         _replace_links(db, chapter, payload.character_links)
+    archive_invalidated = invalidate_archive_if_input_changed(
+        db, chapter, previous_fingerprint=previous_archive_fingerprint
+    )
+    if archive_invalidated:
+        invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+        rebuild_book_projection(db, chapter.book_id)
     db.commit()
     db.refresh(chapter)
     return _chapter_read(chapter)
@@ -367,6 +394,16 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    if job is not None and job.kind == "extract" and job.archive_revision_id:
+        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
+        if revision is not None and revision.status in {"pending", "extracting"}:
+            revision.status = "failed"
+            revision.error_code = "archive_cancelled"
+            revision.error_message = "归档任务已取消"
+            revision.finished_at = utc_now()
+            chapter.archive_status = "complete" if chapter.active_archive_revision_id else "failed"
+            db.commit()
+            db.refresh(chapter)
     if chapter.status in ("writing", "extracting"):
         chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
         db.commit()
@@ -510,6 +547,67 @@ def rerun_checker(chapter_id: str, db: Session = Depends(get_db), checker_client
     return CheckerRunRead.model_validate(candidate).model_copy(update={"draft_text": ""})
 
 
+def _start_archive_job(
+    db: Session,
+    chapter: Chapter,
+    extractor_client,
+    *,
+    provenance: str,
+    checker_result: dict | None = None,
+    draft_check_fingerprint: str | None = None,
+) -> WriteJobStatus:
+    if write_registry.get_live(chapter.id) is not None:
+        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
+    if provenance == "live":
+        chapter.legacy_archive_eligible = False
+        chapter.archive_status = "stale"
+    extractor = ExtractorAgent(extractor_client, get_persona(db, "extractor"))
+    selected_characters = [(link.character_id, link.character.name) for link in chapter.character_links]
+    message = build_archive_user_message(chapter, projected_fields_before_chapter(db, chapter))
+    revision = create_archive_revision(
+        db,
+        chapter,
+        provenance=provenance,
+        input_fingerprint=archive_input_fingerprint(chapter),
+    )
+    job_id = uuid_str()
+    run = JobRun(
+        id=job_id,
+        chapter_id=chapter.id,
+        kind="extract",
+        phase="extracting",
+        checker_result=checker_result,
+        bible_sha256=hashlib.sha256(chapter.user_prompt.encode()).hexdigest(),
+        draft_fingerprint=draft_check_fingerprint,
+        archive_revision_id=revision.id,
+    )
+    db.add(run)
+    job = WriteJob(
+        chapter_id=chapter.id,
+        job_id=job_id,
+        kind="extract",
+        extractor=extractor,
+        extractor_user_message=message,
+        selected_characters=selected_characters,
+        archive_revision_id=revision.id,
+    )
+    try:
+        write_registry.reserve(job)
+    except WriteJobConflict:
+        db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
+    chapter.status = "finalized"
+    db.commit()
+    write_registry.launch(job, SessionLocal)
+    return WriteJobStatus(
+        chapter_id=chapter.id,
+        job_id=job_id,
+        kind="extract",
+        phase="extracting",
+        checker_result=run.checker_result,
+    )
+
+
 @router.post("/chapters/{chapter_id}/accept", response_model=WriteJobStatus)
 def accept_chapter(
     chapter_id: str, payload: CheckerAcceptRequest = CheckerAcceptRequest(), db: Session = Depends(get_db), extractor_client=Depends(get_extractor_client)
@@ -538,46 +636,49 @@ def accept_chapter(
     # an explicit user override.
     if candidate is not None and not checker_current and not checker_override:
         raise HTTPException(status_code=409, detail={"code": "checker_override_required", "message": "Bible 检查未通过、失效或不可用；请明确忽略后接受"})
-    book = db.get(Book, chapter.book_id)
-    if book is None:
-        raise HTTPException(status_code=404, detail="book not found")
-    extractor = ExtractorAgent(extractor_client, get_persona(db, "extractor"))
-    selected_characters = [(link.character_id, link.character.name) for link in chapter.character_links]
-    message = extractor_user_message(db, book, chapter)
-    job_id = uuid_str()
+    was_finalized = chapter.status == "finalized"
     override_applied = not checker_current and checker_override
-    run = JobRun(
-        id=job_id,
-        chapter_id=chapter.id,
-        kind="extract",
-        phase="extracting",
+    return _start_archive_job(
+        db,
+        chapter,
+        extractor_client,
+        provenance="manual_retry" if was_finalized else "live",
         checker_result={"override": True, "draft_fingerprint": fingerprint} if override_applied else None,
-        bible_sha256=hashlib.sha256(chapter.user_prompt.encode()).hexdigest(),
-        draft_fingerprint=fingerprint,
+        draft_check_fingerprint=fingerprint,
     )
-    db.add(run)
-    job = WriteJob(
-        chapter_id=chapter.id,
-        job_id=job_id,
-        kind="extract",
-        extractor=extractor,
-        extractor_user_message=message,
-        selected_characters=selected_characters,
-    )
-    try:
-        write_registry.reserve(job)
-    except WriteJobConflict:
-        db.rollback()
-        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行，不能接受旧草稿"})
-    chapter.status = "extracting"
-    db.commit()
-    write_registry.launch(job, SessionLocal)
-    return WriteJobStatus(
-        chapter_id=chapter.id,
-        job_id=job_id,
-        kind="extract",
-        phase="extracting",
-        checker_result=run.checker_result,
+
+
+@router.post("/chapters/{chapter_id}/archive/retry", response_model=WriteJobStatus)
+def retry_chapter_archive(
+    chapter_id: str,
+    payload: ArchiveRetryRequest = ArchiveRetryRequest(),
+    db: Session = Depends(get_db),
+    extractor_client=Depends(get_extractor_client),
+) -> WriteJobStatus:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    if chapter.status != "finalized":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "chapter_not_finalized", "message": "正文尚未接受，不能单独重试归档"},
+        )
+    if payload.provenance == "selective_reextract":
+        actual_draft_sha256 = hashlib.sha256(chapter.draft_text.encode()).hexdigest()
+        if payload.expected_draft_sha256 != actual_draft_sha256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "archive_report_mismatch",
+                    "message": "章节正文已不同于用户确认的候选报告，已拒绝历史重提",
+                },
+            )
+    return _start_archive_job(
+        db,
+        chapter,
+        extractor_client,
+        provenance=payload.provenance,
+        draft_check_fingerprint=draft_fingerprint(chapter, chapter.draft_text),
     )
 
 
@@ -586,8 +687,13 @@ def reopen_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRea
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    previous_archive_fingerprint = archive_input_fingerprint(chapter)
     chapter.status = "draft_ready"
-    db.execute(delete(CharacterStateChange).where(CharacterStateChange.chapter_id == chapter.id))
+    # Reopening invalidates v2 selection, but legacy rows remain auditable.
+    invalidate_archive_if_input_changed(
+        db, chapter, previous_fingerprint=previous_archive_fingerprint, force=True
+    )
+    invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
     rebuild_book_projection(db, chapter.book_id)
     db.commit()
     db.refresh(chapter)

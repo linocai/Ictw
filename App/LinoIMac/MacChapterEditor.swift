@@ -475,8 +475,71 @@ struct MacChapterEditor: View {
 
     // MARK: - Extractor 结果段
 
+    @ViewBuilder
     private var extractionCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        if let archive = editor.currentChapter?.archive, archive.archiveSchema != "legacy" {
+            VStack(alignment: .leading, spacing: 12) {
+                stageHeader(
+                    index: archive.status == "complete" ? "✓" : "→",
+                    title: archive.status == "complete" ? "正文已接受 · 记忆归档完成" : "正文已接受 · 记忆归档\(archiveStatusLabel(archive.status))",
+                    subtitle: "归档失败不会撤销正文，未通过的事实不会进入 Memory Selector。"
+                )
+                if archive.status == "complete" {
+                    labeledText("章节摘要", archive.summary)
+                    if !archive.facts.isEmpty {
+                        LinoISectionLabel("事实账本 · \(archive.facts.count) 条")
+                        ForEach(archive.facts) { fact in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(fact.type)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(LinoTheme.accent)
+                                Text(fact.text)
+                                    .font(LinoType.serif(12.5))
+                                    .foregroundStyle(LinoTheme.body)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    if archive.stateDeltaCount > 0 {
+                        Text("已验证 \(archive.stateDeltaCount) 项章末状态变化")
+                            .font(.system(size: 11))
+                            .foregroundStyle(LinoTheme.muted)
+                    }
+                } else if let reason = archive.errorMessage, !reason.isEmpty {
+                    Text(reason)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(LinoTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if archive.canRetry && archive.status != "pending" && archive.status != "extracting" {
+                    Button("重新归档") {
+                        Task {
+                            if let chapter = await editor.retryArchive() { workspace.upsert(chapter) }
+                        }
+                    }
+                    .buttonStyle(LinoITintButtonStyle(compact: true))
+                    .disabled(editor.writingPhase.isActive)
+                }
+            }
+            .padding(16)
+            .linoPanelGlass(cornerRadius: LinoMacMetrics.cardRadius)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+            if let archive = editor.currentChapter?.archive,
+               ["partial", "failed", "stale"].contains(archive.latestAttemptStatus ?? "") {
+                Text("新版记忆归档未完成；当前仍使用旧版记忆。")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(LinoTheme.warning)
+                if let reason = archive.errorMessage, !reason.isEmpty {
+                    Text(reason).font(.system(size: 11)).foregroundStyle(LinoTheme.muted)
+                }
+                Button("重新归档") {
+                    Task {
+                        if let chapter = await editor.retryArchive() { workspace.upsert(chapter) }
+                    }
+                }
+                .buttonStyle(LinoITintButtonStyle(compact: true))
+            }
             stageHeader(index: "✓", title: "Extractor 结果", subtitle: "接受章节后生成，重新接受会覆盖旧提取结果，也可以手动修改。")
             VStack(alignment: .leading, spacing: 8) {
                 LinoISectionLabel("大事记")
@@ -504,9 +567,21 @@ struct MacChapterEditor: View {
             .buttonStyle(LinoITintButtonStyle(compact: true))
             .disabled(editor.writingPhase.isActive)
             .onHover { pointer($0 && !editor.writingPhase.isActive) }
+            }
+            .padding(16)
+            .linoPanelGlass(cornerRadius: LinoMacMetrics.cardRadius)
         }
-        .padding(16)
-        .linoPanelGlass(cornerRadius: LinoMacMetrics.cardRadius)
+    }
+
+    private func archiveStatusLabel(_ status: String) -> String {
+        switch status {
+        case "pending": return "等待中"
+        case "extracting": return "进行中"
+        case "partial": return "未通过校验"
+        case "failed": return "失败"
+        case "stale": return "已失效"
+        default: return status
+        }
     }
 
     @ViewBuilder private func archiveItems(_ title: String, _ items: [JSONValue]) -> some View {
@@ -584,7 +659,7 @@ struct MacChapterEditor: View {
                 case .retryGeneration:
                     chapter = await editor.generate()
                 case .retryExtraction:
-                    chapter = await editor.accept()
+                    chapter = await editor.retryArchive()
                 }
                 if let chapter {
                     workspace.upsert(chapter)

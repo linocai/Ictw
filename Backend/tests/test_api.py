@@ -234,7 +234,7 @@ def test_extractor_rejects_unknown_character_name_without_partial_writes(client,
     assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"] == []
 
 
-def test_selected_extractor_item_malformed_restores_draft_ready(client, auth_headers, wait_for_terminal):
+def test_malformed_archive_keeps_accepted_prose_and_marks_archive_partial(client, auth_headers, wait_for_terminal):
     class BadExtractor:
         def complete_json(self, **kwargs):
             return {
@@ -264,7 +264,9 @@ def test_selected_extractor_item_malformed_restores_draft_ready(client, auth_hea
     assert status["phase"] == "failed"
     assert status["job_id"]
     assert status["outcome_current"] is True
-    assert client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()["status"] == "draft_ready"
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert current["status"] == "finalized"
+    assert current["archive"]["status"] == "partial"
     client.patch(
         f"/api/v1/chapters/{chapter['id']}",
         headers=auth_headers,

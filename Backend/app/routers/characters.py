@@ -5,7 +5,17 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Book, Character, CharacterEvent, CharacterStateChange, Chapter
+from app.models import (
+    Book,
+    Chapter,
+    ChapterArchiveFact,
+    ChapterArchiveFactParticipant,
+    ChapterArchiveRevision,
+    ChapterArchiveStateDelta,
+    Character,
+    CharacterEvent,
+    CharacterStateChange,
+)
 from app.schemas.character import (
     CharacterCreate,
     CharacterEventPatch,
@@ -16,6 +26,7 @@ from app.schemas.character import (
 )
 from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
 from app.services.character_state_projection import rebuild_book_projection
+from app.services.archive_v2 import invalidate_archive_if_input_changed, invalidate_downstream_archives
 
 router = APIRouter(tags=["characters"])
 
@@ -51,6 +62,24 @@ def _character_read(db: Session, character: Character) -> CharacterRead:
             or_(CharacterStateChange.character_id == character.id, CharacterStateChange.other_character_id == character.id),
         )
     )
+    v2_updated_index = db.scalar(
+        select(func.max(Chapter.index))
+        .join(ChapterArchiveRevision, ChapterArchiveRevision.chapter_id == Chapter.id)
+        .join(ChapterArchiveStateDelta, ChapterArchiveStateDelta.revision_id == ChapterArchiveRevision.id)
+        .where(
+            ChapterArchiveRevision.is_active.is_(True),
+            ChapterArchiveRevision.status == "complete",
+            ChapterArchiveStateDelta.is_effective.is_(True),
+            or_(
+                ChapterArchiveStateDelta.character_id == character.id,
+                ChapterArchiveStateDelta.other_character_id == character.id,
+            ),
+        )
+    )
+    if v2_updated_index is not None:
+        data.dynamic_fields_updated_chapter_index = max(
+            data.dynamic_fields_updated_chapter_index or 0, v2_updated_index
+        )
     data.events = []
     for event in events:
         data.events.append(
@@ -64,8 +93,43 @@ def _character_read(db: Session, character: Character) -> CharacterRead:
                 created_at=event.created_at,
                 updated_at=event.updated_at,
                 chapter_index=event.chapter.index,
+                source="legacy",
+                editable=True,
             )
         )
+    v2_facts = db.execute(
+        select(ChapterArchiveFact, Chapter)
+        .join(ChapterArchiveRevision, ChapterArchiveFact.revision_id == ChapterArchiveRevision.id)
+        .join(Chapter, ChapterArchiveRevision.chapter_id == Chapter.id)
+        .join(
+            ChapterArchiveFactParticipant,
+            ChapterArchiveFactParticipant.fact_id == ChapterArchiveFact.id,
+        )
+        .where(
+            ChapterArchiveFactParticipant.character_id == character.id,
+            ChapterArchiveRevision.is_active.is_(True),
+            ChapterArchiveRevision.status == "complete",
+            Chapter.active_archive_revision_id == ChapterArchiveRevision.id,
+        )
+        .order_by(Chapter.index, ChapterArchiveFact.position)
+    ).all()
+    for fact, chapter in v2_facts:
+        data.events.append(
+            CharacterEventRead(
+                id=fact.id,
+                book_id=chapter.book_id,
+                character_id=character.id,
+                chapter_id=chapter.id,
+                event_type=fact.fact_type,
+                event_text=truncate_to_nonspace(fact.fact_text, CHARACTER_EVENT_MAX_CHARS),
+                created_at=fact.created_at,
+                updated_at=fact.created_at,
+                chapter_index=chapter.index,
+                source="archive_v2",
+                editable=False,
+            )
+        )
+    data.events.sort(key=lambda item: (item.chapter_index or 0, item.created_at, item.id))
     return data
 
 
@@ -133,8 +197,17 @@ def delete_character(character_id: str, db: Session = Depends(get_db)) -> Respon
     character = db.get(Character, character_id)
     if character is not None:
         book_id = character.book_id
+        affected_chapters = sorted(
+            (link.chapter for link in character.chapter_links), key=lambda chapter: chapter.index
+        )
+        for chapter in affected_chapters:
+            invalidate_archive_if_input_changed(db, chapter, force=True)
         db.delete(character)
         db.flush()
+        if affected_chapters:
+            invalidate_downstream_archives(
+                db, book_id, after_index=max(0, affected_chapters[0].index - 1)
+            )
         rebuild_book_projection(db, book_id)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

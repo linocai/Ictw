@@ -293,6 +293,11 @@ private struct LinoICharacterEventRow: View {
                 Text(event.chapterIndex.map { "第 \($0) 章" } ?? "章节")
                     .font(LinoType.ui(11, .semibold))
                     .foregroundStyle(LinoTheme.muted)
+                if event.editable == false {
+                    Text("已验证事实")
+                        .font(LinoType.ui(10, .semibold))
+                        .foregroundStyle(LinoTheme.accent)
+                }
 
                 if isEditing {
                     TextEditor(text: $draftText)
@@ -321,7 +326,7 @@ private struct LinoICharacterEventRow: View {
             }
 
             Spacer(minLength: 0)
-            if !isEditing {
+            if !isEditing && event.editable != false {
                 Menu {
                     Button("编辑", systemImage: "pencil") { draftText = event.eventText; isEditing = true }
                     Button("删除", systemImage: "trash", role: .destructive) { confirmingDelete = true }

@@ -129,7 +129,35 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
     previous = next((item for item in prior if item.index == chapter.index - 1), None)
     if previous is not None and previous.draft_text.strip():
         blocks.extend(_previous_ending_blocks(previous))
+    legacy_prior_ids: list[str] = []
+    from app.services.archive_v2 import active_archive_revision
     for item in prior:
+        revision = active_archive_revision(db, item)
+        if revision is not None:
+            if revision.summary.strip():
+                blocks.append(
+                    MemoryBlock(
+                        id=f"archive_v2:{revision.id}:summary",
+                        text=f"第 {item.index} 章摘要：{revision.summary.strip()}",
+                        chapter_index=item.index,
+                        memory_type="summary",
+                    )
+                )
+            for fact in revision.facts:
+                participant_ids = [participant.character_id for participant in fact.participants]
+                blocks.append(
+                    MemoryBlock(
+                        id=f"archive_v2_fact:{fact.id}",
+                        text=f"第 {item.index} 章{fact.fact_type}事实：{fact.fact_text.strip()}",
+                        chapter_index=item.index,
+                        character_id=participant_ids[0] if len(participant_ids) == 1 else None,
+                        memory_type="canonical_fact",
+                    )
+                )
+            continue
+        if not (item.legacy_archive_eligible or item.archive_input_fingerprint is None):
+            continue
+        legacy_prior_ids.append(item.id)
         canonical_summary = item.long_summary.strip()
         if canonical_summary:
             blocks.append(
@@ -156,11 +184,10 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                 )
             )
         blocks.extend(_archive_memory_blocks(item))
-    if prior:
-        prior_ids = [item.id for item in prior]
+    if legacy_prior_ids:
         events = db.scalars(
             select(CharacterEvent)
-            .where(CharacterEvent.book_id == chapter.book_id, CharacterEvent.chapter_id.in_(prior_ids))
+            .where(CharacterEvent.book_id == chapter.book_id, CharacterEvent.chapter_id.in_(legacy_prior_ids))
             .join(Chapter, CharacterEvent.chapter_id == Chapter.id)
             .order_by(Chapter.index, CharacterEvent.id)
         ).all()

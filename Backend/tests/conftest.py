@@ -60,6 +60,27 @@ class FakeExtractor:
     def complete_json(self, *, system: str, user: str, schema: dict, **kwargs):
         if self.fail:
             raise RuntimeError("extract failed")
+        if "facts" in schema.get("properties", {}):
+            import re
+
+            participant_schema = schema["properties"]["facts"]["items"]["properties"]["participant_names"]
+            names = participant_schema["items"].get("enum", [])
+            first_span = re.search(r"\[(P\d{4}-S\d{2})\]", user)
+            span_id = first_span.group(1) if first_span else "P0001-S01"
+            name = names[0] if names else ""
+            return {
+                "summary": "本章完成了关键行动。",
+                "facts": [{
+                    "fact_ref": "F1",
+                    "type": "剧情",
+                    "importance": 3,
+                    "text": f"{name}完成关键行动。" if name else "本章完成关键行动。",
+                    "participant_names": [name] if name else [],
+                    "start_id": span_id,
+                    "end_id": span_id,
+                }],
+                "end_state_delta": [],
+            }
         names = schema["properties"]["character_events"]["items"]["properties"]["character_name"]["enum"]
         name = names[0] if names else ""
         draft = user.rsplit("# 最终接受正文（原样）\n", 1)[-1]

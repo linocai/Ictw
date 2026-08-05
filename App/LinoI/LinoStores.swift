@@ -540,6 +540,29 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
+    /// Retries only the memory archive for prose the server has already
+    /// accepted. This never re-runs Checker or asks the user to accept again.
+    func retryArchive() async -> Chapter? {
+        guard !writingPhase.isActive else { return nil }
+        guard let saved = await save(), saved.status == "finalized" else { return nil }
+        ChapterTaskOutcomeStore.clear(chapterID: saved.id)
+        writingPhase = .extracting
+        do {
+            let status = try await session.api.retryArchive(chapterId: saved.id)
+            applyJobStatus(status, chapterId: saved.id)
+            if !Self.isTerminalPhase(status.phase) {
+                pollJob(chapterId: saved.id)
+            }
+            return currentChapter
+        } catch {
+            if await adoptRunningJobIfNeeded(error, chapterId: saved.id) {
+                return currentChapter
+            }
+            applyStartFailure(error, chapterId: saved.id, intendedStage: .extraction)
+            return nil
+        }
+    }
+
     func rerunChecker() async -> CheckerResult? {
         guard !writingPhase.isActive else { return nil }
         checkerRefreshing = true
@@ -668,7 +691,9 @@ final class ChapterEditorStore: ObservableObject {
     /// current chapter's server-side status still shows a job in flight.
     func handleScenePhaseActive() {
         guard let chapter = currentChapter else { return }
-        guard chapter.status == "writing" || chapter.status == "extracting" else { return }
+        guard chapter.status == "writing"
+                || chapter.archive?.status == "pending"
+                || chapter.archive?.status == "extracting" else { return }
         guard !writingPhase.isActive else { return }
         resumePollingIfNeeded()
     }
@@ -744,13 +769,13 @@ final class ChapterEditorStore: ObservableObject {
                 writingPhase = .writing
                 pollJob(chapterId: chapter.id)
             }
-        case "extracting":
-            if pollingChapterId != chapter.id {
-                writingPhase = .extracting
-                pollJob(chapterId: chapter.id)
-            }
         default:
-            if pollingChapterId != chapter.id {
+            if chapter.archive?.status == "pending" || chapter.archive?.status == "extracting" {
+                if pollingChapterId != chapter.id {
+                    writingPhase = .extracting
+                    pollJob(chapterId: chapter.id)
+                }
+            } else if pollingChapterId != chapter.id {
                 writingPhase = .idle
             }
         }
@@ -849,7 +874,7 @@ final class ChapterEditorStore: ObservableObject {
         case "extracting":
             failedCandidateCheckerResult = nil
             writingPhase = .extracting
-            setCurrentChapterStatus("extracting", chapterId: chapterId)
+            setCurrentChapterStatus("finalized", chapterId: chapterId)
         case "done":
             memoryContext = status.memoryContext ?? memoryContext
             failedCandidateCheckerResult = nil

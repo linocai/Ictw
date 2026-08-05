@@ -1012,8 +1012,95 @@ private struct LinoIChapterEditor: View {
         }
     }
 
+    @ViewBuilder
     private func extractionCard(_ chapter: Chapter) -> some View {
-        VStack(spacing: 0) {
+        if let archive = chapter.archive, archive.archiveSchema != "legacy" {
+            VStack(alignment: .leading, spacing: 13) {
+                HStack(spacing: 9) {
+                    Image(systemName: archive.status == "complete" ? "checkmark.seal.fill" : "archivebox")
+                        .foregroundStyle(archive.status == "complete" ? LinoTheme.success : LinoTheme.warning)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(archive.status == "complete" ? "正文已接受 · 记忆归档完成" : "正文已接受 · 记忆归档\(archiveStatusLabel(archive.status))")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(LinoTheme.ink)
+                        Text("正文接受与记忆归档彼此独立；归档失败不会撤销正文。")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(LinoTheme.muted)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                if archive.status == "complete" {
+                    labeledText("章节摘要", archive.summary, serif: true)
+                    if !archive.facts.isEmpty {
+                        VStack(alignment: .leading, spacing: 9) {
+                            LinoISectionLabel("事实账本 · \(archive.facts.count) 条")
+                            ForEach(archive.facts) { fact in
+                                HStack(alignment: .top, spacing: 9) {
+                                    Text(fact.type)
+                                        .font(.system(size: 10.5, weight: .semibold))
+                                        .foregroundStyle(LinoTheme.accent)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 3)
+                                        .background(LinoTheme.accent.opacity(0.08), in: Capsule())
+                                    Text(fact.text)
+                                        .font(LinoType.serif(13.5))
+                                        .lineSpacing(7)
+                                        .foregroundStyle(LinoTheme.ink2)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                    }
+                    if archive.stateDeltaCount > 0 {
+                        Text("已验证 \(archive.stateDeltaCount) 项章末状态变化")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(LinoTheme.muted)
+                    }
+                } else if let reason = archive.errorMessage, !reason.isEmpty {
+                    Text(reason)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(LinoTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if archive.canRetry && archive.status != "extracting" && archive.status != "pending" {
+                    Button("重新归档") {
+                        Task {
+                            if let refreshed = await editor.retryArchive() {
+                                workspace.upsert(refreshed)
+                            }
+                        }
+                    }
+                    .buttonStyle(LinoITintButtonStyle(compact: true))
+                    .disabled(editor.writingPhase.isActive)
+                }
+            }
+            .padding(14)
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(cardStroke(14))
+        } else {
+            VStack(spacing: 0) {
+            if let archive = chapter.archive,
+               ["partial", "failed", "stale"].contains(archive.latestAttemptStatus ?? "") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("新版记忆归档未完成；当前仍使用旧版记忆。")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(LinoTheme.warning)
+                    if let reason = archive.errorMessage, !reason.isEmpty {
+                        Text(reason).font(.system(size: 11.5)).foregroundStyle(LinoTheme.muted)
+                    }
+                    Button("重新归档") {
+                        Task {
+                            if let refreshed = await editor.retryArchive() { workspace.upsert(refreshed) }
+                        }
+                    }
+                    .buttonStyle(LinoITintButtonStyle(compact: true))
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .bottom) { Rectangle().fill(LinoTheme.line).frame(height: 1) }
+            }
             archiveEditableRow("大事记") {
                 TextField("大事记", text: chapterBinding(\.headline), axis: .vertical)
                     .textFieldStyle(.plain)
@@ -1051,11 +1138,23 @@ private struct LinoIChapterEditor: View {
                 .disabled(editor.writingPhase.isActive)
             }
             .padding(14)
+            }
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(cardStroke(14))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: Color.black.opacity(0.035), radius: 2, y: 1)
         }
-        .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(cardStroke(14))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow(color: Color.black.opacity(0.035), radius: 2, y: 1)
+    }
+
+    private func archiveStatusLabel(_ status: String) -> String {
+        switch status {
+        case "pending": return "等待中"
+        case "extracting": return "进行中"
+        case "partial": return "未通过校验"
+        case "failed": return "失败"
+        case "stale": return "已失效"
+        default: return status
+        }
     }
 
     private func archiveEditableRow<Content: View>(
@@ -1268,7 +1367,7 @@ private struct LinoIChapterEditor: View {
                 case .retryGeneration:
                     chapter = await editor.generate()
                 case .retryExtraction:
-                    chapter = await editor.accept()
+                    chapter = await editor.retryArchive()
                 }
                 if let chapter {
                     workspace.upsert(chapter)
