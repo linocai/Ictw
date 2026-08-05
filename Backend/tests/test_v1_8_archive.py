@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,7 @@ from app.services.archive_v2 import (
     validate_archive_output,
 )
 from app.services.context import memory_candidates
+from app.services.character_state_projection import project_state_changes
 from scripts.report_archive_reextract_candidates import classify_candidate
 
 
@@ -105,6 +107,9 @@ def test_v2_contract_exposes_the_span_recommendation_to_the_model():
     assert schema["properties"]["summary"]["maxLength"] == MAX_SUMMARY_CHARS
     delta_schema = schema["properties"]["end_state_delta"]["items"]
     assert delta_schema["properties"]["value"]["anyOf"][0]["maxLength"] == MAX_STATE_VALUE_CHARS
+    assert "scope" not in delta_schema["properties"]
+    assert "other_character_name" not in delta_schema["required"]
+    assert "scope" not in delta_schema["required"]
 
 
 def test_validator_canonicalizes_unique_model_fact_refs_and_delta_links(
@@ -156,6 +161,77 @@ def test_validator_canonicalizes_unique_model_fact_refs_and_delta_links(
         output["facts"][1]["fact_ref"] = "major-event"
         with pytest.raises(ArchiveV2ValidationError, match="duplicate fact_ref"):
             validate_archive_output(chapter, output)
+
+
+def test_validator_accepts_sparse_state_from_any_fact_and_infers_scope(client, auth_headers):
+    _, character, chapter_data = _book_character_chapter(client, auth_headers)
+    import app.routers.chapters as chapters_router
+
+    with chapters_router.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_data["id"])
+        span = segment_source(chapter.draft_text)[0].id
+        output = {
+            "summary": "林夕完成决定并停下。",
+            "facts": [{
+                "fact_ref": "decision",
+                "type": "决定",
+                "importance": 3,
+                "text": "林夕决定停在门边。",
+                "participant_names": ["林夕"],
+                "start_id": span,
+                "end_id": span,
+            }],
+            "end_state_delta": [{
+                "fact_ref": "decision",
+                "character_name": "林夕",
+                "slot": "当前位置",
+                "operation": "set",
+                "value": "门边",
+            }],
+        }
+
+        validated = validate_archive_output(chapter, output)
+        assert len(validated.deltas) == 1
+        assert validated.deltas[0].character_id == character["id"]
+        assert validated.deltas[0].scope == "snapshot"
+        assert validated.deltas[0].slot == "当前位置"
+
+        # Older/in-flight payloads may still contain a mismatched scope or a
+        # redundant selected name.  Slot is authoritative and both are safely
+        # ignored for non-relationship state.
+        output["end_state_delta"][0]["scope"] = "relationship"
+        output["end_state_delta"][0]["other_character_name"] = "林夕"
+        assert validate_archive_output(chapter, output).deltas[0].scope == "snapshot"
+
+
+def test_sparse_v2_snapshot_preserves_unchanged_volatile_slots():
+    character = SimpleNamespace(id="character", name="林夕")
+
+    def delta(row_id: str, batch_id: str, slot: str, value: str):
+        return SimpleNamespace(
+            id=row_id,
+            character_id=character.id,
+            other_character_id=None,
+            scope="snapshot",
+            slot=slot,
+            operation="set",
+            value=value,
+            batch_id=batch_id,
+        )
+
+    changes = [
+        delta("d1", "revision-1", "当前位置", "门边"),
+        delta("d2", "revision-1", "当前行动", "等待"),
+        delta("d3", "revision-1", "情绪状态", "平静"),
+        delta("d4", "revision-2", "当前位置", "窗边"),
+    ]
+
+    fields, _ = project_state_changes(changes, [character])
+    assert fields[character.id] == {
+        "当前位置": "窗边",
+        "当前行动": "等待",
+        "情绪状态": "平静",
+    }
 
 
 def test_validator_accepts_long_continuous_span_but_rejects_reversed_span():

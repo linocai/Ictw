@@ -87,10 +87,13 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
             },
             "character_name": name,
             "other_character_name": {"anyOf": [name, {"type": "null"}]},
-            "scope": {"type": "string", "enum": ["snapshot", "persistent", "relationship"]},
             "slot": {
                 "type": "string",
                 "enum": [*SNAPSHOT_SLOTS, *PERSISTENT_SLOTS, "relationship"],
+                "description": (
+                    "后端由 slot 机械确定状态类别；当前位置、当前行动、情绪状态可只输出实际变化项，"
+                    "身体状态、当前目标、秘密状态为持续状态，relationship 为人物关系。"
+                ),
             },
             "operation": {"type": "string", "enum": ["set", "clear"]},
             "value": {
@@ -101,7 +104,7 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
             },
         },
         "required": [
-            "fact_ref", "character_name", "other_character_name", "scope", "slot", "operation", "value"
+            "fact_ref", "character_name", "slot", "operation", "value"
         ],
         "additionalProperties": False,
     }

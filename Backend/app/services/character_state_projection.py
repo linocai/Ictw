@@ -71,8 +71,12 @@ def project_state_changes(
             batch_key = (change.character_id, change.batch_id)
             if batch_key not in snapshot_seen:
                 snapshot_seen.add(batch_key)
-                for slot in SNAPSHOT_SLOTS:
-                    fields.setdefault(change.character_id, {}).pop(slot, None)
+                # Legacy snapshots are complete three-slot replacements.  v2
+                # ledger deltas are intentionally sparse: an omitted volatile
+                # slot means unchanged, not cleared.
+                if isinstance(change, CharacterStateChange):
+                    for slot in SNAPSHOT_SLOTS:
+                        fields.setdefault(change.character_id, {}).pop(slot, None)
             key = (change.character_id, change.slot, None)
             if change.operation == "set" and change.value:
                 fields.setdefault(change.character_id, {})[change.slot] = change.value

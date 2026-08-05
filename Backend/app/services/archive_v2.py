@@ -43,7 +43,6 @@ MAX_FACT_REF_CHARS = 16
 MAX_FACT_TEXT_CHARS = 500
 MAX_STATE_VALUE_CHARS = 300
 FACT_TYPES = ("剧情", "决定", "关系", "认知", "未决", "状态")
-STATE_FACT_TYPES = {"状态", "关系"}
 _FORBIDDEN_VALUES = ("未知", "未明确", "不明确", "暂无", "无从得知", "待定")
 _SENTENCE_END = re.compile(r"(?<=[。！？!?；;])")
 
@@ -164,8 +163,9 @@ def build_archive_user_message(chapter: Chapter, prior_fields: dict[str, dict[st
                 "若同一事实确实跨越更多句子，可返回最小充分连续区间，但不得为了覆盖整段情节任意扩大。"
                 "代词叙事可以引用人物，但 participant_names 必须是白名单精确姓名；"
                 "无法可靠归属时留空并作章节级事实。关系事实必须恰好两人。"
-                "end_state_delta 只引用一条状态或关系 fact，不再改写事实。"
-                "snapshot 若有变化必须同时输出当前位置、当前行动、情绪状态三槽；"
+                "end_state_delta 只引用一条与变化有关的 fact，不再改写事实；fact 的类型不限制状态更新。"
+                "状态槽由 slot 机械决定，不需要输出 scope。snapshot 只输出实际变化的"
+                "当前位置、当前行动或情绪状态，不必为了凑齐三槽重复未变化内容；"
                 "persistent 只允许身体状态、当前目标、秘密状态；relationship 只允许关系槽。"
                 "没有明确章末净变化就不输出 delta，不得填未知或占位值。"
             ),
@@ -272,27 +272,24 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
 
     deltas: list[ValidatedDelta] = []
     delta_keys: set[tuple[Any, ...]] = set()
-    snapshot_slots: dict[str, set[str]] = {}
     for raw in raw_deltas:
         if not isinstance(raw, dict):
             raise ArchiveV2ValidationError("state delta must be an object")
-        if set(raw) != {
-            "fact_ref", "character_name", "other_character_name", "scope", "slot", "operation", "value"
-        }:
+        required_fields = {"fact_ref", "character_name", "slot", "operation", "value"}
+        allowed_fields = required_fields | {"other_character_name", "scope"}
+        if not required_fields.issubset(raw) or not set(raw).issubset(allowed_fields):
             raise ArchiveV2ValidationError("state delta contains unsupported fields")
         source_fact_ref = raw.get("fact_ref")
         fact = fact_by_source_ref.get(source_fact_ref.strip()) if isinstance(source_fact_ref, str) else None
         if fact is None:
             raise ArchiveV2ValidationError("state delta references an unknown fact")
-        if fact.fact_type not in STATE_FACT_TYPES:
-            raise ArchiveV2ValidationError("state delta must reference a status or relationship fact")
         name = raw.get("character_name")
         if not isinstance(name, str) or name not in name_to_id:
             raise ArchiveV2ValidationError("state delta references an unselected character")
         character_id = name_to_id[name]
         if character_id not in fact.participant_ids:
             raise ArchiveV2ValidationError("state delta owner must participate in its fact")
-        scope, slot, operation = raw.get("scope"), raw.get("slot"), raw.get("operation")
+        slot, operation = raw.get("slot"), raw.get("operation")
         value = raw.get("value")
         if operation not in {"set", "clear"}:
             raise ArchiveV2ValidationError("state delta operation must be set or clear")
@@ -305,22 +302,24 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
         elif value is not None:
             raise ArchiveV2ValidationError("clear state delta value must be null")
 
+        supplied_other_name = raw.get("other_character_name")
+        if supplied_other_name is not None and (
+            not isinstance(supplied_other_name, str) or supplied_other_name not in name_to_id
+        ):
+            raise ArchiveV2ValidationError("state delta references an unselected character")
+
         other_id: str | None = None
         batch_id = ""
-        if scope == "snapshot":
-            if slot not in SNAPSHOT_SLOTS or raw.get("other_character_name") is not None:
-                raise ArchiveV2ValidationError("snapshot delta shape is invalid")
+        if slot in SNAPSHOT_SLOTS:
+            scope = "snapshot"
             batch_id = f"snapshot:{character_id}"
-            snapshot_slots.setdefault(character_id, set()).add(slot)
             key = (character_id, scope, slot, None)
-        elif scope == "persistent":
-            if slot not in PERSISTENT_SLOTS or raw.get("other_character_name") is not None:
-                raise ArchiveV2ValidationError("persistent delta shape is invalid")
+        elif slot in PERSISTENT_SLOTS:
+            scope = "persistent"
             key = (character_id, scope, slot, None)
-        elif scope == "relationship":
-            if slot != "relationship":
-                raise ArchiveV2ValidationError("relationship delta slot is invalid")
-            other_name = raw.get("other_character_name")
+        elif slot == "relationship":
+            scope = "relationship"
+            other_name = supplied_other_name
             if not isinstance(other_name, str) or other_name not in name_to_id:
                 raise ArchiveV2ValidationError("relationship target must be selected")
             other_id = name_to_id[other_name]
@@ -331,16 +330,13 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
             character_id, other_id = sorted((character_id, other_id))
             key = (character_id, scope, slot, other_id)
         else:
-            raise ArchiveV2ValidationError("state delta scope is unsupported")
+            raise ArchiveV2ValidationError("state delta slot is unsupported")
         if key in delta_keys:
             raise ArchiveV2ValidationError("duplicate state delta slot")
         delta_keys.add(key)
         deltas.append(
             ValidatedDelta(fact.fact_ref, character_id, other_id, scope, str(slot), operation, value, batch_id)
         )
-    for slots in snapshot_slots.values():
-        if slots != set(SNAPSHOT_SLOTS):
-            raise ArchiveV2ValidationError("snapshot delta must contain all three ending-state slots")
     return ValidatedArchive(summary, tuple(facts), tuple(deltas))
 
 
