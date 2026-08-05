@@ -128,7 +128,12 @@ def _replace_links(db: Session, chapter: Chapter, links: list) -> None:
         character = db.get(Character, item.character_id)
         if character is None or character.book_id != chapter.book_id:
             raise HTTPException(status_code=400, detail=f"invalid character_id {item.character_id}")
-        chapter.character_links.append(ChapterCharacter(character_id=item.character_id))
+        # The archive fingerprint is recalculated before this transaction is
+        # committed. Bind the already-loaded Character as well as its ID so
+        # the in-memory relationship is immediately usable by that calculation.
+        chapter.character_links.append(
+            ChapterCharacter(character_id=item.character_id, character=character)
+        )
         seen.add(item.character_id)
     # Relationship-only edits do not otherwise issue an UPDATE for chapters,
     # so explicitly advance the authoritative version used by /job

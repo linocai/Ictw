@@ -150,6 +150,37 @@ def test_books_characters_chapters_flow_and_legacy_author_note(client, auth_head
     assert chapter["character_links"] == [{"character_id": character["id"], "chapter_note": ""}]
 
 
+def test_patch_chapter_can_add_and_resend_character_links(client, auth_headers):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters",
+        headers=auth_headers,
+        json={"name": "林夕"},
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"title": "第一章"},
+    ).json()
+    links = [{"character_id": character["id"]}]
+
+    added = client.patch(
+        f"/api/v1/chapters/{chapter['id']}",
+        headers=auth_headers,
+        json={"character_links": links},
+    )
+    assert added.status_code == 200
+    assert added.json()["character_links"] == [{"character_id": character["id"], "chapter_note": ""}]
+
+    resent = client.patch(
+        f"/api/v1/chapters/{chapter['id']}",
+        headers=auth_headers,
+        json={"character_links": links},
+    )
+    assert resent.status_code == 200
+    assert resent.json()["character_links"] == added.json()["character_links"]
+
+
 def test_accept_success_and_reaccept_replaces_events(client, auth_headers, wait_for_terminal):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     character = client.post(
