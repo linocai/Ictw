@@ -27,6 +27,8 @@
 - 能程序校验的约束必须程序复检，不能依赖模型自报“已修好”。
 - `thinking`/`effort` 是否发送由 `model_capabilities.py` 决定；实际非思考请求统一发送 `top_p=0.95`（包括未知模型），思考请求不发送 `top_p`。
 - 上游错误必须保留 `blockReason`/`finishReason` 的真实分类；不得把内容过滤伪装成普通失败，日志不得泄露 API Key、Prompt 或正文。
+- v1.8 接受正文与归档独立：接受后章节立即 `finalized`；Extractor 每个 revision 只调用一次，只有完整通过确定性校验的 `summary + canonical facts + end_state_delta` 才能激活。`partial`／`failed`／`stale` 不得进入 Selector、人物故事线或状态投影，重试不得重新跑 Checker。
+- v1.8 每个历史章节只能选择一个记忆来源：活跃 v2 ledger 优先，否则仅在 `legacy_archive_eligible` 时使用旧归档。历史重提必须来自 0600 只读报告、逐章正文哈希复核和用户精确 ID 确认；不得全量或按观察项自动调用模型。
 - 生产迁移必须先停旧服务再切换，禁止两台服务器同时接受写入。
 
 ## 验证命令
@@ -49,6 +51,7 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 
 ## 当前运维门禁
 
+- 双端／Backend `v1.8.0(30)` 已于 2026-08-05 完成事实账本架构升级与 Alembic `20260805_0010`：正文接受和归档解耦，Extractor 改为单次 `summary + canonical facts + end_state_delta`，Selector／人物页／状态投影按章单源消费，双端支持明确归档原因与独立重试。生产备份 `/opt/linoi/backups/20260805-165604`，现为 `61 legacy eligible / 0 v2 revisions`，说明没有历史 LLM 调用；硬候选仅 5 章、观察 11 章，精确清单见 `PROJECT_PLAN.md`，用户确认前不得执行。双端签名 Archive、iOS 本机 IPA、macOS 双架构 ZIP／换装已完成；tag 与 GitHub Release 为 `v1.8.0`，公开资产仅含 macOS ZIP。
 - `v1.7.2(29)` Backend Extractor 质量收敛补丁已于 2026-08-05 精确迁移旧版“200 字梗概／动态字段”人格并将生产温度从 0.3 降为 0.1；人物事件必须按重要性排序，每人最多 3 条、本章最多 8 条，同一人物的同一事件不得重复，超限／重复项逐条丢弃并随完成 Job 提示。不得增加模型调用或放松人物姓名、白名单与正文证据门禁。无 migration、客户端、版本或 Build 变化，生产备份 `/opt/linoi/backups/20260805-150015`；本补丁只推 main，不另建 tag／Release。
 - `v1.7.2(29)` Backend 跟进补丁已于 2026-08-04 将人物事件改为逐条严格校验：合格事件保留，类型／人物姓名／白名单／原文证据任一不合格的事件直接丢弃并随完成 Job 提示，不能再阻塞其余归档；不得通过改写证据或猜测归属挽救事件。无 migration、客户端或 Build 变化，生产备份 `/opt/linoi/backups/20260804-225041`；本补丁只推 main，不另建 tag／Release。
 - 双端／Backend `v1.7.2(29)` 已于 2026-08-04 完成 Extractor 截断／事件定向纠偏快修：完整归档输出预算提高到 8192 token，长度截断真实分类并在三次调用预算内自动压缩重试；取得完整归档后，人物事件校验失败只重提 `character_events`，不得改写其余归档，原有事件证据与人物白名单门禁不放松。Backend 无 migration，生产备份 `/opt/linoi/backups/20260804-222215`；tag 与 GitHub Release 为 `v1.7.2-build29`，公开资产仅含 macOS ZIP。

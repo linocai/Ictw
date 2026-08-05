@@ -1,14 +1,15 @@
 # ICTW PROJECT_PLAN
 
-> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。本轮已进入施工；截至当前仍未调用历史重提 LLM、未读取生产正文或任何书籍正文。
+> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。v1.8.0 已发布；截至当前仍未调用历史重提 LLM、未读取生产正文或任何书籍正文。
 
 ## 当前状态
 
 - 已批准目标：双端与 Backend `v1.8.0(30)`，以“可追溯事实账本”替换当前多份重叠的 Extractor 归档；需新的 Alembic migration。
-- 现行 `v1.7.2(29)` 是已发布的收敛快修：Extractor 仍同时写 `headline`、摘要、三个松散归档数组、人物事件和状态更新；在线路径可逐项 salvage，Selector 会同时消费摘要、数组和人物事件。这是本版要消除的结构性重复，不再继续叠加提示词补丁。
-- 当前代码事实：`chapters.status` 仍混合正文与 Extractor 阶段；`context.memory_candidates` 会叠加 legacy 摘要／数组／人物事件；`character_state_changes` 是可重放状态的 legacy 事实源。既有姓名白名单、候选稿隔离、Checker 门禁、真实上游错误分类与状态投影铁律继续适用。
+- 施工前基线 `v1.7.2(29)` 同时写 `headline`、摘要、三个松散归档数组、人物事件和状态更新；在线路径可逐项 salvage，Selector 会叠加摘要、数组和人物事件。v1.8 已停止扩展该路径，只保留 legacy adapter。
+- 施工前 `chapters.status` 混合正文与 Extractor 阶段，`character_state_changes` 是唯一可重放状态源；v1.8 已完成双生命周期和 mixed-source 投影。既有姓名白名单、候选稿隔离、Checker 门禁、真实上游错误分类与状态投影铁律继续适用。
 - 用户工作树资产只读保护：`.learnings/ERRORS.md`、`.learnings/LEARNINGS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/`；不得覆盖、回退、暂存或纳入本版。
-- 施工进度：v2 ledger、单调用 Extractor、正文／归档双生命周期、Selector 单源适配、状态混源重放、API／双端 UI、候选报告及确认执行门禁均已实现；Backend 全测、客户端状态测试与 iOS Debug 已通过，正在完成 migration 复核、macOS／签名 Archive、生产部署和发布。
+- 发布状态：双端与 Backend `v1.8.0(30)` 已完成实现、验证、生产迁移、签名 Archive、iOS 本机 IPA、macOS 双架构 ZIP 与本机换装；发布 tag／GitHub Release 为 `v1.8.0`，公开资产仅 macOS ZIP。历史重提仍保持零调用，等待下方 5 章精确确认。
+- 生产状态：备份 `/opt/linoi/backups/20260805-165604`，Alembic `20260805_0010`，内外网健康 `1.8.0`，`2 books / 61 chapters / 20 characters / 61 legacy eligible / 0 v2 revisions`，integrity／foreign keys、单实例、`NRestarts=0` 与部署后错误日志均通过。
 
 ## 目标与不做事项
 
@@ -75,14 +76,15 @@
 
 ### Phase 3 — 候选报告与用户确认
 
-状态：报告与逐章执行工具已完成；生产备份报告待部署门禁时复核，用户精确清单确认仍是历史重提硬停点。
+状态：生产备份报告已完成并复核；用户精确清单确认仍是历史重提硬停点。
 
 - 在备份副本运行只读审计命令，生成权限 0600、Git 忽略的报告；复核 5 个硬候选与观察项数量，不读／打印文本。将精确 ID／序号清单、计数、阈值和排除理由交用户确认。
 - 未获得确认：部署可包含 v2 新写作路径，但不得运行历史 re-extract。确认后只处理清单中的章节，按章单事务切换；非候选、观察项和仅有 salvage 历史的章节保持 legacy。
+- 当前硬候选精确清单（报告全文为 0600 且只含元数据）：《骁扬》第 6 章 `30f16a56-23ba-4c40-b3c2-e45cff11171f`（25 blocks／10 events／单人最多 5）、第 10 章 `b0d8063c-4cb3-48f1-af10-ad299e054bf6`（34／17／8）、第 14 章 `b073f6e2-41c5-48b8-946e-75fd64e76f52`（30／10／6）；《蔡言柃》第 40 章 `3809f0a1-7cad-4e45-9ad5-2e4de4804854`（28／9／5）、第 41 章 `217d3965-950a-4d1b-949d-4d65fb800cc3`（26／20／15）。另有 11 个观察项不自动重提，45 章排除；用户确认前这 5 章也不调用模型。
 
 ### Phase 4 — 验收、部署、选择性重提与发布
 
-状态：进行中；历史选择性重提保持未执行。
+状态：发布已完成；历史选择性重提保持未执行并作为唯一待用户确认项。
 
 - Backend 必跑完整 `pytest -q`、`compileall`、`alembic heads`、migration upgrade、`git diff --check`；覆盖 revision 并发／回滚、Selector 去重、投影混源、旧 client decode、API 状态和候选分类。跑 `App/Tests/run_client_state_tests.sh`、iOS 与 macOS Debug build；共享代码改动后双 target 均需通过，再做签名 Archive。
 - 生产顺序：停止旧服务→备份数据库、`.env`、代码及 unit/nginx（600）→SQLite integrity／foreign key／旧 head→部署已提交 Backend→`alembic upgrade head`→验证新 head/integrity/FK/单实例/健康/无敏感日志→启动服务。先验收新章 accepted+archive failed/complete 不互相回退；再执行经用户确认的逐章 shadow／激活。
