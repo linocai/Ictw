@@ -38,6 +38,10 @@ SOURCE_SPAN_VERSION = "sentence-v1"
 MAX_FACTS = 8
 MAX_FACT_SPAN_SENTENCES = 4
 MAX_STATE_DELTAS = 18
+MAX_SUMMARY_CHARS = 4000
+MAX_FACT_REF_CHARS = 16
+MAX_FACT_TEXT_CHARS = 500
+MAX_STATE_VALUE_CHARS = 300
 FACT_TYPES = ("剧情", "决定", "关系", "认知", "未决", "状态")
 STATE_FACT_TYPES = {"状态", "关系"}
 _FORBIDDEN_VALUES = ("未知", "未明确", "不明确", "暂无", "无从得知", "待定")
@@ -154,7 +158,10 @@ def build_archive_user_message(chapter: Chapter, prior_fields: dict[str, dict[st
             "# 本章开始前状态（只用于判断章末净变化）\n" + ("\n".join(state_lines) or "（无）"),
             (
                 "# 输出规则\nsummary 是唯一摘要。facts 按重要性排序，最多 8 条；"
-                "每条只表达一个可追溯事实，用连续 start_id/end_id 定位，不复制证据。"
+                "每条只表达一个可追溯事实。fact_ref 只需在本次输出内唯一，建议按 facts 数组顺序使用 F1、F2……；"
+                "后端会按数组顺序机械归一化编号。用正文中已有的连续 start_id/end_id 定位，不复制证据；"
+                f"首尾句均计入且每条事实的证据区间最多连续 {MAX_FACT_SPAN_SENTENCES} 句，超过时必须选择最小充分区间，"
+                "不得为了覆盖整段情节扩大区间。"
                 "代词叙事可以引用人物，但 participant_names 必须是白名单精确姓名；"
                 "无法可靠归属时留空并作章节级事实。关系事实必须恰好两人。"
                 "end_state_delta 只引用一条状态或关系 fact，不再改写事实。"
@@ -181,7 +188,7 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
         raise ArchiveV2ValidationError("archive output must be an object")
     if set(output) != {"summary", "facts", "end_state_delta"}:
         raise ArchiveV2ValidationError("archive output contains unsupported fields")
-    summary = _clean_text(output.get("summary"), field="summary", maximum=4000)
+    summary = _clean_text(output.get("summary"), field="summary", maximum=MAX_SUMMARY_CHARS)
     raw_facts = output.get("facts")
     raw_deltas = output.get("end_state_delta")
     if not isinstance(raw_facts, list):
@@ -202,7 +209,7 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
         name_to_id[name] = link.character_id
 
     facts: list[ValidatedFact] = []
-    fact_by_ref: dict[str, ValidatedFact] = {}
+    fact_by_source_ref: dict[str, ValidatedFact] = {}
     duplicate_facts: set[tuple[Any, ...]] = set()
     for position, raw in enumerate(raw_facts, start=1):
         if not isinstance(raw, dict):
@@ -211,18 +218,19 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
             "fact_ref", "type", "importance", "text", "participant_names", "start_id", "end_id"
         }:
             raise ArchiveV2ValidationError("fact contains unsupported fields")
-        fact_ref = _clean_text(raw.get("fact_ref"), field="fact_ref", maximum=16)
-        if fact_ref != f"F{position}":
-            raise ArchiveV2ValidationError("fact_ref must follow stable F1..F8 order")
-        if fact_ref in fact_by_ref:
+        source_fact_ref = _clean_text(
+            raw.get("fact_ref"), field="fact_ref", maximum=MAX_FACT_REF_CHARS
+        )
+        if source_fact_ref in fact_by_source_ref:
             raise ArchiveV2ValidationError("duplicate fact_ref")
+        fact_ref = f"F{position}"
         fact_type = raw.get("type")
         if fact_type not in FACT_TYPES:
             raise ArchiveV2ValidationError("fact type is unsupported")
         importance = raw.get("importance")
         if not isinstance(importance, int) or isinstance(importance, bool) or not 1 <= importance <= 3:
             raise ArchiveV2ValidationError("fact importance must be 1..3")
-        text = _clean_text(raw.get("text"), field="fact text", maximum=500)
+        text = _clean_text(raw.get("text"), field="fact text", maximum=MAX_FACT_TEXT_CHARS)
         raw_names = raw.get("participant_names")
         if not isinstance(raw_names, list) or len(raw_names) > 4:
             raise ArchiveV2ValidationError("participant_names must be an array of at most 4 names")
@@ -262,7 +270,7 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
             str(end_id),
         )
         facts.append(fact)
-        fact_by_ref[fact_ref] = fact
+        fact_by_source_ref[source_fact_ref] = fact
 
     deltas: list[ValidatedDelta] = []
     delta_keys: set[tuple[Any, ...]] = set()
@@ -274,8 +282,8 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
             "fact_ref", "character_name", "other_character_name", "scope", "slot", "operation", "value"
         }:
             raise ArchiveV2ValidationError("state delta contains unsupported fields")
-        fact_ref = raw.get("fact_ref")
-        fact = fact_by_ref.get(fact_ref) if isinstance(fact_ref, str) else None
+        source_fact_ref = raw.get("fact_ref")
+        fact = fact_by_source_ref.get(source_fact_ref.strip()) if isinstance(source_fact_ref, str) else None
         if fact is None:
             raise ArchiveV2ValidationError("state delta references an unknown fact")
         if fact.fact_type not in STATE_FACT_TYPES:
@@ -291,7 +299,9 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
         if operation not in {"set", "clear"}:
             raise ArchiveV2ValidationError("state delta operation must be set or clear")
         if operation == "set":
-            value = _clean_text(value, field="state delta value", maximum=300)
+            value = _clean_text(
+                value, field="state delta value", maximum=MAX_STATE_VALUE_CHARS
+            )
             if any(part in value for part in _FORBIDDEN_VALUES):
                 raise ArchiveV2ValidationError("state delta value cannot be unknown or a placeholder")
         elif value is not None:

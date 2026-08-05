@@ -5,7 +5,16 @@ from typing import Any
 
 from app.llm.base import LLMClient
 from app.services.character_state_projection import PERSISTENT_SLOTS, SNAPSHOT_SLOTS
-from app.services.archive_v2 import FACT_TYPES, MAX_FACTS, MAX_STATE_DELTAS
+from app.services.archive_v2 import (
+    FACT_TYPES,
+    MAX_FACTS,
+    MAX_FACT_REF_CHARS,
+    MAX_FACT_SPAN_SENTENCES,
+    MAX_FACT_TEXT_CHARS,
+    MAX_STATE_DELTAS,
+    MAX_STATE_VALUE_CHARS,
+    MAX_SUMMARY_CHARS,
+)
 from app.services.personas import compose_system_prompt
 
 
@@ -32,14 +41,29 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
     }
     fact = {
         "type": "object",
+        "description": (
+            f"一个事实及其最小充分证据区间；start_id 到 end_id 必须是正文中已有的连续句子编号，"
+            f"首尾均计入且最多 {MAX_FACT_SPAN_SENTENCES} 句。"
+        ),
         "properties": {
-            "fact_ref": {"type": "string"},
+            "fact_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_FACT_REF_CHARS,
+                "description": "本次输出内唯一的临时事实引用；建议依次使用 F1、F2……，后端会机械归一化。",
+            },
             "type": {"type": "string", "enum": list(FACT_TYPES)},
             "importance": {"type": "integer", "minimum": 1, "maximum": 3},
-            "text": {"type": "string"},
+            "text": {"type": "string", "minLength": 1, "maxLength": MAX_FACT_TEXT_CHARS},
             "participant_names": participant_array,
-            "start_id": {"type": "string"},
-            "end_id": {"type": "string"},
+            "start_id": {
+                "type": "string",
+                "description": f"正文中已有的起始句子编号；与 end_id 合计最多 {MAX_FACT_SPAN_SENTENCES} 句。",
+            },
+            "end_id": {
+                "type": "string",
+                "description": f"正文中已有的结束句子编号；与 start_id 合计最多 {MAX_FACT_SPAN_SENTENCES} 句。",
+            },
         },
         "required": [
             "fact_ref", "type", "importance", "text", "participant_names", "start_id", "end_id"
@@ -49,13 +73,26 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
     delta = {
         "type": "object",
         "properties": {
-            "fact_ref": {"type": "string"},
+            "fact_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_FACT_REF_CHARS,
+                "description": "必须精确引用 facts 中某条事实的临时 fact_ref。",
+            },
             "character_name": name,
             "other_character_name": {"anyOf": [name, {"type": "null"}]},
             "scope": {"type": "string", "enum": ["snapshot", "persistent", "relationship"]},
-            "slot": {"type": "string"},
+            "slot": {
+                "type": "string",
+                "enum": [*SNAPSHOT_SLOTS, *PERSISTENT_SLOTS, "relationship"],
+            },
             "operation": {"type": "string", "enum": ["set", "clear"]},
-            "value": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "value": {
+                "anyOf": [
+                    {"type": "string", "minLength": 1, "maxLength": MAX_STATE_VALUE_CHARS},
+                    {"type": "null"},
+                ]
+            },
         },
         "required": [
             "fact_ref", "character_name", "other_character_name", "scope", "slot", "operation", "value"
@@ -66,7 +103,7 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "summary": {"type": "string"},
+            "summary": {"type": "string", "minLength": 1, "maxLength": MAX_SUMMARY_CHARS},
             "facts": {"type": "array", "items": fact, "maxItems": MAX_FACTS},
             "end_state_delta": {
                 "type": "array",

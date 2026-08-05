@@ -1,15 +1,17 @@
 # ICTW PROJECT_PLAN
 
-> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。v1.8.0 已发布；用户确认的 5 章历史重提已各调用一次，均被确定性门禁安全拒绝，未读取或输出生产正文。
+> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。当前施工项为 `v1.8.0(31)` Extractor 合同漂移快修；Build 30 已发布，首次确认重提的 5 章均安全保留 legacy。
 
 ## 当前状态
 
-- 已批准目标：双端与 Backend `v1.8.0(30)`，以“可追溯事实账本”替换当前多份重叠的 Extractor 归档；需新的 Alembic migration。
+- 已批准目标：在已发布的双端与 Backend `v1.8.0(30)` 事实账本基础上，将双端 Build 升至 31；Backend 修复 `fact_ref` 与 source span 的提示词／Schema／Validator 合同漂移，无新 migration。
 - 施工前基线 `v1.7.2(29)` 同时写 `headline`、摘要、三个松散归档数组、人物事件和状态更新；在线路径可逐项 salvage，Selector 会叠加摘要、数组和人物事件。v1.8 已停止扩展该路径，只保留 legacy adapter。
 - 施工前 `chapters.status` 混合正文与 Extractor 阶段，`character_state_changes` 是唯一可重放状态源；v1.8 已完成双生命周期和 mixed-source 投影。既有姓名白名单、候选稿隔离、Checker 门禁、真实上游错误分类与状态投影铁律继续适用。
 - 用户工作树资产只读保护：`.learnings/ERRORS.md`、`.learnings/LEARNINGS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/`；不得覆盖、回退、暂存或纳入本版。
-- 发布状态：双端与 Backend `v1.8.0(30)` 已完成实现、验证、生产迁移、签名 Archive、iOS 本机 IPA、macOS 双架构 ZIP 与本机换装；发布 tag／GitHub Release 为 `v1.8.0`，公开资产仅 macOS ZIP。用户随后精确确认并执行了下方 5 章的单次 shadow 重提，未执行观察项或任何自动重试。
+- 发布状态：`v1.8.0(30)` 已完成；Build 31 快修正在施工。完成后须部署 Backend、制作双端签名包、iOS IPA 仅本机保留、换装 macOS，并发布独立 `v1.8.0-build31` tag／Release，公开资产仅 macOS ZIP。
 - 生产状态：部署备份 `/opt/linoi/backups/20260805-165604`，重提前备份 `/opt/linoi/backups/20260805-170938`，Alembic `20260805_0010`，内外网健康 `1.8.0`。5 次模型请求均正常结束但确定性校验未通过（2 次事实编号顺序、3 次 source span 过长），现为 `61 legacy eligible / 5 partial v2 revisions / 0 active v2 revisions`；正文与全部 legacy 记忆／人物状态哈希未变，integrity／foreign keys、零活动任务、`NRestarts=0` 与错误日志均通过。
+- Build 31 快修边界：模型只需提供本次输出内唯一的事实引用，后端按 facts 数组顺序机械归一化为 `F1..F8` 并同步重映射 delta；source span 仍最多连续 4 句，但该限制必须同时出现在提示词和 Schema 描述中。不得放松白名单、事实存在性、连续性、关系、状态槽、重复或整体激活门禁。
+- 快修发布后只对用户已确认的原 5 章各重试一次；先再备份、核对正文哈希和零活动任务。任章失败继续保留 legacy，不自动第三次调用；11 个观察项仍不得执行。
 
 ## 目标与不做事项
 

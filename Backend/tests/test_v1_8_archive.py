@@ -6,10 +6,17 @@ import re
 import pytest
 
 from app.llm.factory import get_extractor_client
+from app.agents.extractor import extractor_v2_schema
 from app.models import Chapter, ChapterArchiveRevision, CharacterEvent
 from app.services.archive_v2 import (
     ArchiveV2ValidationError,
+    MAX_FACT_REF_CHARS,
+    MAX_FACT_SPAN_SENTENCES,
+    MAX_FACT_TEXT_CHARS,
+    MAX_STATE_VALUE_CHARS,
+    MAX_SUMMARY_CHARS,
     archive_input_fingerprint,
+    build_archive_user_message,
     segment_source,
     validate_archive_output,
 )
@@ -82,6 +89,95 @@ def test_source_spans_are_stable_and_sentence_addressable():
     second = segment_source("甲停下。他回头！\n\n乙离开？")
     assert first == second
     assert [item.id for item in first] == ["P0001-S01", "P0001-S02", "P0002-S01"]
+
+
+def test_v2_contract_exposes_the_span_limit_to_the_model():
+    chapter = Chapter(book_id="book", index=1, draft_text="甲停下。乙回头。")
+    prompt = build_archive_user_message(chapter, {})
+    schema = extractor_v2_schema([])
+    fact_schema = schema["properties"]["facts"]["items"]
+
+    assert f"最多连续 {MAX_FACT_SPAN_SENTENCES} 句" in prompt
+    assert str(MAX_FACT_SPAN_SENTENCES) in fact_schema["description"]
+    assert "后端会机械归一化" in fact_schema["properties"]["fact_ref"]["description"]
+    assert fact_schema["properties"]["fact_ref"]["maxLength"] == MAX_FACT_REF_CHARS
+    assert fact_schema["properties"]["text"]["maxLength"] == MAX_FACT_TEXT_CHARS
+    assert schema["properties"]["summary"]["maxLength"] == MAX_SUMMARY_CHARS
+    delta_schema = schema["properties"]["end_state_delta"]["items"]
+    assert delta_schema["properties"]["value"]["anyOf"][0]["maxLength"] == MAX_STATE_VALUE_CHARS
+
+
+def test_validator_canonicalizes_unique_model_fact_refs_and_delta_links(
+    client, auth_headers
+):
+    _, _, chapter_data = _book_character_chapter(client, auth_headers)
+    import app.routers.chapters as chapters_router
+
+    with chapters_router.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_data["id"])
+        spans = segment_source(chapter.draft_text)
+        output = {
+            "summary": "两件事先后发生。",
+            "facts": [
+                {
+                    "fact_ref": "major-event",
+                    "type": "剧情",
+                    "importance": 3,
+                    "text": "林夕停在门边。",
+                    "participant_names": ["林夕"],
+                    "start_id": spans[0].id,
+                    "end_id": spans[0].id,
+                },
+                {
+                    "fact_ref": "ending-state",
+                    "type": "状态",
+                    "importance": 2,
+                    "text": "林夕章末继续等待。",
+                    "participant_names": ["林夕"],
+                    "start_id": spans[1].id,
+                    "end_id": spans[1].id,
+                },
+            ],
+            "end_state_delta": [{
+                "fact_ref": "ending-state",
+                "character_name": "林夕",
+                "other_character_name": None,
+                "scope": "persistent",
+                "slot": "当前目标",
+                "operation": "set",
+                "value": "等待",
+            }],
+        }
+
+        validated = validate_archive_output(chapter, output)
+        assert [fact.fact_ref for fact in validated.facts] == ["F1", "F2"]
+        assert validated.deltas[0].fact_ref == "F2"
+
+        output["facts"][1]["fact_ref"] = "major-event"
+        with pytest.raises(ArchiveV2ValidationError, match="duplicate fact_ref"):
+            validate_archive_output(chapter, output)
+
+
+def test_validator_accepts_four_sentence_span_and_rejects_five():
+    chapter = Chapter(book_id="book", index=1, draft_text="甲。乙。丙。丁。戊。")
+    output = {
+        "summary": "连续事件。",
+        "facts": [{
+            "fact_ref": "local-ref",
+            "type": "剧情",
+            "importance": 3,
+            "text": "连续事件发生。",
+            "participant_names": [],
+            "start_id": "P0001-S01",
+            "end_id": "P0001-S04",
+        }],
+        "end_state_delta": [],
+    }
+
+    assert validate_archive_output(chapter, output).facts[0].fact_ref == "F1"
+    output["facts"][0]["end_id"] = "P0001-S05"
+    with pytest.raises(ArchiveV2ValidationError, match="too long"):
+        validate_archive_output(chapter, output)
 
 
 def test_historical_candidate_thresholds_keep_observation_separate():
