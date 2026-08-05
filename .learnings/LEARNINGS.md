@@ -1,5 +1,38 @@
 # Learnings
 
+## [LRN-20260805-007] correction
+
+**Logged**: 2026-08-05T15:53:02+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: writing-pipeline
+
+### Summary
+
+v1.8 历史归档迁移不得全量重新调用 Extractor，只重提能用确定性指标证明明显膨胀的章节。
+
+### Details
+
+新事实账本需要兼容历史章节，但“架构升级”不等于让所有已定稿正文再次经过 LLM。全量重提会扩大成本、耗时和语义漂移风险，也可能覆盖本来已经足够稳定的摘要与人物记忆。正常历史章节必须原样保留或通过不调用模型的兼容适配继续参与记忆；只有人物事件、松散归档块或未来 Selector 候选数量显著超限的章节进入影子重提。
+
+### Suggested Action
+
+在 v1.8 计划中定义可审计的自动候选阈值、只读报告和人工确认清单。候选章节使用新合同生成影子归档并逐章原子激活；非候选章节不调用 LLM、不改现有归档。仅有降级记录但没有明显膨胀的章节不得自动纳入重提，可单列为观察项。
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: PROJECT_PLAN.md, Backend/app/services/context.py, Backend/app/services/extraction.py
+- Tags: extractor-v2, selective-reextract, migration, shadow-archive, cost-control
+- See Also: LRN-20260805-006
+
+### Resolution
+
+- **Resolved**: 2026-08-05T16:06:00+08:00
+- **Notes**: v1.8.0(30) 正式计划已改为两级只读候选报告：约两倍均值的 5 个硬候选仅提交确认，11 个观察候选不自动处理；用户确认精确章节清单前零历史 LLM 调用，非候选章节保持 legacy 且不重提。
+
+---
+
 ## [LRN-20260805-006] correction
 
 **Logged**: 2026-08-05T00:20:00+08:00
