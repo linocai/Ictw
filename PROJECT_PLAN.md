@@ -1,6 +1,6 @@
 # ICTW PROJECT_PLAN
 
-> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。`v1.8.1(32)` 宽松校验快修已完成发布；v1.8 事实账本架构不变，不自动重提历史章节。
+> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。`v1.8.1(32)` 宽松校验快修已完成发布；用户确认的四章重提已执行，1 章新激活、3 章安全保留 legacy。
 
 ## 当前状态
 
@@ -9,7 +9,7 @@
 - 施工前 `chapters.status` 混合正文与 Extractor 阶段，`character_state_changes` 是唯一可重放状态源；v1.8 已完成双生命周期和 mixed-source 投影。既有姓名白名单、候选稿隔离、Checker 门禁、真实上游错误分类与状态投影铁律继续适用。
 - 用户工作树资产只读保护：`.learnings/ERRORS.md`、`.learnings/LEARNINGS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/`；不得覆盖、回退、暂存或纳入本版。
 - 发布状态：`v1.8.1(32)` 已完成 Backend 部署、双端签名 Archive、iOS 本机 IPA、macOS 双架构 ZIP 与本机换装；tag／GitHub Release 为 `v1.8.1`，公开资产仅 macOS ZIP，App Store Connect 未上传。
-- 生产状态：部署备份 `/opt/linoi/backups/20260805-180502`，Alembic 保持 `20260805_0010`，内外网健康 `1.8.1`。部署未发起任何历史模型调用，数据保持 `60 legacy eligible / 14 partial v2 revisions / 1 active v2 revision / 8 facts / 10 deltas`；61 章、20 张人物卡、305 条人物事件、296 条 legacy 状态及全部 v2 revision/facts/deltas 与备份逐表一致，混合来源投影重放完全一致，integrity／foreign keys、零活动任务、`NRestarts=0` 与错误日志均通过。
+- 生产状态：部署备份 `/opt/linoi/backups/20260805-180502`，确认重提前备份 `/opt/linoi/backups/20260805-181311`，Alembic 保持 `20260805_0010`，内外网健康 `1.8.1`。用户确认后仅对第三轮仍失败的 4 章各调用一次：《骁扬》第 14 章以 8 facts／8 deltas 激活，其余 3 章被关系目标、重复状态槽、owner 参与事实门禁拒绝并继续使用 legacy；已成功的《蔡言柃》第 41 章及 11 个观察项未调用。现为 `59 legacy eligible / 17 partial v2 revisions / 2 active v2 revisions / 16 facts / 18 deltas`；正文、legacy 摘要／数组、305 条人物事件、296 条 legacy 状态载荷和固定人物卡未变化，混合来源投影重放完全一致，integrity／foreign keys、零活动任务、`NRestarts=0` 与错误日志均通过。
 - v1.8.1 快修边界：delta 可引用任何具有正文证据且人物归属匹配的 canonical fact；后端由 slot 机械推导 snapshot／persistent／relationship，不再要求模型填写 scope。位置／行动／情绪只输出实际变化项，未输出项保持原状态；非关系项多余的已选人物字段忽略。正文 source ID、人物白名单、owner 参与、关系双方、未知占位、重复、fingerprint 与整体原子激活门禁不放松。
 - Build 31 快修边界：模型只需提供本次输出内唯一的事实引用，后端按 facts 数组顺序机械归一化为 `F1..F8` 并同步重映射 delta。source span 的“4 句”改为提示词与 Schema 中的精度建议，不再把真实但较长的连续事件区间作为事实安全失败；ID 存在性、首尾顺序、连续区间、白名单、关系、状态槽、重复和整体激活门禁仍严格保留。
 - 快修中已对用户确认的原 5 章各重试一次：先备份并核对哈希，结果五章均只剩 source span 长度失败并继续使用 legacy。随后将 4 句从安全门禁降为精度建议并部署最终代码；用户再次明确确认后才执行第三轮，每章仍只调用一次且未自动进行第四轮。11 个观察项仍不得执行。
@@ -79,12 +79,13 @@
 
 ### Phase 3 — 候选报告与用户确认
 
-状态：已完成；用户精确确认的 5 个硬候选已执行三轮，每轮每章一次，观察项未执行。
+状态：已完成；用户精确确认的 5 个硬候选已执行三轮，v1.8.1 后又仅确认重提其中 4 个失败项；观察项未执行。
 
 - 在备份副本运行只读审计命令，生成权限 0600、Git 忽略的报告；复核 5 个硬候选与观察项数量，不读／打印文本。将精确 ID／序号清单、计数、阈值和排除理由交用户确认。
-- 未获得确认：部署可包含 v2 新写作路径，但不得运行历史 re-extract。确认后只处理清单中的章节，按章单事务切换；非候选、观察项和仅有 salvage 历史的章节保持 legacy。三轮均分别获得确认并各调用 5 次，累计 15 次；没有清单外调用。
+- 未获得确认：部署可包含 v2 新写作路径，但不得运行历史 re-extract。确认后只处理清单中的章节，按章单事务切换；非候选、观察项和仅有 salvage 历史的章节保持 legacy。前三轮均分别获得确认并各调用 5 次；v1.8.1 后第四次确认只调用仍失败的 4 章，累计 19 次，没有清单外调用。
 - 已确认硬候选精确清单（报告全文为 0600 且只含元数据）：《骁扬》第 6 章 `30f16a56-23ba-4c40-b3c2-e45cff11171f`（25 blocks／10 events／单人最多 5）、第 10 章 `b0d8063c-4cb3-48f1-af10-ad299e054bf6`（34／17／8）、第 14 章 `b073f6e2-41c5-48b8-946e-75fd64e76f52`（30／10／6）；《蔡言柃》第 40 章 `3809f0a1-7cad-4e45-9ad5-2e4de4804854`（28／9／5）、第 41 章 `217d3965-950a-4d1b-949d-4d65fb800cc3`（26／20／15）。执行结果：《骁扬》6、14 章因 `fact_ref` 顺序不合约被拒，《骁扬》10 章与《蔡言柃》40、41 章因 source span 过长被拒；五章均保留 legacy，11 个观察项与 45 个排除项未调用模型。
 - Build 31 第一层修复部署后第二轮结果：五章的 `fact_ref` 均已由后端成功归一化，但五章全部在 4 句 span 上限处停止；因此仍为非活跃 partial 且零 facts／deltas。最终代码取消该非安全性硬失败后，用户确认第三轮：五次均正常 `stop`；《蔡言柃》第 41 章完整通过并以 8 facts／10 deltas 激活，《骁扬》第 6、10 章与《蔡言柃》第 40 章因 delta 引用了非“状态／关系”事实被拒，《骁扬》第 14 章因 snapshot delta 形状不合约被拒。四个失败 revision 均非活动、零 facts／deltas并继续使用 legacy；未自动进行第四轮。
+- v1.8.1 上线后用户再次确认只重提上述 4 个失败项：四次均正常 `stop`；《骁扬》第 14 章完整通过并激活，《骁扬》第 6 章因 relationship target 非已选人物、第 10 章因同人物同槽重复、《蔡言柃》第 40 章因 delta owner 未参与其引用事实被拒。三个失败 revision 均非活动、零 facts／deltas并继续使用 legacy；未自动追加第五轮。
 
 ### Phase 4 — 验收、部署、选择性重提与发布
 
@@ -103,7 +104,7 @@
 
 ## 里程碑索引
 
-- `v1.8.1(32)`：保持 v1.8 ledger 与整体激活，移除 delta 的事实类型限制，由 slot 推导 scope，并将 v2 即时状态改为稀疏更新。Backend 备份 `/opt/linoi/backups/20260805-180502`；无 migration、无历史重提，生产数据逐表不变。双端正式产物与 macOS 换装完成，tag／Release 为 `v1.8.1`。
+- `v1.8.1(32)`：保持 v1.8 ledger 与整体激活，移除 delta 的事实类型限制，由 slot 推导 scope，并将 v2 即时状态改为稀疏更新。Backend 部署备份 `/opt/linoi/backups/20260805-180502`；用户确认重提前备份 `/opt/linoi/backups/20260805-181311`，四章中 1 章激活、3 章安全保留 legacy，未自动追加调用。双端正式产物与 macOS 换装完成，tag／Release 为 `v1.8.1`。
 - `v1.8.0(31)`：事实引用改由后端机械编号，提示词／Schema 与长度／槽位规则对齐；真实第二轮证明 4 句 span 不适合作硬失败，最终改为精度建议。Backend 最终部署备份 `/opt/linoi/backups/20260805-173736`；经再次确认的第三轮重提前备份 `/opt/linoi/backups/20260805-174557`，结果 1 章激活 v2、4 章安全保留 legacy，累计为 14 partial／1 active，未自动进行第四轮。
 - `v1.8.0(30)`：事实账本架构、生产 migration、双端发布均完成；确认的 5 章历史重提各调用一次后均被确定性门禁拒绝，保留 legacy，重提前备份 `/opt/linoi/backups/20260805-170938`，未自动重试。
 - `v1.7.2(29)`：Extractor 截断、人物事件／状态保守降级快修已发布，生产备份 `/opt/linoi/backups/20260805-150015`；它是 v1.8 的 legacy 基线，不再扩展。
