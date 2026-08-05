@@ -36,7 +36,7 @@ ARCHIVE_SCHEMA_VERSION = 2
 ARCHIVE_CONTRACT_VERSION = "archive-v2.0"
 SOURCE_SPAN_VERSION = "sentence-v1"
 MAX_FACTS = 8
-MAX_FACT_SPAN_SENTENCES = 4
+RECOMMENDED_FACT_SPAN_SENTENCES = 4
 MAX_STATE_DELTAS = 18
 MAX_SUMMARY_CHARS = 4000
 MAX_FACT_REF_CHARS = 16
@@ -160,8 +160,8 @@ def build_archive_user_message(chapter: Chapter, prior_fields: dict[str, dict[st
                 "# 输出规则\nsummary 是唯一摘要。facts 按重要性排序，最多 8 条；"
                 "每条只表达一个可追溯事实。fact_ref 只需在本次输出内唯一，建议按 facts 数组顺序使用 F1、F2……；"
                 "后端会按数组顺序机械归一化编号。用正文中已有的连续 start_id/end_id 定位，不复制证据；"
-                f"首尾句均计入且每条事实的证据区间最多连续 {MAX_FACT_SPAN_SENTENCES} 句，超过时必须选择最小充分区间，"
-                "不得为了覆盖整段情节扩大区间。"
+                f"首尾句均计入，优先把证据收敛在连续 {RECOMMENDED_FACT_SPAN_SENTENCES} 句以内；"
+                "若同一事实确实跨越更多句子，可返回最小充分连续区间，但不得为了覆盖整段情节任意扩大。"
                 "代词叙事可以引用人物，但 participant_names 必须是白名单精确姓名；"
                 "无法可靠归属时留空并作章节级事实。关系事实必须恰好两人。"
                 "end_state_delta 只引用一条状态或关系 fact，不再改写事实。"
@@ -250,8 +250,6 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
         start, end = span_by_id[start_id], span_by_id[end_id]
         if end.ordinal < start.ordinal:
             raise ArchiveV2ValidationError("fact source span is reversed")
-        if end.ordinal - start.ordinal + 1 > MAX_FACT_SPAN_SENTENCES:
-            raise ArchiveV2ValidationError("fact source span is too long")
         duplicate_key = (
             fact_type,
             "".join(ch for ch in normalize_text(text).casefold() if ch.isalnum()),

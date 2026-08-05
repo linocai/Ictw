@@ -11,10 +11,10 @@ from app.models import Chapter, ChapterArchiveRevision, CharacterEvent
 from app.services.archive_v2 import (
     ArchiveV2ValidationError,
     MAX_FACT_REF_CHARS,
-    MAX_FACT_SPAN_SENTENCES,
     MAX_FACT_TEXT_CHARS,
     MAX_STATE_VALUE_CHARS,
     MAX_SUMMARY_CHARS,
+    RECOMMENDED_FACT_SPAN_SENTENCES,
     archive_input_fingerprint,
     build_archive_user_message,
     segment_source,
@@ -91,14 +91,14 @@ def test_source_spans_are_stable_and_sentence_addressable():
     assert [item.id for item in first] == ["P0001-S01", "P0001-S02", "P0002-S01"]
 
 
-def test_v2_contract_exposes_the_span_limit_to_the_model():
+def test_v2_contract_exposes_the_span_recommendation_to_the_model():
     chapter = Chapter(book_id="book", index=1, draft_text="甲停下。乙回头。")
     prompt = build_archive_user_message(chapter, {})
     schema = extractor_v2_schema([])
     fact_schema = schema["properties"]["facts"]["items"]
 
-    assert f"最多连续 {MAX_FACT_SPAN_SENTENCES} 句" in prompt
-    assert str(MAX_FACT_SPAN_SENTENCES) in fact_schema["description"]
+    assert f"连续 {RECOMMENDED_FACT_SPAN_SENTENCES} 句以内" in prompt
+    assert str(RECOMMENDED_FACT_SPAN_SENTENCES) in fact_schema["description"]
     assert "后端会机械归一化" in fact_schema["properties"]["fact_ref"]["description"]
     assert fact_schema["properties"]["fact_ref"]["maxLength"] == MAX_FACT_REF_CHARS
     assert fact_schema["properties"]["text"]["maxLength"] == MAX_FACT_TEXT_CHARS
@@ -158,7 +158,7 @@ def test_validator_canonicalizes_unique_model_fact_refs_and_delta_links(
             validate_archive_output(chapter, output)
 
 
-def test_validator_accepts_four_sentence_span_and_rejects_five():
+def test_validator_accepts_long_continuous_span_but_rejects_reversed_span():
     chapter = Chapter(book_id="book", index=1, draft_text="甲。乙。丙。丁。戊。")
     output = {
         "summary": "连续事件。",
@@ -176,7 +176,10 @@ def test_validator_accepts_four_sentence_span_and_rejects_five():
 
     assert validate_archive_output(chapter, output).facts[0].fact_ref == "F1"
     output["facts"][0]["end_id"] = "P0001-S05"
-    with pytest.raises(ArchiveV2ValidationError, match="too long"):
+    assert validate_archive_output(chapter, output).facts[0].end_id == "P0001-S05"
+    output["facts"][0]["start_id"] = "P0001-S05"
+    output["facts"][0]["end_id"] = "P0001-S01"
+    with pytest.raises(ArchiveV2ValidationError, match="reversed"):
         validate_archive_output(chapter, output)
 
 

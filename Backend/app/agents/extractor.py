@@ -9,11 +9,11 @@ from app.services.archive_v2 import (
     FACT_TYPES,
     MAX_FACTS,
     MAX_FACT_REF_CHARS,
-    MAX_FACT_SPAN_SENTENCES,
     MAX_FACT_TEXT_CHARS,
     MAX_STATE_DELTAS,
     MAX_STATE_VALUE_CHARS,
     MAX_SUMMARY_CHARS,
+    RECOMMENDED_FACT_SPAN_SENTENCES,
 )
 from app.services.personas import compose_system_prompt
 
@@ -43,7 +43,7 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
         "type": "object",
         "description": (
             f"一个事实及其最小充分证据区间；start_id 到 end_id 必须是正文中已有的连续句子编号，"
-            f"首尾均计入且最多 {MAX_FACT_SPAN_SENTENCES} 句。"
+            f"首尾均计入，优先不超过 {RECOMMENDED_FACT_SPAN_SENTENCES} 句；确需更多时仍必须使用最小充分连续区间。"
         ),
         "properties": {
             "fact_ref": {
@@ -58,11 +58,17 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
             "participant_names": participant_array,
             "start_id": {
                 "type": "string",
-                "description": f"正文中已有的起始句子编号；与 end_id 合计最多 {MAX_FACT_SPAN_SENTENCES} 句。",
+                "description": (
+                    f"正文中已有的起始句子编号；与 end_id 组成最小充分连续区间，"
+                    f"优先不超过 {RECOMMENDED_FACT_SPAN_SENTENCES} 句。"
+                ),
             },
             "end_id": {
                 "type": "string",
-                "description": f"正文中已有的结束句子编号；与 start_id 合计最多 {MAX_FACT_SPAN_SENTENCES} 句。",
+                "description": (
+                    f"正文中已有的结束句子编号；与 start_id 组成最小充分连续区间，"
+                    f"优先不超过 {RECOMMENDED_FACT_SPAN_SENTENCES} 句。"
+                ),
             },
         },
         "required": [
