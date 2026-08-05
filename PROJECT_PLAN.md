@@ -1,15 +1,16 @@
 # ICTW PROJECT_PLAN
 
-> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。`v1.8.0(31)` Extractor 合同漂移快修已完成；用户确认的第三轮重提已执行，1 章激活 v2、4 章安全保留 legacy。
+> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。`v1.8.1(32)` 宽松校验快修已完成发布；v1.8 事实账本架构不变，不自动重提历史章节。
 
 ## 当前状态
 
-- 已批准目标：在已发布的双端与 Backend `v1.8.0(30)` 事实账本基础上，将双端 Build 升至 31；Backend 修复 `fact_ref` 与 source span 的提示词／Schema／Validator 合同漂移，无新 migration。
+- 已批准目标：保持 v1.8 事实账本、Selector、fingerprint 与整体原子激活架构，将误杀正常语义的状态交叉字段限制放宽，并发布双端／Backend `v1.8.1(32)`；无新 migration。
 - 施工前基线 `v1.7.2(29)` 同时写 `headline`、摘要、三个松散归档数组、人物事件和状态更新；在线路径可逐项 salvage，Selector 会叠加摘要、数组和人物事件。v1.8 已停止扩展该路径，只保留 legacy adapter。
 - 施工前 `chapters.status` 混合正文与 Extractor 阶段，`character_state_changes` 是唯一可重放状态源；v1.8 已完成双生命周期和 mixed-source 投影。既有姓名白名单、候选稿隔离、Checker 门禁、真实上游错误分类与状态投影铁律继续适用。
 - 用户工作树资产只读保护：`.learnings/ERRORS.md`、`.learnings/LEARNINGS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/`；不得覆盖、回退、暂存或纳入本版。
-- 发布状态：Build 31 已完成 Backend 部署、双端签名 Archive、iOS 本机 IPA、macOS 双架构 ZIP 与本机换装；tag／GitHub Release 为 `v1.8.0-build31`，公开资产仅 macOS ZIP，App Store Connect 未上传。
-- 生产状态：最终 Backend 备份 `/opt/linoi/backups/20260805-173736`，第三轮重提前备份 `/opt/linoi/backups/20260805-174557`，Alembic `20260805_0010`，内外网健康 `1.8.0`。用户再次确认后，同一 5 章各进行一次第三轮调用，均正常 `stop`：仅《蔡言柃》第 41 章通过并激活，其余 4 章被状态引用／快照形状门禁拒绝并继续使用 legacy。现为 `60 legacy eligible / 14 partial v2 revisions / 1 active v2 revision`，活动 v2 含 8 facts／10 deltas；正文、legacy 摘要／数组、305 条人物事件、296 条 legacy 状态载荷和固定人物卡均未变化，混合来源投影重放完全一致，integrity／foreign keys、零活动任务、`NRestarts=0` 与错误日志均通过。
+- 发布状态：`v1.8.1(32)` 已完成 Backend 部署、双端签名 Archive、iOS 本机 IPA、macOS 双架构 ZIP 与本机换装；tag／GitHub Release 为 `v1.8.1`，公开资产仅 macOS ZIP，App Store Connect 未上传。
+- 生产状态：部署备份 `/opt/linoi/backups/20260805-180502`，Alembic 保持 `20260805_0010`，内外网健康 `1.8.1`。部署未发起任何历史模型调用，数据保持 `60 legacy eligible / 14 partial v2 revisions / 1 active v2 revision / 8 facts / 10 deltas`；61 章、20 张人物卡、305 条人物事件、296 条 legacy 状态及全部 v2 revision/facts/deltas 与备份逐表一致，混合来源投影重放完全一致，integrity／foreign keys、零活动任务、`NRestarts=0` 与错误日志均通过。
+- v1.8.1 快修边界：delta 可引用任何具有正文证据且人物归属匹配的 canonical fact；后端由 slot 机械推导 snapshot／persistent／relationship，不再要求模型填写 scope。位置／行动／情绪只输出实际变化项，未输出项保持原状态；非关系项多余的已选人物字段忽略。正文 source ID、人物白名单、owner 参与、关系双方、未知占位、重复、fingerprint 与整体原子激活门禁不放松。
 - Build 31 快修边界：模型只需提供本次输出内唯一的事实引用，后端按 facts 数组顺序机械归一化为 `F1..F8` 并同步重映射 delta。source span 的“4 句”改为提示词与 Schema 中的精度建议，不再把真实但较长的连续事件区间作为事实安全失败；ID 存在性、首尾顺序、连续区间、白名单、关系、状态槽、重复和整体激活门禁仍严格保留。
 - 快修中已对用户确认的原 5 章各重试一次：先备份并核对哈希，结果五章均只剩 source span 长度失败并继续使用 legacy。随后将 4 句从安全门禁降为精度建议并部署最终代码；用户再次明确确认后才执行第三轮，每章仍只调用一次且未自动进行第四轮。11 个观察项仍不得执行。
 
@@ -33,7 +34,7 @@
 
 - 后端先将最终正文按稳定段落／句序机械编号为连续 source span（如 `P0003-S02`）；模型仅返回连续 `start_id/end_id`，不复制 evidence。编号算法、分段上限和 fingerprint 都版本化并覆盖契约测试。
 - `summary` 是唯一模型摘要；`facts` 最多 8 条，每项含稳定位置、类型（剧情／决定／关系／认知／未决／状态）、重要性、简洁事实文本、参与人物精确名及 source span。章节级事实可无参与人物；人物事实只可引用本章白名单。
-- `end_state_delta` 不再写第二份事实文本，只以受控 `fact_ref` 引用一个状态类 fact，并提供主体、可选关系对方、既有 snapshot/persistent/relationship 槽、`set|clear` 与值。关系必须有恰好两位不同白名单参与者；一项 delta 不能创造 ledger 外事实。
+- `end_state_delta` 不再写第二份事实文本，只以受控 `fact_ref` 引用一个有正文证据、人物归属匹配的 fact，并提供主体、可选关系对方、受控 slot、`set|clear` 与值。后端由 slot 机械推导 snapshot／persistent／relationship；位置／行动／情绪允许稀疏更新，未输出项保持原值。关系必须有恰好两位不同白名单参与者；一项 delta 不能创造 ledger 外事实。
 - 后端验证 schema、span 存在／连续／长度、参与人物白名单、关系双参与、事实／槽重复、每类规模、空／占位值和事实与状态引用一致性。姓名出现与 span 位置独立判断，代词叙事不再被“证据逐字且含姓名”的矛盾规则误杀；无法可靠归属的事实只能章节级保存，不能投影为人物故事线或状态。
 - 一次调用的结果整体校验：完整通过才 `complete`／可激活；可安全保留的审计结果标为 `partial`，任何 partial 都不派生 Selector、人物事件或状态；上游／截断／过滤错误如实为 `failed`。用户点击“重新归档”才启动下一次单调用，不自动补救或改写事实。
 
@@ -87,12 +88,12 @@
 
 ### Phase 4 — 验收、部署、选择性重提与发布
 
-状态：已完成；Build 31 发布、三轮选择性重提、单章激活及失败隔离均已验收。
+状态：已完成；v1.8.1(32) 发布、既有单章 v2 激活保留、历史失败隔离及宽松状态合同均已验收。
 
 - Backend 必跑完整 `pytest -q`、`compileall`、`alembic heads`、migration upgrade、`git diff --check`；覆盖 revision 并发／回滚、Selector 去重、投影混源、旧 client decode、API 状态和候选分类。跑 `App/Tests/run_client_state_tests.sh`、iOS 与 macOS Debug build；共享代码改动后双 target 均需通过，再做签名 Archive。
 - 生产顺序：停止旧服务→备份数据库、`.env`、代码及 unit/nginx（600）→SQLite integrity／foreign key／旧 head→部署已提交 Backend→`alembic upgrade head`→验证新 head/integrity/FK/单实例/健康/无敏感日志→启动服务。先验收新章 accepted+archive failed/complete 不互相回退；再执行经用户确认的逐章 shadow／激活。
 - 回滚：停服，恢复代码与数据库备份并复核后单实例启动；若只需撤销某章 v2，则事务停用该 revision、恢复同 fingerprint 旧活跃 revision 或 legacy eligibility，并整书重放。绝不以手改 legacy 字段掩盖问题。
-- 发布顺序：全测→commit→生产门禁与（如已确认）选择性重提验收→双端签名 Archive→iOS 开发签名 IPA（仅本机）→macOS universal ZIP、验签、换装→Build 31 产物 `/Users/linotsai/Downloads/ICTW-v1.8.0-build31`→push main→tag／GitHub Release。公开资产仅 macOS ZIP；App Store Connect：无。
+- 发布顺序：全测→commit→生产门禁验收→双端签名 Archive→iOS 开发签名 IPA（仅本机）→macOS universal ZIP、验签、换装→Build 32 产物 `/Users/linotsai/Downloads/ICTW-v1.8.1-build32`→push main→tag／GitHub Release。公开资产仅 macOS ZIP；App Store Connect：无。
 
 ## 验收与风险
 
@@ -102,6 +103,7 @@
 
 ## 里程碑索引
 
+- `v1.8.1(32)`：保持 v1.8 ledger 与整体激活，移除 delta 的事实类型限制，由 slot 推导 scope，并将 v2 即时状态改为稀疏更新。Backend 备份 `/opt/linoi/backups/20260805-180502`；无 migration、无历史重提，生产数据逐表不变。双端正式产物与 macOS 换装完成，tag／Release 为 `v1.8.1`。
 - `v1.8.0(31)`：事实引用改由后端机械编号，提示词／Schema 与长度／槽位规则对齐；真实第二轮证明 4 句 span 不适合作硬失败，最终改为精度建议。Backend 最终部署备份 `/opt/linoi/backups/20260805-173736`；经再次确认的第三轮重提前备份 `/opt/linoi/backups/20260805-174557`，结果 1 章激活 v2、4 章安全保留 legacy，累计为 14 partial／1 active，未自动进行第四轮。
 - `v1.8.0(30)`：事实账本架构、生产 migration、双端发布均完成；确认的 5 章历史重提各调用一次后均被确定性门禁拒绝，保留 legacy，重提前备份 `/opt/linoi/backups/20260805-170938`，未自动重试。
 - `v1.7.2(29)`：Extractor 截断、人物事件／状态保守降级快修已发布，生产备份 `/opt/linoi/backups/20260805-150015`；它是 v1.8 的 legacy 基线，不再扩展。
