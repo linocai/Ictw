@@ -4,7 +4,7 @@
 
 **Logged**: 2026-08-05T00:20:00+08:00
 **Priority**: high
-**Status**: in_progress
+**Status**: resolved
 **Area**: writing-pipeline
 
 ### Summary
@@ -24,6 +24,12 @@ Extractor 不能只验证单条人物事件是否安全，还必须程序化限�
 - Source: user_feedback
 - Related Files: Backend/app/services/personas.py, Backend/app/agents/extractor.py, Backend/app/services/context.py, Backend/app/services/extraction.py, Backend/app/services/write_jobs.py
 - Tags: extractor, deepseek, persona-migration, temperature, character-events, compaction
+
+### Resolution
+
+- **Resolved**: 2026-08-05T15:01:53+08:00
+- **Commit**: `e579ebc`
+- **Notes**: 已用 schema、提示词和确定性逐条验证共同执行每人 3 条／全章 8 条／重复事件门禁；精确匹配并迁移生产旧人格，温度降至 0.1。115 项后端测试与生产门禁通过，备份 `/opt/linoi/backups/20260805-150015` 后部署，未改客户端、版本或 Build。
 
 ---
 
