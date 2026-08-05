@@ -1,6 +1,6 @@
 # ICTW PROJECT_PLAN
 
-> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。`v1.8.1(32)` 宽松校验快修已完成发布；用户确认的四章重提已执行，1 章新激活、3 章安全保留 legacy；macOS 图标已在不变更版本号与 Build 的前提下与 iOS 统一并替换发布包。
+> 唯一现行计划与状态来源；与 `archive/` 冲突时以本文为准。`v1.8.1(32)` 宽松校验快修已完成发布；用户确认的四章重提已执行，1 章新激活、3 章安全保留 legacy；macOS 图标已与 iOS 统一并替换发布包；章节人物关联保存 500 已作 Backend-only 快修。
 
 ## 当前状态
 
@@ -8,8 +8,9 @@
 - 施工前基线 `v1.7.2(29)` 同时写 `headline`、摘要、三个松散归档数组、人物事件和状态更新；在线路径可逐项 salvage，Selector 会叠加摘要、数组和人物事件。v1.8 已停止扩展该路径，只保留 legacy adapter。
 - 施工前 `chapters.status` 混合正文与 Extractor 阶段，`character_state_changes` 是唯一可重放状态源；v1.8 已完成双生命周期和 mixed-source 投影。既有姓名白名单、候选稿隔离、Checker 门禁、真实上游错误分类与状态投影铁律继续适用。
 - 用户工作树资产只读保护：`.learnings/ERRORS.md`、`.learnings/LEARNINGS.md`、`App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme`、`design_handoff_ios_visual_upgrade/`；不得覆盖、回退、暂存或纳入本版。
-- 发布状态：`v1.8.1(32)` 已完成 Backend 部署、双端签名 Archive、iOS 本机 IPA、macOS 双架构 ZIP 与本机换装；macOS 后续以 iOS 1024 图标为唯一源重生全套 AppIcon，重做签名 Archive、本机换装及同名 Release ZIP。版本、Build、iOS 二进制、Backend 和既有 `v1.8.1` tag 均未改；GitHub Release 仍为 `v1.8.1`，公开资产仅 macOS ZIP，App Store Connect 未上传。
+- 发布状态：`v1.8.1(32)` 已完成 Backend 部署、双端签名 Archive、iOS 本机 IPA、macOS 双架构 ZIP 与本机换装；macOS 后续以 iOS 1024 图标为唯一源重生全套 AppIcon，重做签名 Archive、本机换装及同名 Release ZIP。该图标纠正本身未改版本、Build、iOS 二进制、Backend 或既有 `v1.8.1` tag；GitHub Release 仍为 `v1.8.1`，公开资产仅 macOS ZIP，App Store Connect 未上传。
 - 生产状态：部署备份 `/opt/linoi/backups/20260805-180502`，确认重提前备份 `/opt/linoi/backups/20260805-181311`，Alembic 保持 `20260805_0010`，内外网健康 `1.8.1`。用户确认后仅对第三轮仍失败的 4 章各调用一次：《骁扬》第 14 章以 8 facts／8 deltas 激活，其余 3 章被关系目标、重复状态槽、owner 参与事实门禁拒绝并继续使用 legacy；已成功的《蔡言柃》第 41 章及 11 个观察项未调用。现为 `59 legacy eligible / 17 partial v2 revisions / 2 active v2 revisions / 16 facts / 18 deltas`；正文、legacy 摘要／数组、305 条人物事件、296 条 legacy 状态载荷和固定人物卡未变化，混合来源投影重放完全一致，integrity／foreign keys、零活动任务、`NRestarts=0` 与错误日志均通过。
+- 章节保存快修：双端会随 PATCH 重发完整人物关联，v1.8 在同一事务清空并重建关联后立即计算归档指纹；新关联只有 ID 而尚未装载 Character 对象，因此读取姓名时返回 500。现在重建时同步绑定已校验 Character；新增及重发同一人物清单的回归测试已覆盖。生产备份 `/opt/linoi/backups/20260805-200901`，部署包 SHA-256 `b14197f5bc3bb1b400435d155ee05c0d2efe1300ff3d5c6a4abafac06b0978b1`；无 migration，版本／Build、双端 App、tag／Release 均不变。
 - v1.8.1 快修边界：delta 可引用任何具有正文证据且人物归属匹配的 canonical fact；后端由 slot 机械推导 snapshot／persistent／relationship，不再要求模型填写 scope。位置／行动／情绪只输出实际变化项，未输出项保持原状态；非关系项多余的已选人物字段忽略。正文 source ID、人物白名单、owner 参与、关系双方、未知占位、重复、fingerprint 与整体原子激活门禁不放松。
 - Build 31 快修边界：模型只需提供本次输出内唯一的事实引用，后端按 facts 数组顺序机械归一化为 `F1..F8` 并同步重映射 delta。source span 的“4 句”改为提示词与 Schema 中的精度建议，不再把真实但较长的连续事件区间作为事实安全失败；ID 存在性、首尾顺序、连续区间、白名单、关系、状态槽、重复和整体激活门禁仍严格保留。
 - 快修中已对用户确认的原 5 章各重试一次：先备份并核对哈希，结果五章均只剩 source span 长度失败并继续使用 legacy。随后将 4 句从安全门禁降为精度建议并部署最终代码；用户再次明确确认后才执行第三轮，每章仍只调用一次且未自动进行第四轮。11 个观察项仍不得执行。
