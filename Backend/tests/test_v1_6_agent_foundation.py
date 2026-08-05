@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.agents.checker import CHECKER_SCHEMA, CheckerAgent
 from app.agents.memory_selector import MemorySelectorAgent
 from app.agents.writer import WriterAgent
+from app.db import Base, make_engine
 from app.llm.factory import get_checker_client
-from app.services.personas import AGENT_ROLES, DEFAULT_PERSONAS, PROGRAM_PROTOCOLS
+from app.models import AgentModelBinding, AgentPersona
+from app.services.personas import (
+    AGENT_ROLES,
+    DEFAULT_PERSONAS,
+    LEGACY_EXTRACTOR_PERSONAS,
+    PROGRAM_PROTOCOLS,
+    seed_defaults,
+)
 
 
 class RecordingJSONLLM:
@@ -97,3 +106,26 @@ def test_settings_rejects_retired_reviser_everywhere(client: TestClient, auth_he
 
 def test_checker_factory_is_available() -> None:
     assert callable(get_checker_client)
+
+
+def test_seed_defaults_migrates_only_exact_legacy_extractor_settings(tmp_path) -> None:
+    engine = make_engine(f"sqlite:///{tmp_path / 'personas.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add(AgentPersona(
+            agent_role="extractor",
+            system_prompt=next(iter(LEGACY_EXTRACTOR_PERSONAS)),
+        ))
+        db.add(AgentModelBinding(agent_role="extractor", temperature=0.3))
+        db.commit()
+
+        seed_defaults(db)
+        assert db.get(AgentPersona, "extractor").system_prompt == DEFAULT_PERSONAS["extractor"]
+        assert db.get(AgentModelBinding, "extractor").temperature == 0.1
+
+        db.get(AgentPersona, "extractor").system_prompt = "用户自己的 Extractor 人格"
+        db.get(AgentModelBinding, "extractor").temperature = 0.3
+        db.commit()
+        seed_defaults(db)
+        assert db.get(AgentPersona, "extractor").system_prompt == "用户自己的 Extractor 人格"
+        assert db.get(AgentModelBinding, "extractor").temperature == 0.3

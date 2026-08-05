@@ -8,7 +8,11 @@ from typing import Any
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from app.agents.extractor import CANONICAL_EVENT_TYPES
+from app.agents.extractor import (
+    CANONICAL_EVENT_TYPES,
+    CHARACTER_EVENT_MAX_PER_CHARACTER,
+    CHARACTER_EVENT_MAX_TOTAL,
+)
 from app.models import Chapter, Character, CharacterEvent, CharacterStateChange
 from app.models.entities import uuid_str
 from app.services.character_state_projection import PERSISTENT_SLOTS, SNAPSHOT_SLOTS, rebuild_book_projection
@@ -200,6 +204,8 @@ def validate_extractor_output(chapter: Chapter, output: dict[str, Any]) -> Valid
     character_map = {link.character_id: link.character for link in chapter.character_links}
     archive_values = {field: _validated_archive_items(output.get(field), field=field, character_map=character_map) for field in ARCHIVE_LIST_FIELDS}
     events: list[tuple[str, str, str]] = []
+    event_counts: dict[str, int] = {}
+    event_keys: set[tuple[str, str]] = set()
     for item in output["character_events"]:
         if not isinstance(item, dict):
             raise ExtractorValidationError("character_events item must be an object")
@@ -214,6 +220,18 @@ def validate_extractor_output(chapter: Chapter, output: dict[str, Any]) -> Valid
         if event_type not in CANONICAL_EVENT_TYPES:
             raise ExtractorValidationError("event_type must use the canonical taxonomy")
         _validated_evidence(chapter, character_map[character_id], item.get("evidence"), field="character event")
+        event_key = (
+            character_id,
+            "".join(character for character in normalize_text(event_text).casefold() if character.isalnum()),
+        )
+        if event_key in event_keys:
+            raise ExtractorValidationError("duplicate character event")
+        if event_counts.get(character_id, 0) >= CHARACTER_EVENT_MAX_PER_CHARACTER:
+            raise ExtractorValidationError("character event exceeds per-character limit")
+        if len(events) >= CHARACTER_EVENT_MAX_TOTAL:
+            raise ExtractorValidationError("character events exceed chapter limit")
+        event_keys.add(event_key)
+        event_counts[character_id] = event_counts.get(character_id, 0) + 1
         events.append((character_id, event_type, event_text.strip()))
     return ValidatedExtractorOutput(headline.strip(), long_summary.strip(), archive_values, events, _validated_state_updates(chapter, output.get("state_updates"), character_map))
 

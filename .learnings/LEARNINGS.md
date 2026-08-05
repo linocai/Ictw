@@ -1,5 +1,32 @@
 # Learnings
 
+## [LRN-20260805-006] correction
+
+**Logged**: 2026-08-05T00:20:00+08:00
+**Priority**: high
+**Status**: in_progress
+**Area**: writing-pipeline
+
+### Summary
+
+Extractor 不能只验证单条人物事件是否安全，还必须程序化限制事件规模并迁移与现行归档结构冲突的旧人格。
+
+### Details
+
+生产最近五次归档虽均能完成，但连续出现可选状态丢弃；其中一章对单个人物生成 15 条事件，暴露出旧版“回写人物故事线／200 字梗概／动态字段”人格仍在生产生效。现行 JSON 合同没有人物事件总数、单人物数量和重复事实门禁，DeepSeek 会把动作与过程拆成流水账；模型绑定温度 0.3 又覆盖了 Agent 默认温度。单靠提示词无法保证收敛。
+
+### Suggested Action
+
+只迁移完全匹配的旧 Extractor 人格，保留用户自定义人格；把生产 Extractor 温度降到 0.1。schema、提示词和确定性验证同时规定人物事件按重要性排序、每人最多 3 条、本章最多 8 条并去除同一人物的重复事件；超限或重复条目沿用逐条保守丢弃，不增加模型调用或放松证据／白名单门禁。
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: Backend/app/services/personas.py, Backend/app/agents/extractor.py, Backend/app/services/context.py, Backend/app/services/extraction.py, Backend/app/services/write_jobs.py
+- Tags: extractor, deepseek, persona-migration, temperature, character-events, compaction
+
+---
+
 ## [LRN-20260804-005] correction
 
 **Logged**: 2026-08-04T22:50:00+08:00

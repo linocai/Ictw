@@ -620,6 +620,9 @@ def _is_character_event_validation_error(error: Exception) -> bool:
             "character_events ",
             "selected character event ",
             "character event evidence ",
+            "character event exceeds ",
+            "character events exceed ",
+            "duplicate character event",
             "event_type ",
         )
     )
@@ -633,6 +636,8 @@ def _extractor_event_repair_message(
         f"上一版 character_events 未通过确定性校验：{error}。\n"
         "只重新提取 character_events，不得输出或改写任何其他字段。"
         "event_type 只能使用 schema 枚举；event_text 必须明确写出并以所属人物精确姓名开头；"
+        "事件按重要性排序，每个人物最多 3 条、本章最多 8 条；同一事实只保留一条，"
+        "普通动作、对白和过程流水账不建事件；"
         "evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，不得转述、加标签或解释。"
         "无法逐字举证的事件直接省略，允许返回空数组。\n\n"
         + original_message
@@ -665,6 +670,9 @@ def _extractor_correction_message(attempt: int, error: Exception | None) -> str:
 def _extractor_user_reason(reason: str) -> str:
     exact = {
         "event_type must use the canonical taxonomy": "人物事件类型不在固定分类中",
+        "duplicate character event": "人物事件内容重复",
+        "character event exceeds per-character limit": "单个人物的事件超过每章 3 条上限",
+        "character events exceed chapter limit": "本章人物事件超过 8 条上限",
         "selected character event text must name its owner": "人物事件文本没有明确写出所属人物姓名",
         "character event evidence is required": "人物事件缺少正文原文证据",
         "character event evidence lacks a substantial literal draft excerpt": "人物事件证据没有包含足够的正文连续原文",

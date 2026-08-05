@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- Extractor 质量收敛快修施工中：生产最近五次归档均出现人物事件／状态降级，其中一章对单个人物生成 15 条流水账式事件；确认现网仍使用旧版“200 字梗概／动态字段”人格，Extractor 实际温度为 0.3，且人物事件无规模与重复门禁。本补丁只更新 Backend：精确迁移旧人格、温度降至 0.1，并以 schema、提示词和确定性验证共同限制人物事件每人最多 3 条、本章最多 8 条、同一人物同一事件不得重复；超限项保守丢弃并提示，不新增模型轮次，不改版本、Build、客户端、Alembic 或人物证据／白名单规则。
 - `v1.7.2(29)` Backend 人物事件逐条降级补丁已完成：生产实测确认 DeepSeek Flash／Pro 在定向重提时仍会重复输出同一类错误归属证据。现保持事件类型、人物姓名、白名单与原文证据规则不变，由后端逐条执行同一确定性校验；合格事件正常归档，不合格事件直接丢弃并在完成 Job 中记录数量和中文原因，不再阻塞 headline、摘要、章节记忆和人物状态。112 项后端测试、compileall、Alembic head 与生产健康门禁通过；无 migration，生产备份为 `/opt/linoi/backups/20260804-225041`。本补丁不改市场版本、Build、客户端、App 包或既有 tag／Release。
 - `v1.7.2(29)` Extractor 截断／事件定向纠偏快修已完成：完整归档输出预算由 4096 提高到 8192 token；上游 `finish_reason=length` 导致的残缺 JSON 真实分类为 `llm_output_truncated`，在三次总调用预算内自动压缩重试。完整归档已取得后，人物事件分类／归属／原文证据门禁失败只重提 `character_events` 并合并回上一份归档，不再重写 headline、摘要、章节记忆或人物状态；核心事件门禁不放松。Backend 无 migration，生产备份为 `/opt/linoi/backups/20260804-222215`；111 项后端测试、客户端状态测试、双端 Debug／签名 Release Archive、iOS 本机 IPA、macOS 通用架构 ZIP／换装均通过。市场版本保持 `1.7.2`，Build 从 28 升至 29；产物位于 `/Users/linotsai/Downloads/ICTW-v1.7.2-build29`，tag 与 GitHub Release 为 `v1.7.2-build29`。
 - `v1.7.2(28)` Extractor 保守降级快修已完成：在线 Extractor 仍先执行三次完整严格校验；纠偏耗尽后，仅当 headline、摘要、章节归档和人物事件全部严格合格时，才复用离线重建的逐组件校验器丢弃不安全的可选人物状态。即时快照任一槽失败则整组丢弃，持续状态／关系逐项验证；不改写证据、不猜测归属、不放松白名单。JobRun 记录丢弃数量和逐项中文原因，双端完成时明确提示。Backend 无 migration，生产备份为 `/opt/linoi/backups/20260804-183358`；108 项后端测试、客户端状态测试、双端 Debug／签名 Release Archive、iOS 本机 IPA、macOS 通用架构 ZIP／换装均通过。市场版本保持 `1.7.2`，Build 从 27 升至 28；tag 与 GitHub Release 为 `v1.7.2-build28`。

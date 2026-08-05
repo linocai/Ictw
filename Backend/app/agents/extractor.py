@@ -9,6 +9,8 @@ from app.services.personas import compose_system_prompt
 
 
 CANONICAL_EVENT_TYPES = ("经历", "行动", "决定", "关系", "情绪", "认知", "状态")
+CHARACTER_EVENT_MAX_PER_CHARACTER = 3
+CHARACTER_EVENT_MAX_TOTAL = 8
 EXTRACTOR_TIMEOUT_SECONDS = 120
 EXTRACTOR_MAX_OUTPUT_TOKENS = 8192
 SelectedCharacter = tuple[str, str]
@@ -33,8 +35,16 @@ def _operation_schema() -> dict[str, Any]:
 
 def _character_events_schema(selected_character_names: list[str]) -> dict[str, Any]:
     name = {"type": "string", "enum": selected_character_names}
+    maximum = min(
+        CHARACTER_EVENT_MAX_TOTAL,
+        len(selected_character_names) * CHARACTER_EVENT_MAX_PER_CHARACTER,
+    )
     return {
         "type": "array",
+        "description": (
+            "按重要性从高到低排列，只记录改变人物故事线、关系、认知、决定或持续状态的关键节点；"
+            "普通动作、对白和同一事实的重复表述不得建事件。"
+        ),
         "items": {
             "type": "object",
             "properties": {
@@ -46,7 +56,7 @@ def _character_events_schema(selected_character_names: list[str]) -> dict[str, A
             "required": ["character_name", "event_type", "event_text", "evidence"],
             "additionalProperties": False,
         },
-        **({"maxItems": 0} if not selected_character_names else {}),
+        "maxItems": maximum,
     }
 
 
@@ -265,7 +275,7 @@ class ExtractorAgent:
         if any(not name for name in names) or len(set(names)) != len(names):
             raise ExtractorContractError("selected character names must be non-empty and unique")
         output = self.llm.complete_json(
-            system=self.system_prompt, user=user_message, schema=extractor_schema(names), temperature=0.2,
+            system=self.system_prompt, user=user_message, schema=extractor_schema(names), temperature=0.1,
             timeout=EXTRACTOR_TIMEOUT_SECONDS, hard_timeout=True,
             max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
         )

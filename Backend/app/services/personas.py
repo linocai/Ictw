@@ -19,9 +19,22 @@ DEFAULT_PERSONAS: dict[str, str] = {
         "区分合理文学延展和会改变后续事实的新剧情；不评价文风，也不修改正文。"
     ),
     "extractor": (
-        "你是忠实的小说档案管理员。只归档用户已接受正文中实际发生的内容，"
-        "区分确定事实、人物认知和未解决事项；不使用 Bible 补写正文没有发生的事实。"
+        "你是克制的小说归档编辑。只从用户已接受正文提取本章大事记、完整摘要、少量重要人物事件"
+        "和章节结束时的净状态变化。人物事件只记录会改变人物故事线、关系、认知、决定或持续状态的"
+        "关键节点，按重要性排序；普通动作、对白和同义重复不建事件。绝不使用 Bible 或历史补写，"
+        "无法用正文原文举证就省略。"
     ),
+}
+
+
+LEGACY_EXTRACTOR_PERSONAS = {
+    (
+        "[人格] 你是一丝不苟的档案员，把本章已发生的事实回写进角色卡与人物故事线，并写一段 "
+        "200 字内的客观梗概；同时做好人物动态字段更新。\n"
+        "[原则] 梗概第一句必须独立概括本章最重要的事件——这一句就是一句话大事记。\n"
+        "只记已发生的事实，不演绎、不预测、宁缺毋滥。\n"
+        "只返回合法 JSON object。"
+    )
 }
 
 
@@ -48,7 +61,8 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
     "extractor": (
         "不可编辑程序协议：只以用户已接受的正文为事实来源，输出约定 JSON 归档结构；"
         "不得用 Bible 或推测补写事实，并保留章节来源。人物归属只输出白名单中的精确姓名，"
-        "由程序映射内部 ID；人物事件和动态字段必须附正文原文证据并明确写出所属人物。"
+        "由程序映射内部 ID；人物事件按重要性排序，每人最多 3 条、本章最多 8 条，同一事实不得重复，"
+        "且人物事件和人物状态必须附正文原文证据并明确写出所属人物。"
         "state_updates 是可回放的当前状态：即时快照必须完整替换位置、行动、情绪三槽；持续状态和唯一人物关系"
         "只能 set/clear。同一无向人物对整份输出只能写一次，归到人物白名单顺序更靠前的一方，"
         "关系值必须是双方共同状态而非各自视角。掌握信息归入 atomic_memories，禁止其他状态、未知或过程式快照；宁缺毋滥。"
@@ -75,6 +89,19 @@ def seed_defaults(db: Session) -> None:
             changed = True
     if changed:
         db.flush()
+    extractor_persona = db.get(AgentPersona, "extractor")
+    if (
+        extractor_persona is not None
+        and extractor_persona.system_prompt.strip() in LEGACY_EXTRACTOR_PERSONAS
+    ):
+        # This exact legacy product prompt predates the current headline / long
+        # summary / state projection contract.  Migrate it once while leaving
+        # every genuinely user-authored persona untouched.
+        extractor_persona.system_prompt = DEFAULT_PERSONAS["extractor"]
+        extractor_binding = db.get(AgentModelBinding, "extractor")
+        if extractor_binding is not None and extractor_binding.temperature == 0.3:
+            extractor_binding.temperature = 0.1
+        changed = True
     for role, prompt in DEFAULT_PERSONAS.items():
         if db.get(AgentPersona, role) is None:
             db.add(AgentPersona(agent_role=role, system_prompt=prompt))

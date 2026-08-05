@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.agents.extractor import ExtractorAgent, bind_extractor_character_names, extractor_schema
+from app.agents.extractor import (
+    CHARACTER_EVENT_MAX_PER_CHARACTER,
+    CHARACTER_EVENT_MAX_TOTAL,
+    ExtractorAgent,
+    bind_extractor_character_names,
+    extractor_schema,
+)
 from app.llm.base import LLMError
 from app.llm.factory import get_extractor_client
 from app.services.character_memory_rebuild import rebuild_book_character_memory
@@ -23,6 +29,7 @@ class RecordingExtractor:
         self.users: list[str] = []
         self.schemas: list[dict] = []
         self.max_tokens: list[int | None] = []
+        self.temperatures: list[float | None] = []
         self.schema: dict = {}
         self.calls = 0
 
@@ -32,6 +39,7 @@ class RecordingExtractor:
         self.users.append(user)
         self.schemas.append(schema)
         self.max_tokens.append(_kwargs.get("max_tokens"))
+        self.temperatures.append(_kwargs.get("temperature"))
         return self.payload
 
 
@@ -43,6 +51,7 @@ class TruncatedThenExtractor(RecordingExtractor):
             self.users.append(user)
             self.schemas.append(schema)
             self.max_tokens.append(_kwargs.get("max_tokens"))
+            self.temperatures.append(_kwargs.get("temperature"))
             raise LLMError(
                 "LLM JSON output was truncated",
                 code="llm_output_truncated",
@@ -81,6 +90,9 @@ def test_extractor_appends_fixed_protocol_and_schema_has_v16_archive_fields():
     assert {"long_summary", "state_changes", "unresolved_items", "atomic_memories"} <= set(llm.schema["properties"])
     assert "summary" not in llm.schema["properties"]
     assert extractor_schema([])["properties"]["character_events"].get("maxItems") == 0
+    assert extractor_schema(["林夕"])["properties"]["character_events"]["maxItems"] == CHARACTER_EVENT_MAX_PER_CHARACTER
+    assert extractor_schema(["甲", "乙", "丙"])["properties"]["character_events"]["maxItems"] == CHARACTER_EVENT_MAX_TOTAL
+    assert llm.temperatures == [0.1]
     assert output["character_events"][0]["character_id"] == "character"
     assert "character_name" not in output["character_events"][0]
 
@@ -195,6 +207,121 @@ def test_online_extractor_drops_only_invalid_event_without_another_model_call(
     assert archived["long_summary"] == output["long_summary"]
     events = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]
     assert [event["event_text"] for event in events] == ["林夕在渡口交出钥匙。"]
+
+
+def test_online_extractor_deduplicates_and_caps_each_character_without_retry(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "交钥匙", "character_links": [{"character_id": character["id"]}]},
+    ).json()
+    draft = "林夕在渡口交出了钥匙，决定留下等待回信。"
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": draft},
+    ).raise_for_status()
+    output = _archive_payload("林夕")
+    output["character_events"] = [
+        {"character_name": "林夕", "event_type": "行动", "event_text": "林夕交出钥匙。", "evidence": draft},
+        {"character_name": "林夕", "event_type": "行动", "event_text": "林夕交出钥匙！", "evidence": draft},
+        {"character_name": "林夕", "event_type": "决定", "event_text": "林夕决定留下。", "evidence": draft},
+        {"character_name": "林夕", "event_type": "状态", "event_text": "林夕等待回信。", "evidence": draft},
+        {"character_name": "林夕", "event_type": "行动", "event_text": "林夕结束当日行动。", "evidence": draft},
+    ]
+    llm = RecordingExtractor(output)
+    client.app.dependency_overrides[get_extractor_client] = lambda: llm
+
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    result = wait_for_terminal(client, chapter["id"], auth_headers)
+
+    assert result["phase"] == "done"
+    assert result["attempt"] == 1
+    assert llm.calls == 1
+    assert result["error_context"]["dropped_event_count"] == 2
+    assert result["error_context"]["dropped_event_reasons"] == [
+        "人物事件内容重复",
+        "单个人物的事件超过每章 3 条上限",
+    ]
+    events = client.get(
+        f"/api/v1/characters/{character['id']}", headers=auth_headers
+    ).json()["events"]
+    assert [event["event_text"] for event in events] == [
+        "林夕交出钥匙。",
+        "林夕决定留下。",
+        "林夕等待回信。",
+    ]
+
+
+def test_online_extractor_caps_chapter_event_total_without_retry(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    characters = [
+        client.post(
+            f"/api/v1/books/{book['id']}/characters",
+            headers=auth_headers,
+            json={"name": name},
+        ).json()
+        for name in ("甲", "乙", "丙")
+    ]
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={
+            "user_prompt": "三人行动",
+            "character_links": [{"character_id": character["id"]} for character in characters],
+        },
+    ).json()
+    evidence = {
+        name: f"{name}在渡口交出钥匙并决定留下等待回信。" for name in ("甲", "乙", "丙")
+    }
+    draft = "".join(evidence.values())
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": draft},
+    ).raise_for_status()
+    output = {
+        "headline": "三人在渡口作出决定。",
+        "long_summary": "甲、乙、丙先后在渡口完成关键行动。",
+        "state_changes": [],
+        "unresolved_items": [],
+        "atomic_memories": [],
+        "character_events": [
+            {
+                "character_name": name,
+                "event_type": event_type,
+                "event_text": f"{name}{label}。",
+                "evidence": evidence[name],
+            }
+            for name in ("甲", "乙", "丙")
+            for event_type, label in (("行动", "交出钥匙"), ("决定", "决定留下"), ("状态", "等待回信"))
+        ],
+        "state_updates": [],
+    }
+    llm = RecordingExtractor(output)
+    client.app.dependency_overrides[get_extractor_client] = lambda: llm
+
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    result = wait_for_terminal(client, chapter["id"], auth_headers)
+
+    assert result["phase"] == "done"
+    assert result["attempt"] == 1
+    assert llm.calls == 1
+    assert result["error_context"]["dropped_event_count"] == 1
+    assert result["error_context"]["dropped_event_reasons"] == ["本章人物事件超过 8 条上限"]
+    saved_count = sum(
+        len(client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"])
+        for character in characters
+    )
+    assert saved_count == CHARACTER_EVENT_MAX_TOTAL
 
 
 def test_online_extractor_can_finish_when_all_character_events_lack_owner_evidence(
