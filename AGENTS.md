@@ -75,6 +75,6 @@ SwiftUI View 或共享客户端代码改动必须验证受影响的 App target�
 - `v1.6.1(16)` 已于 2026-08-01 完成 Backend 部署、macOS 正式 App 换装、tag 与 GitHub Release；按用户要求未打包或安装 iOS。
 - `v1.6.0(15)` 已于 2026-08-01 完成香港现网 Backend 部署与 Alembic `20260801_0007` 迁移、macOS 正式 App 换装、tag 与 GitHub Release；iOS 由用户处理。
 - `v1.5.0(14)` 已于 2026-07-28 完成 Backend 部署、macOS 换装、tag 与 GitHub Release；iOS 安装由用户处理。
-- 香港云迁移宁波云已暂停，恢复条件、范围和顺序以 `PROJECT_PLAN.md` 的「暂停／待恢复」段落为准。
-- ICP 备案、非标准 HTTPS 端口或已备案域名的路线未确定前，只能做本地计划、只读盘点和新机离线准备，不得切 DNS 或停生产。
+- 香港→宁波生产迁移已于 2026-08-07 完成：现网为 `https://ictw.linotsai.top`（`114.66.0.38`），Backend 以 `linoi` 账户运行在 `/opt/linoi/backend`，仅监听 Docker 网桥 `172.18.0.1:8787`，由同机 Nginx Proxy Manager HTTPS 反代；旧香港 `linoi-backend.service` 已 stopped + disabled，严禁重新启动，除非先停新机并完成明确回退。
+- 迁移最终备份为新旧两机的 `/opt/linoi/backups/20260807-ningbo-cutover.eyu6o0`；SQLite SHA-256 `56b24e725ae779d6c3be3b422e8c33cb064d0d92999dfba6634ca0f325977843`、Alembic `20260805_0010`、integrity／foreign keys、带鉴权公网健康 `1.8.1` 均已核对。NPM 配置与证书回退包在新机 `/opt/npm/backups/ictw-precutover-20260807-084450`；证书由 `ictw-certbot-renew.timer` 续期。
 - `KEK_SECRET` 与 `APP_TOKEN` 必须原样、安全迁移；不得在日志、计划文件或聊天回复中打印其值。
