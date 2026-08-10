@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前版本为 [`1.7.0(22)`](https://github.com/linocai/Ictw/releases/tag/v1.7.0-build22)；Build 22 修复 iOS 书架“新建书”卡片在换行时被压缩的问题，Backend、Alembic 与 macOS App 维持 `1.6.5(20)`。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前源码候选版本为 `1.8.3(34)`；宁波 Backend 已运行 `1.8.3`，Alembic head 为 `20260809_0011`；本机 macOS 已换装 Build 34，iOS 由用户自行处理，当前公开发布的双端客户端仍为 [`1.8.1(32)`](https://github.com/linocai/Ictw/releases/tag/v1.8.1)。写作流程为：
 
 ```text
 Memory Selector → Writer → Checker → 用户接受 → Extractor
@@ -14,7 +14,7 @@ Memory Selector → Writer → Checker → 用户接受 → Extractor
 - `Backend/alembic/`：生产数据库迁移；生产启动不会自动修改表结构。
 - `AGENTS.md`：Codex 的项目级操作规范。
 - `PROJECT_PLAN.md`：项目唯一权威计划入口。
-- `archive/`：历次版本的设计、迁移和验收记录。
+- `archive/`：已完成版本的计划、设计、运维脚本和验收记录；不参与产品运行。
 
 仓库目录已从 `LinoI` 改名为 `Ictw`。工程名、target、Bundle ID、Keychain/UserDefaults 键和本地草稿目录仍保留历史标识，不应批量改名。
 
@@ -26,7 +26,8 @@ Memory Selector → Writer → Checker → 用户接受 → Extractor
 - Writer 使用人物白名单，历史记忆不会自动授予人物本章出场权限；短名校验对单字名走左边界启发式（“森林”不再误命中“林”），并支持章级豁免。
 - Writer 每次从同一份 Bible 与记忆上下文完整生成整章，不扩写旧稿；所有候选只在后端完整留档，双端不拉取或渲染候选全文。
 - Checker 只举证 Bible 遗漏、矛盾和剧情越界，不修改正文或评价文风；Writer 新稿只有明确通过后才进入正文区，存疑、越界或检查不可用的稿件保持后台留档，但具体失败原因和必要证据仍会展示。用户手动编辑当前正文后仍可复查，并对当前可见正文明确覆盖接受。
-- Extractor 只从用户接受的正文提取唯一章节摘要、状态变化、未决事项、原子记忆和已选人物更新，事务化提交并为后续记忆提供来源。
+- 用户接受正文后章节立即 finalized，Extractor 独立生成 v2 `summary + canonical facts + end_state_delta`；只有整体通过确定性校验的 revision 才能原子激活，失败不会撤销正文接受。
+- Selector 与人物状态按历史章节只消费一个事实来源：活跃 v2 优先，否则使用仍具资格的 legacy adapter，避免新旧归档叠加。
 - 每次 LLM 调用写入 `llm_call_audits`（role/model/耗时/usage/finish_reason/error_code），绝不记录 API Key、prompt 或正文。
 - 四个现役 Agent 可独立绑定模型、可编辑人格、思考开关与思考强度；不可编辑程序协议始终生效。
 - 支持 DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash 的显式推理能力。
@@ -94,4 +95,4 @@ App/Tests/run_client_state_tests.sh
 5. 启动服务并检查 `/api/v1/health`。
 6. 完成 Memory Selector、Writer、Checker、Extractor 烟测。
 
-生产服务器配置、`.env`、SQLite 数据和 SSH 凭证不进入仓库。
+当前公网入口为 `https://ictw.linotsai.top`。生产服务器配置、`.env`、SQLite 数据、SSH 凭证和发布二进制不进入仓库；当前宁波生产环境的完整运维事实记录在仓库外的 `/Users/linotsai/Lino/NB_info.md`，`hk_info.md` 仅保留香港旧环境历史。

@@ -1,5 +1,18 @@
 import Foundation
 
+/// Connection persistence policy is Foundation-only so its migration contract
+/// can be tested without constructing SwiftUI application state.
+enum ConnectionEndpoint {
+    static let currentDefault = "https://ictw.linotsai.top"
+    static let legacyDefault = "https://linoi.neluvee.top"
+
+    static func migratedBaseURL(saved: String?) -> (value: String, shouldPersist: Bool) {
+        guard let saved else { return (currentDefault, true) }
+        if saved == legacyDefault { return (currentDefault, true) }
+        return (saved, false)
+    }
+}
+
 enum JSONValue: Codable, Hashable, Sendable, CustomStringConvertible {
     case string(String)
     case number(Double)

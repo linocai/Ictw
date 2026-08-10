@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import LLMCallAudit
+from app.llm.base import safe_finish_reason, safe_upstream_reason
 
 
 def record_llm_call(
@@ -41,11 +42,11 @@ def record_llm_call(
                 prompt_tokens=usage.get("prompt_tokens"),
                 completion_tokens=usage.get("completion_tokens"),
                 total_tokens=usage.get("total_tokens"),
-                finish_reason=str(finish_reason) if finish_reason is not None else None,
+                finish_reason=safe_finish_reason(finish_reason),
                 error_code=error_code,
                 chapter_id=chapter_id,
                 job_id=job_id,
-                upstream_reason=upstream_reason,
+                upstream_reason=safe_upstream_reason(upstream_reason),
             )
         )
         db.commit()

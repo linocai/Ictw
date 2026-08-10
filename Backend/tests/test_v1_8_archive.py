@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import re
+from copy import deepcopy
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
 
 from app.llm.factory import get_extractor_client
 from app.agents.extractor import extractor_v2_schema
-from app.models import Chapter, ChapterArchiveRevision, CharacterEvent
+from app.models import Chapter, ChapterArchiveRevision, CharacterEvent, JobRun
+from app.services.write_jobs import write_registry
 from app.services.archive_v2 import (
+    ArchiveFingerprintMismatch,
     ArchiveV2ValidationError,
     MAX_FACT_REF_CHARS,
     MAX_FACT_TEXT_CHARS,
@@ -17,12 +21,14 @@ from app.services.archive_v2 import (
     MAX_SUMMARY_CHARS,
     RECOMMENDED_FACT_SPAN_SENTENCES,
     archive_input_fingerprint,
+    activate_archive_revision,
     build_archive_user_message,
     segment_source,
     validate_archive_output,
 )
 from app.services.context import memory_candidates
 from app.services.character_state_projection import project_state_changes
+from app.services.write_jobs import _log_archive_failure
 from scripts.report_archive_reextract_candidates import classify_candidate
 
 
@@ -68,6 +74,47 @@ class V2Extractor:
         return output
 
 
+class BlockingV2Extractor(V2Extractor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = Event()
+        self.release = Event()
+
+    def complete_json(self, **kwargs):
+        self.started.set()
+        assert self.release.wait(timeout=3)
+        return super().complete_json(**kwargs)
+
+
+class V2RelationshipExtractor:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, *, user: str, schema: dict, **_kwargs):
+        self.calls += 1
+        names = schema["properties"]["facts"]["items"]["properties"]["participant_names"]["items"].get("enum", [])
+        match = re.search(r"\[(P\d{4}-S\d{2})\]", user)
+        span_id = match.group(1) if match else "P0001-S01"
+        return {
+            "summary": "两人建立合作关系。",
+            "facts": [{
+                "fact_ref": "relation",
+                "type": "关系",
+                "importance": 3,
+                "text": f"{names[0]}与{names[1]}建立合作关系。",
+                "participant_names": names[:2],
+                "start_id": span_id,
+                "end_id": span_id,
+            }],
+            "end_state_delta": [{
+                "fact_ref": "relation",
+                "slot": "relationship",
+                "operation": "set",
+                "value": "合作",
+            }],
+        }
+
+
 def _book_character_chapter(client, headers):
     book = client.post("/api/v1/books", headers=headers, json={"title": "书"}).json()
     character = client.post(
@@ -84,6 +131,33 @@ def _book_character_chapter(client, headers):
         json={"draft_text": "林夕在门边停下。随后，他安静等待。"},
     ).raise_for_status()
     return book, character, chapter
+
+
+def _book_two_character_chapter(client, headers):
+    book = client.post("/api/v1/books", headers=headers, json={"title": "书"}).json()
+    first = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=headers, json={"name": "林夕"}
+    ).json()
+    second = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=headers, json={"name": "周宁"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=headers,
+        json={
+            "user_prompt": "合作",
+            "character_links": [
+                {"character_id": first["id"]},
+                {"character_id": second["id"]},
+            ],
+        },
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=headers,
+        json={"draft_text": "林夕与周宁建立合作关系。"},
+    ).raise_for_status()
+    return book, first, second, chapter
 
 
 def test_source_spans_are_stable_and_sentence_addressable():
@@ -105,11 +179,67 @@ def test_v2_contract_exposes_the_span_recommendation_to_the_model():
     assert fact_schema["properties"]["fact_ref"]["maxLength"] == MAX_FACT_REF_CHARS
     assert fact_schema["properties"]["text"]["maxLength"] == MAX_FACT_TEXT_CHARS
     assert schema["properties"]["summary"]["maxLength"] == MAX_SUMMARY_CHARS
-    delta_schema = schema["properties"]["end_state_delta"]["items"]
-    assert delta_schema["properties"]["value"]["anyOf"][0]["maxLength"] == MAX_STATE_VALUE_CHARS
-    assert "scope" not in delta_schema["properties"]
-    assert "other_character_name" not in delta_schema["required"]
-    assert "scope" not in delta_schema["required"]
+    delta_variants = schema["properties"]["end_state_delta"]["items"]["oneOf"]
+    character_delta = next(
+        item for item in delta_variants if "character_name" in item["properties"]
+    )
+    relationship_delta = next(
+        item for item in delta_variants
+        if item["properties"]["slot"]["enum"] == ["relationship"]
+    )
+    assert character_delta["properties"]["value"]["anyOf"][0]["maxLength"] == MAX_STATE_VALUE_CHARS
+    assert "character_name" in character_delta["required"]
+    assert "relationship" not in character_delta["properties"]["slot"]["enum"]
+    assert "character_name" not in relationship_delta["properties"]
+    assert "other_character_name" not in relationship_delta["properties"]
+    assert "恰好两人" in relationship_delta["description"]
+    assert "不要重复输出 character_name" in prompt
+
+
+def test_validator_derives_relationship_pair_from_fact_and_checks_legacy_names():
+    chapter = SimpleNamespace(
+        draft_text="甲与乙建立合作，丙在旁见证。",
+        character_links=[
+            SimpleNamespace(character_id="a", character=SimpleNamespace(name="甲")),
+            SimpleNamespace(character_id="b", character=SimpleNamespace(name="乙")),
+            SimpleNamespace(character_id="c", character=SimpleNamespace(name="丙")),
+        ],
+    )
+    output = {
+        "summary": "甲与乙建立合作。",
+        "facts": [{
+            "fact_ref": "pair",
+            "type": "剧情",
+            "importance": 3,
+            "text": "甲与乙建立合作。",
+            "participant_names": ["甲", "乙"],
+            "start_id": "P0001-S01",
+            "end_id": "P0001-S01",
+        }],
+        "end_state_delta": [{
+            "fact_ref": "pair",
+            "slot": "relationship",
+            "operation": "set",
+            "value": "合作",
+        }],
+    }
+
+    validated = validate_archive_output(chapter, output)
+    assert {validated.deltas[0].character_id, validated.deltas[0].other_character_id} == {"a", "b"}
+
+    legacy = deepcopy(output)
+    legacy["end_state_delta"][0].update({"character_name": "乙", "other_character_name": "甲"})
+    assert validate_archive_output(chapter, legacy).deltas[0] == validated.deltas[0]
+
+    conflicting = deepcopy(output)
+    conflicting["end_state_delta"][0].update({"character_name": "甲", "other_character_name": "丙"})
+    with pytest.raises(ArchiveV2ValidationError, match="legacy relationship delta participants"):
+        validate_archive_output(chapter, conflicting)
+
+    ambiguous = deepcopy(output)
+    ambiguous["facts"][0]["participant_names"] = ["甲", "乙", "丙"]
+    with pytest.raises(ArchiveV2ValidationError, match="exactly two participants"):
+        validate_archive_output(chapter, ambiguous)
 
 
 def test_validator_canonicalizes_unique_model_fact_refs_and_delta_links(
@@ -320,6 +450,91 @@ def test_invalid_v2_archive_does_not_revoke_accepted_prose_or_feed_selector(
         assert {block.memory_type for block in memory_candidates(db, later)} == {"previous_ending"}
 
 
+def test_reopen_cancels_live_extractor_and_late_result_cannot_activate(client, auth_headers):
+    _, _, chapter = _book_character_chapter(client, auth_headers)
+    extractor = BlockingV2Extractor()
+    client.app.dependency_overrides[get_extractor_client] = lambda: extractor
+
+    accepted = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).json()
+    assert accepted["phase"] == "extracting"
+    assert extractor.started.wait(timeout=3)
+
+    reopened = client.post(f"/api/v1/chapters/{chapter['id']}/reopen", headers=auth_headers)
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "draft_ready"
+    extractor.release.set()
+    job = write_registry.get(chapter["id"])
+    if job is not None and job.thread is not None:
+        job.thread.join(timeout=3)
+
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert current["status"] == "draft_ready"
+    assert current["archive"]["status"] == "stale"
+    assert status["phase"] == "cancelled"
+    assert status["error_code"] == "archive_reopened"
+    with __import__("app.db", fromlist=["SessionLocal"]).SessionLocal() as db:
+        run = db.get(JobRun, accepted["job_id"])
+        revision = db.get(ChapterArchiveRevision, run.archive_revision_id)
+        assert revision.status == "stale"
+        assert not revision.is_active
+        assert run.phase == "cancelled"
+
+
+def test_activation_lifecycle_gate_stales_reopened_revision(client, auth_headers):
+    _, _, chapter_data = _book_character_chapter(client, auth_headers)
+    import app.db as db_module
+
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_data["id"])
+        revision = ChapterArchiveRevision(
+            chapter_id=chapter.id,
+            revision=1,
+            provenance="live",
+            input_fingerprint=archive_input_fingerprint(chapter),
+            status="extracting",
+        )
+        db.add(revision)
+        chapter.status = "draft_ready"
+        db.commit()
+        with pytest.raises(ArchiveFingerprintMismatch):
+            activate_archive_revision(
+                db, chapter, revision, SimpleNamespace(), model_name=None
+            )
+        db.commit()
+        db.expire_all()
+        stored = db.get(ChapterArchiveRevision, revision.id)
+        assert stored.status == "stale"
+        assert not stored.is_active
+
+
+def test_archive_failure_log_is_structured_and_redacted(monkeypatch):
+    job = SimpleNamespace(
+        chapter_id="chapter-id",
+        job_id="job-id",
+        archive_revision_id="revision-id",
+    )
+    accepted_prose = "这段正文绝不能进入日志。"
+    captured: list[str] = []
+    monkeypatch.setattr(
+        "app.services.write_jobs.logger.warning",
+        lambda template, rendered: captured.append(template % rendered),
+    )
+    _log_archive_failure(
+        job,
+        stage="archive_validation",
+        error_code="archive_validation_failed",
+        reason="fact source span does not exist",
+        client=SimpleNamespace(model_name="deepseek-v4-pro"),
+    )
+
+    failure_log = captured[0]
+    assert '"error_code": "archive_validation_failed"' in failure_log
+    assert '"stage": "archive_validation"' in failure_log
+    assert '"model_name": "deepseek-v4-pro"' in failure_log
+    assert accepted_prose not in failure_log
+
+
 def test_complete_v2_archive_activates_once_projects_state_and_selector_uses_only_ledger(
     client, auth_headers, wait_for_terminal
 ):
@@ -358,6 +573,27 @@ def test_complete_v2_archive_activates_once_projects_state_and_selector_uses_onl
         blocks = memory_candidates(db, later)
         assert {block.memory_type for block in blocks} == {"summary", "canonical_fact", "previous_ending"}
         assert all("legacy duplicate" not in block.text for block in blocks)
+
+
+def test_relationship_delta_activates_with_pair_derived_from_fact(
+    client, auth_headers, wait_for_terminal
+):
+    _, first, second, chapter = _book_two_character_chapter(client, auth_headers)
+    extractor = V2RelationshipExtractor()
+    client.app.dependency_overrides[get_extractor_client] = lambda: extractor
+
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    terminal = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert terminal["phase"] == "done", {
+        key: terminal.get(key)
+        for key in ("phase", "error_code", "error_message", "error_context")
+    }
+    assert extractor.calls == 1
+    assert set(terminal["updated_character_ids"]) == {first["id"], second["id"]}
+
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert current["archive"]["status"] == "complete"
+    assert current["archive"]["state_delta_count"] == 1
 
 
 def test_editing_accepted_body_stales_v2_and_manual_retry_creates_new_revision(

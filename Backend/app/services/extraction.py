@@ -57,13 +57,6 @@ class ValidatedExtractorOutput:
         return {}
 
 
-@dataclass(frozen=True)
-class OnlineExtractorSalvage:
-    output: dict[str, Any]
-    dropped_event_reasons: list[str]
-    dropped_state_reasons: list[str]
-
-
 def _validated_archive_items(raw: Any, *, field: str, character_map: dict[str, Character]) -> list[dict[str, str]]:
     if raw is None:
         return []
@@ -343,49 +336,6 @@ def salvage_online_extractor_state_output(
     cleaned["state_updates"] = salvaged["state_updates"]
     validate_extractor_output(chapter, cleaned)
     return cleaned, dropped_reasons
-
-
-def salvage_online_extractor_output(
-    chapter: Chapter, output: dict[str, Any]
-) -> OnlineExtractorSalvage:
-    """Keep only independently valid optional events and state components.
-
-    Headline, summary and chapter archives remain strict. Character events are
-    admitted one at a time through the same deterministic validator used at
-    persistence time; an unsafe event is omitted, never rewritten or inferred.
-    State keeps the existing snapshot-atomic, per-operation salvage semantics.
-    """
-    if not isinstance(output, dict):
-        raise ExtractorValidationError("Extractor output must be an object")
-    cleaned = deepcopy(output)
-    raw_events = cleaned.get("character_events")
-    raw_state = {"state_updates": cleaned.get("state_updates")}
-    cleaned["character_events"] = []
-    cleaned["state_updates"] = []
-    # Prove all non-optional archive fields before considering any salvage.
-    validate_extractor_output(chapter, cleaned)
-
-    accepted_events: list[dict[str, Any]] = []
-    dropped_event_reasons: list[str] = []
-    if not isinstance(raw_events, list):
-        dropped_event_reasons.append("character_events must be an array")
-    else:
-        for event in raw_events:
-            trial = {**cleaned, "character_events": [*accepted_events, event]}
-            try:
-                validate_extractor_output(chapter, trial)
-            except ExtractorValidationError as exc:
-                dropped_event_reasons.append(str(exc))
-            else:
-                accepted_events.append(event)
-
-    salvaged_state, dropped_state_reasons = _salvage_state_components(chapter, raw_state)
-    if not dropped_event_reasons and not dropped_state_reasons:
-        raise ExtractorValidationError("online salvage requires at least one rejected component")
-    cleaned["character_events"] = accepted_events
-    cleaned["state_updates"] = salvaged_state["state_updates"]
-    validate_extractor_output(chapter, cleaned)
-    return OnlineExtractorSalvage(cleaned, dropped_event_reasons, dropped_state_reasons)
 
 
 def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]) -> tuple[list[str], list[str]]:

@@ -90,20 +90,6 @@ legacy_online_contract = pytest.mark.skip(
 )
 
 
-def test_extractor_appends_fixed_protocol_and_schema_has_v16_archive_fields():
-    llm = RecordingExtractor(_archive_payload("林夕"))
-    output = ExtractorAgent(llm, "可编辑 Extractor 人格").extract("最终正文", [("character", "林夕")])
-    assert llm.system == f"可编辑 Extractor 人格\n\n{PROGRAM_PROTOCOLS['extractor']}"
-    assert {"long_summary", "state_changes", "unresolved_items", "atomic_memories"} <= set(llm.schema["properties"])
-    assert "summary" not in llm.schema["properties"]
-    assert extractor_schema([])["properties"]["character_events"].get("maxItems") == 0
-    assert extractor_schema(["林夕"])["properties"]["character_events"]["maxItems"] == CHARACTER_EVENT_MAX_PER_CHARACTER
-    assert extractor_schema(["甲", "乙", "丙"])["properties"]["character_events"]["maxItems"] == CHARACTER_EVENT_MAX_TOTAL
-    assert llm.temperatures == [0.1]
-    assert output["character_events"][0]["character_id"] == "character"
-    assert "character_name" not in output["character_events"][0]
-
-
 @legacy_online_contract
 def test_extractor_uses_accepted_draft_only_archives_and_recalls_new_memory(
     client, auth_headers, wait_for_terminal

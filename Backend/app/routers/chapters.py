@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, object_session
 
 from app.agents.extractor import ExtractorAgent
@@ -45,6 +47,7 @@ from app.services.context import (
 from app.services.personas import get_persona
 from app.services.character_state_projection import projected_fields_before_chapter, rebuild_book_projection
 from app.services.write_jobs import WriteJob, WriteJobConflict, record_job_phase, write_registry
+from app.services.write_ownership import cancel_local_writer_jobs, invalidate_writer_inputs
 from app.services.archive_v2 import (
     archive_input_fingerprint,
     archive_read_model,
@@ -52,9 +55,12 @@ from app.services.archive_v2 import (
     create_archive_revision,
     invalidate_downstream_archives,
     invalidate_archive_if_input_changed,
+    stale_archives_for_reopen,
 )
 
 router = APIRouter(tags=["chapters"])
+
+_CHAPTER_CREATE_RETRIES = 3
 
 
 def _chapter_read(chapter: Chapter) -> ChapterRead:
@@ -95,7 +101,10 @@ def _job_status_from_run(
 ) -> WriteJobStatus:
     outcome_current = None
     if run.phase in {"done", "failed", "cancelled"}:
-        outcome_current = run.finished_at is not None and run.finished_at >= chapter.updated_at
+        if run.kind == "write" and run.chapter_write_generation is not None:
+            outcome_current = run.chapter_write_generation == chapter.write_generation
+        else:
+            outcome_current = run.finished_at is not None and run.finished_at >= chapter.updated_at
     status_out = WriteJobStatus(
         chapter_id=chapter.id,
         job_id=run.id,
@@ -141,6 +150,16 @@ def _replace_links(db: Session, chapter: Chapter, links: list) -> None:
     chapter.updated_at = utc_now()
 
 
+def _is_chapter_index_conflict(exc: IntegrityError) -> bool:
+    detail = str(getattr(exc, "orig", exc)).lower()
+    return "chapters.book_id, chapters.index" in detail or "uq_chapters_book_index" in detail
+
+
+def _is_sqlite_busy(exc: OperationalError) -> bool:
+    detail = str(getattr(exc, "orig", exc)).lower()
+    return "database is locked" in detail or "database is busy" in detail
+
+
 def _apply_author_note(chapter: Chapter, author_note: str | None) -> None:
     if author_note is not None:
         chapter.author_note = author_note
@@ -155,23 +174,45 @@ def list_chapters(book_id: str, db: Session = Depends(get_db)) -> list[Chapter]:
 def create_chapter(book_id: str, payload: ChapterCreate, db: Session = Depends(get_db)) -> ChapterRead:
     if db.get(Book, book_id) is None:
         raise HTTPException(status_code=404, detail="book not found")
-    next_index = (db.scalar(select(func.max(Chapter.index)).where(Chapter.book_id == book_id)) or 0) + 1
-    chapter = Chapter(
-        book_id=book_id,
-        index=next_index,
-        title=payload.title,
-        user_prompt=payload.user_prompt,
-        target_word_count=payload.target_word_count,
-        author_note=payload.author_note or "",
-        archive_status="stale",
-        legacy_archive_eligible=False,
-    )
-    db.add(chapter)
-    db.flush()
-    _replace_links(db, chapter, payload.character_links)
-    db.commit()
-    db.refresh(chapter)
-    return _chapter_read(chapter)
+    for attempt in range(_CHAPTER_CREATE_RETRIES):
+        next_index = (db.scalar(select(func.max(Chapter.index)).where(Chapter.book_id == book_id)) or 0) + 1
+        chapter = Chapter(
+            book_id=book_id,
+            index=next_index,
+            title=payload.title,
+            user_prompt=payload.user_prompt,
+            target_word_count=payload.target_word_count,
+            author_note=payload.author_note or "",
+            archive_status="stale",
+            legacy_archive_eligible=False,
+        )
+        try:
+            db.add(chapter)
+            db.flush()
+            _replace_links(db, chapter, payload.character_links)
+            db.commit()
+            db.refresh(chapter)
+            return _chapter_read(chapter)
+        except IntegrityError as exc:
+            db.rollback()
+            if not _is_chapter_index_conflict(exc) or attempt + 1 == _CHAPTER_CREATE_RETRIES:
+                if _is_chapter_index_conflict(exc):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"code": "chapter_index_busy", "message": "章节编号正在被其他编辑占用，请重试"},
+                    ) from exc
+                raise
+        except OperationalError as exc:
+            db.rollback()
+            if not _is_sqlite_busy(exc) or attempt + 1 == _CHAPTER_CREATE_RETRIES:
+                if _is_sqlite_busy(exc):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"code": "chapter_index_busy", "message": "章节编号正在被其他编辑占用，请重试"},
+                    ) from exc
+                raise
+        time.sleep(0.01 * (attempt + 1))
+    raise AssertionError("unreachable chapter creation retry")
 
 
 @router.get("/chapters/{chapter_id}", response_model=ChapterRead)
@@ -218,6 +259,8 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
         _apply_author_note(chapter, payload.author_note)
     if payload.character_links is not None:
         _replace_links(db, chapter, payload.character_links)
+    if payload.model_fields_set:
+        invalidated = invalidate_writer_inputs(db, [chapter])
     archive_invalidated = invalidate_archive_if_input_changed(
         db, chapter, previous_fingerprint=previous_archive_fingerprint
     )
@@ -225,6 +268,8 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
         invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
         rebuild_book_projection(db, chapter.book_id)
     db.commit()
+    if payload.model_fields_set:
+        cancel_local_writer_jobs(invalidated)
     db.refresh(chapter)
     return _chapter_read(chapter)
 
@@ -275,6 +320,7 @@ def import_chapter(chapter_id: str, payload: ChapterImportRequest, db: Session =
         _apply_author_note(chapter, payload.author_note)
     if payload.character_links is not None:
         _replace_links(db, chapter, payload.character_links)
+    invalidated = invalidate_writer_inputs(db, [chapter])
     archive_invalidated = invalidate_archive_if_input_changed(
         db, chapter, previous_fingerprint=previous_archive_fingerprint
     )
@@ -282,6 +328,7 @@ def import_chapter(chapter_id: str, payload: ChapterImportRequest, db: Session =
         invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
         rebuild_book_projection(db, chapter.book_id)
     db.commit()
+    cancel_local_writer_jobs(invalidated)
     db.refresh(chapter)
     return _chapter_read(chapter)
 
@@ -316,6 +363,7 @@ def write_chapter(
         if live_job.thread is not None:
             live_job.thread.join(timeout=8)
         record_job_phase(SessionLocal, live_job.job_id, "cancelled")
+        invalidate_writer_inputs(db, [chapter])
     candidates = memory_candidates(db, chapter)
     selected_ids = {link.character_id for link in chapter.character_links}
     candidates = prefilter_memory_candidates(candidates, chapter=chapter, selected_character_ids=selected_ids)
@@ -329,7 +377,14 @@ def write_chapter(
     baseline_text = chapter.draft_text
     baseline_status = "draft_ready" if baseline_text.strip() else "draft"
     job_id = uuid_str()
-    run = JobRun(id=job_id, chapter_id=chapter.id, kind="write", phase="selecting_memory", bible_sha256=bible_sha256)
+    run = JobRun(
+        id=job_id,
+        chapter_id=chapter.id,
+        kind="write",
+        phase="selecting_memory",
+        bible_sha256=bible_sha256,
+        chapter_write_generation=chapter.write_generation,
+    )
     db.add(run)
     job = WriteJob(
         chapter_id=chapter.id,
@@ -345,6 +400,7 @@ def write_chapter(
         baseline_status=baseline_status,
         bible_snapshot=bible_snapshot,
         bible_sha256=bible_sha256,
+        chapter_write_generation=chapter.write_generation,
     )
     try:
         write_registry.reserve(job)
@@ -399,6 +455,11 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    if job is not None and job.kind == "write":
+        invalidated = invalidate_writer_inputs(db, [chapter])
+        db.commit()
+        db.refresh(chapter)
+        cancel_local_writer_jobs(invalidated)
     if job is not None and job.kind == "extract" and job.archive_revision_id:
         revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
         if revision is not None and revision.status in {"pending", "extracting"}:
@@ -693,6 +754,7 @@ def reopen_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRea
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     previous_archive_fingerprint = archive_input_fingerprint(chapter)
+    stale_archives_for_reopen(db, chapter)
     chapter.status = "draft_ready"
     # Reopening invalidates v2 selection, but legacy rows remain auditable.
     invalidate_archive_if_input_changed(
@@ -701,5 +763,8 @@ def reopen_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRea
     invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
     rebuild_book_projection(db, chapter.book_id)
     db.commit()
+    live_job = write_registry.get_live(chapter.id)
+    if live_job is not None and live_job.kind == "extract":
+        write_registry.cancel(live_job, discard=True)
     db.refresh(chapter)
     return _chapter_read(chapter)

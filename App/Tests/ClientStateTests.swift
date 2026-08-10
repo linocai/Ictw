@@ -56,6 +56,35 @@ private func testLegacySynopsisDecodesAsCanonicalSummary() throws {
     try expect(chapter.longSummary == "旧版梗概原文", "legacy synopsis must remain visible as the canonical summary")
 }
 
+private func testConnectionDefaultMigrationPreservesCustomEndpoint() throws {
+    let missing = ConnectionEndpoint.migratedBaseURL(saved: nil)
+    try expect(missing.value == "https://ictw.linotsai.top" && missing.shouldPersist, "missing endpoint must migrate to Ningbo default")
+
+    let legacy = ConnectionEndpoint.migratedBaseURL(saved: "https://linoi.neluvee.top")
+    try expect(legacy.value == "https://ictw.linotsai.top" && legacy.shouldPersist, "only exact legacy default must migrate")
+
+    let custom = ConnectionEndpoint.migratedBaseURL(saved: "https://writer.example.test/custom")
+    try expect(custom.value == "https://writer.example.test/custom" && !custom.shouldPersist, "custom endpoint must remain untouched")
+
+    let nearLegacy = ConnectionEndpoint.migratedBaseURL(saved: "https://linoi.neluvee.top/")
+    try expect(nearLegacy.value == "https://linoi.neluvee.top/" && !nearLegacy.shouldPersist, "non-exact saved address must remain user-owned")
+}
+
+private func testAPIEndpointBearerAndStructuredConfigurationError() throws {
+    let api = APIClient(baseURL: "https://ictw.linotsai.top/", token: "test-token")
+    try expect(api.apiRoot == "https://ictw.linotsai.top/api/v1", "API root must normalize one trailing slash")
+    let request = try api.preparedRequest("/chapters/chapter-1/job")
+    try expect(request.url?.absoluteString == "https://ictw.linotsai.top/api/v1/chapters/chapter-1/job", "API path must use current endpoint")
+    try expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-token", "Bearer header must be retained")
+
+    let body = try JSONSerialization.data(withJSONObject: [
+        "detail": ["code": "llm_profile_not_configured", "message": "该 Agent 尚未完成可用模型配置", "details": ["agent_role": "writer"]],
+    ])
+    let structured = APIClient.structuredError(from: body)
+    try expect(structured?.code == "llm_profile_not_configured", "configuration code must decode as structured API error")
+    try expect(structured?.message == "该 Agent 尚未完成可用模型配置", "configuration message must remain user-displayable")
+}
+
 private func makeStatus(
     phase: String,
     outcomeCurrent: Bool?
@@ -450,6 +479,8 @@ private func testLocalDraftPersistsOnlyAtTransitionBoundaries() throws {
 private struct ClientStateTestRunner {
     static func main() throws {
         try testLegacySynopsisDecodesAsCanonicalSummary()
+        try testConnectionDefaultMigrationPreservesCustomEndpoint()
+        try testAPIEndpointBearerAndStructuredConfigurationError()
         try testCurrentServerFailureIsApplied()
         try testOldOrFinalizedServerFailureIsDiscarded()
         try testOldServerFailureRemainsLocalOnly()

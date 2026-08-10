@@ -10,14 +10,13 @@ from sqlalchemy.orm import Session
 from app.agents.memory_selector import MEMORY_SELECTION_FIXED_CONTRACT, MemorySelectorAgent
 from app.agents.extractor import (
     EXTRACTOR_MAX_OUTPUT_TOKENS,
-    extractor_event_repair_schema,
     extractor_schema,
     extractor_state_rebuild_schema,
 )
 from app.db import Base, make_engine
 from app.llm.base import LLMError
 from app.llm.openai_compatible import OpenAICompatibleClient, _extract_content, _http_error
-from app.models import Book, Chapter
+from app.models import Book, Chapter, JobRun
 from app.services.context import MemoryBlock, pack_memory_brief, pack_selected_memories, prefilter_memory_candidates
 from app.services.write_jobs import WriteJob, _restore_baseline, write_registry
 
@@ -77,14 +76,6 @@ def test_state_rebuild_schema_cannot_regenerate_archives_or_events():
     assert set(schema["properties"]) == {"state_updates"}
     assert schema["required"] == ["state_updates"]
     assert schema["additionalProperties"] is False
-
-
-def test_event_repair_schema_cannot_regenerate_other_archive_fields():
-    schema = extractor_event_repair_schema(["甲"])
-    assert set(schema["properties"]) == {"character_events"}
-    assert schema["required"] == ["character_events"]
-    assert schema["additionalProperties"] is False
-    assert EXTRACTOR_MAX_OUTPUT_TOKENS == 8192
 
 
 def test_truncated_json_preserves_finish_reason_and_retry_classification(monkeypatch):
@@ -186,19 +177,19 @@ def test_rate_limit_preserves_retry_after():
     assert error.retry_after == "17"
 
 
-def test_provider_reasons_are_preserved_without_exposing_body():
+def test_provider_reason_classifications_are_normalized_without_exposing_body():
     error = _http_error(
         503,
         {},
         b'{"promptFeedback":{"blockReason":"PROHIBITED_CONTENT"},'
         b'"candidates":[{"finishReason":"SAFETY"}]}',
     )
-    assert error.finish_reason == "SAFETY"
+    assert error.finish_reason == "safety"
     assert error.block_reason == "PROHIBITED_CONTENT"
     assert "PROHIBITED_CONTENT" not in str(error)
 
 
-def test_upstream_reason_whitelists_message_code_type_and_drops_echoes():
+def test_upstream_reason_maps_machine_code_and_drops_echoes_and_message():
     body = json.dumps(
         {
             "error": {
@@ -216,10 +207,8 @@ def test_upstream_reason_whitelists_message_code_type_and_drops_echoes():
     error = _http_error(400, {}, body)
     assert error.code == "llm_upstream_rejected"
     assert error.upstream_reason is not None
-    assert len(error.upstream_reason) <= 200
-    assert "上游拒绝了请求：内容不符合规范" in error.upstream_reason
-    assert "invalid_request_error" in error.upstream_reason
-    assert "invalid_request_error_type" in error.upstream_reason
+    assert error.upstream_reason == "invalid_request"
+    assert "上游拒绝了请求：内容不符合规范" not in error.upstream_reason
     assert "PROMPT_ECHO_MARKER" not in error.upstream_reason
     assert "MESSAGES_ECHO_MARKER" not in error.upstream_reason
     # "temperature" only appears as the whitelist-excluded `param` value here, so its
@@ -227,17 +216,16 @@ def test_upstream_reason_whitelists_message_code_type_and_drops_echoes():
     assert "temperature" not in error.upstream_reason
 
 
-def test_upstream_reason_accepts_numeric_code_but_rejects_boolean_code():
+def test_upstream_reason_rejects_unmapped_numeric_and_boolean_codes():
     integer_error = _http_error(
         400,
         {},
         json.dumps({"error": {"message": "rejected", "code": 40017, "secret": "DO_NOT_LEAK"}}).encode(),
     )
-    assert integer_error.upstream_reason == "rejected | 40017"
-    assert "DO_NOT_LEAK" not in integer_error.upstream_reason
+    assert integer_error.upstream_reason is None
 
     float_error = _http_error(400, {}, json.dumps({"error": {"code": 40017.5}}).encode())
-    assert float_error.upstream_reason == "40017.5"
+    assert float_error.upstream_reason is None
 
     boolean_error = _http_error(400, {}, json.dumps({"error": {"code": True}}).encode())
     assert boolean_error.upstream_reason is None
@@ -256,11 +244,10 @@ def test_profile_test_connection_carries_upstream_reason(monkeypatch):
     error = exc_info.value
     assert str(error) == "LLM profile test failed: 401"
     assert error.upstream_reason is not None
-    assert "Invalid API key" in error.upstream_reason
-    assert "authentication_error" in error.upstream_reason
+    assert error.upstream_reason == "authentication"
 
 
-def test_upstream_reason_truncates_to_200_chars():
+def test_upstream_reason_never_keeps_provider_message_length():
     body = json.dumps(
         {
             "error": {
@@ -272,7 +259,7 @@ def test_upstream_reason_truncates_to_200_chars():
     ).encode("utf-8")
     error = _http_error(400, {}, body)
     assert error.upstream_reason is not None
-    assert len(error.upstream_reason) == 200
+    assert error.upstream_reason == "invalid_request"
 
 
 def test_upstream_reason_absent_when_error_missing_or_not_object():
@@ -306,6 +293,27 @@ def test_stale_cancelled_job_cannot_restore_over_replacement(tmp_path):
         db.expire_all()
         assert db.get(Chapter, "chapter").draft_text == "新任务最终稿"
     write_registry.clear()
+
+
+def test_baseline_and_terminal_phase_roll_back_together_on_terminal_write_failure(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path / 'baseline-transaction.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add(Book(id="book", title="书"))
+        db.add(Chapter(id="chapter", book_id="book", index=1, draft_text="当前正文", status="writing"))
+        db.flush()
+        db.add(JobRun(id="job", chapter_id="chapter", kind="write", phase="writing", chapter_write_generation=0))
+        db.commit()
+        job = WriteJob(
+            "chapter", writer=None, job_id="job",  # type: ignore[arg-type]
+            baseline_text="基线正文", baseline_status="draft_ready", chapter_write_generation=0,
+        )
+        monkeypatch.setattr("app.services.write_jobs._apply_job_phase", lambda *_args, **_kwargs: False)
+        assert not _restore_baseline(db, job, phase="failed", error_code="writer_validation_failed")
+        db.expire_all()
+        assert db.get(Chapter, "chapter").draft_text == "当前正文"
+        assert db.get(Chapter, "chapter").status == "writing"
+        assert db.get(JobRun, "job").phase == "writing"
 
 
 def test_memory_prefilter_is_deterministic_and_prioritizes_selected_character():

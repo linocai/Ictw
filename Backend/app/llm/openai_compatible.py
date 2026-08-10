@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from app.llm.base import LLMError
+from app.llm.base import LLMError, safe_block_reason, safe_finish_reason, safe_upstream_reason
 
 
 NON_THINKING_TOP_P = 0.95
@@ -131,7 +131,7 @@ class OpenAICompatibleClient:
                             raise LLMError(
                                 "LLM blocked the request",
                                 code="llm_content_blocked",
-                                block_reason=str(block_reason),
+                            block_reason=safe_block_reason(block_reason),
                             )
                     usage = _extract_usage(chunk)
                     if usage is not None:
@@ -248,7 +248,7 @@ def _extract_content(data: dict[str, Any]) -> str:
                 "LLM blocked the request",
                 code="llm_content_blocked",
                 retryable=False,
-                block_reason=str(block_reason),
+                block_reason=safe_block_reason(block_reason),
             )
     try:
         content = data["choices"][0]["message"]["content"]
@@ -284,7 +284,7 @@ def _extract_finish_reason(data: dict[str, Any]) -> str | None:
             value = candidates[0].get("finishReason")
         else:
             value = None
-    return str(value) if value is not None else None
+    return safe_finish_reason(value)
 
 
 def _is_length_finish_reason(value: str | None) -> bool:
@@ -336,38 +336,13 @@ def _safe_provider_reasons(body: bytes | None) -> tuple[str | None, str | None, 
     block_reason = None
     if isinstance(feedback, dict):
         value = feedback.get("blockReason") or feedback.get("block_reason")
-        block_reason = str(value) if value is not None else None
+        block_reason = safe_block_reason(value)
     upstream_reason = _safe_upstream_reason(data.get("error"))
     return finish_reason, block_reason, upstream_reason
 
 
 def _safe_upstream_reason(error: Any) -> str | None:
-    """Whitelist-only extraction from the top-level ``error`` object.
-
-    Only string ``message``/``type`` values and string or numeric ``code``
-    values are ever read. Boolean codes are deliberately excluded even though
-    ``bool`` is an ``int`` subclass in Python.
-    Anything else on the error object (``metadata``, ``param``, ...) or
-    elsewhere in the body (e.g. an echoed ``messages`` array) is never
-    touched, so a provider that echoes the prompt back in its error body
-    cannot leak it into ``upstream_reason``. Gemini's native
-    ``promptFeedback.blockReason`` is handled separately by
-    ``_extract_content``/the streaming path and is not duplicated here.
-    """
+    """Map known provider machine codes only; never inspect ``error.message``."""
     if not isinstance(error, dict):
         return None
-    parts: list[str] = []
-    for key in ("message", "code", "type"):
-        value = error.get(key)
-        if isinstance(value, str):
-            value = value.strip()
-        elif key == "code" and isinstance(value, (int, float)) and not isinstance(value, bool):
-            value = str(value)
-        else:
-            continue
-        if value:
-            parts.append(value)
-    if not parts:
-        return None
-    reason = " | ".join(parts).strip()
-    return reason[:200] if reason else None
+    return safe_upstream_reason(error.get("code")) or safe_upstream_reason(error.get("type"))

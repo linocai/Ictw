@@ -11,6 +11,7 @@ from app.models import Book, Chapter, Character, CharacterEvent
 from app.models.entities import utc_now
 from app.schemas.book import BookCreate, BookPatch, BookRead
 from app.services.archive_v2 import active_archive_revision
+from app.services.write_ownership import cancel_local_writer_jobs, chapters_for_book, invalidate_writer_inputs
 
 router = APIRouter(tags=["books"])
 
@@ -59,9 +60,12 @@ def patch_book(book_id: str, payload: BookPatch, db: Session = Depends(get_db)) 
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="book not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    for key, value in updates.items():
         setattr(book, key, value)
+    invalidated = invalidate_writer_inputs(db, chapters_for_book(db, book.id)) if "world_setting" in updates else []
     db.commit()
+    cancel_local_writer_jobs(invalidated)
     db.refresh(book)
     return book_read(db, book)
 

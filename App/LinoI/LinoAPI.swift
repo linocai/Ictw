@@ -24,7 +24,7 @@ struct APIClient {
     let baseURL: String
     let token: String
 
-    private var apiRoot: String {
+    var apiRoot: String {
         baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/v1"
     }
 
@@ -35,15 +35,7 @@ struct APIClient {
 
     @discardableResult
     func rawRequest(_ path: String, method: String = "GET", body: (any Encodable & Sendable)? = nil) async throws -> Data {
-        guard !baseURL.isEmpty, !token.isEmpty else { throw APIError.notConfigured }
-        guard let url = URL(string: apiRoot + path) else { throw APIError.badURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let body {
-            request.httpBody = try JSONEncoder.lino.encode(AnyEncodable(body))
-        }
+        let request = try preparedRequest(path, method: method, body: body)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { return data }
@@ -59,6 +51,23 @@ struct APIClient {
         } catch {
             throw APIError.transport(error.localizedDescription)
         }
+    }
+
+    func preparedRequest(
+        _ path: String,
+        method: String = "GET",
+        body: (any Encodable & Sendable)? = nil
+    ) throws -> URLRequest {
+        guard !baseURL.isEmpty, !token.isEmpty else { throw APIError.notConfigured }
+        guard let url = URL(string: apiRoot + path) else { throw APIError.badURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let body {
+            request.httpBody = try JSONEncoder.lino.encode(AnyEncodable(body))
+        }
+        return request
     }
 
     /// Starts (or restarts) the background write job for a chapter. The server
@@ -92,7 +101,7 @@ struct APIClient {
 
     /// Extracts a `{code, message, details.names}` structured error payload
     /// (the shape used by preflight/job failures) when present.
-    private static func structuredError(from data: Data) -> (code: String, message: String, names: [String])? {
+    static func structuredError(from data: Data) -> (code: String, message: String, names: [String])? {
         guard !data.isEmpty,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let detail = object["detail"] as? [String: Any],

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
    LastUpgradeVersion = "2660"
-   version = "1.7">
+   version = "1.3">
    <BuildAction
       parallelizeBuildables = "YES"
       buildImplicitDependencies = "YES">
@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "B00000000000000000000340"
-               BuildableName = "LinoIMac.app"
+               BuildableName = "ICTW.app"
                BlueprintName = "LinoIMac"
                ReferencedContainer = "container:LinoI.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "B00000000000000000000340"
-            BuildableName = "LinoIMac.app"
+            BuildableName = "ICTW.app"
             BlueprintName = "LinoIMac"
             ReferencedContainer = "container:LinoI.xcodeproj">
          </BuildableReference>
@@ -62,7 +62,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "B00000000000000000000340"
-            BuildableName = "LinoIMac.app"
+            BuildableName = "ICTW.app"
             BlueprintName = "LinoIMac"
             ReferencedContainer = "container:LinoI.xcodeproj">
          </BuildableReference>

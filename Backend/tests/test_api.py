@@ -688,9 +688,7 @@ def test_failed_job_persists_error_context_and_job_endpoint_surfaces_it(client, 
                 "LLM upstream request failed: 400",
                 code="llm_upstream_rejected",
                 status_code=400,
-                # Pre-shaped as openai_compatible._safe_upstream_reason would produce it;
-                # the whitelist extraction itself is covered in test_v1_pipeline.py.
-                upstream_reason="content policy violation | invalid_request_error | invalid_request_error_type",
+                upstream_reason="PROMPT_ECHO_MARKER",
             )
             yield  # pragma: no cover - keep this a generator
 
@@ -711,11 +709,49 @@ def test_failed_job_persists_error_context_and_job_endpoint_surfaces_it(client, 
     assert ctx["agent_role"] == "writer"
     assert ctx["model_name"] == "gpt-test-4"
     assert ctx["http_status"] == 400
-    assert ctx["upstream_reason"] == "content policy violation | invalid_request_error | invalid_request_error_type"
+    assert "upstream_reason" not in ctx
 
     # The polling endpoint independently surfaces the same error_context, not just the POST response.
     fetched = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
     assert fetched["error_context"] == ctx
+
+
+def test_unconfigured_writer_returns_safe_409(client, auth_headers):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    client.app.dependency_overrides.pop(get_writer_client)
+    response = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers)
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "llm_profile_not_configured",
+        "message": "该 Agent 尚未完成可用模型配置",
+        "details": {"agent_role": "writer"},
+    }
+
+
+def test_concurrent_chapter_creation_never_leaks_integrity_error(client, auth_headers):
+    from concurrent.futures import ThreadPoolExecutor
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+
+    def create(index: int):
+        return client.post(
+            f"/api/v1/books/{book['id']}/chapters",
+            headers=auth_headers,
+            json={"title": f"章节 {index}", "user_prompt": "行动"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(create, range(2)))
+    assert all(response.status_code in {201, 409} for response in responses)
+    for response in responses:
+        if response.status_code == 409:
+            assert response.json()["detail"]["code"] == "chapter_index_busy"
+    chapters = client.get(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers).json()
+    indexes = [chapter["index"] for chapter in chapters]
+    assert indexes == sorted(set(indexes))
 
 
 def test_content_blocked_failure_is_not_disguised_as_generic_rejection(client, auth_headers, wait_for_terminal):
@@ -794,7 +830,7 @@ def test_cancelled_job_remains_current_after_chapter_restore(client, auth_header
     status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
     assert status["phase"] == "cancelled"
     assert status["job_id"] == started["job_id"]
-    assert status["outcome_current"] is True
+    assert status["outcome_current"] is False
 
 
 def test_cancel_during_checker_never_promotes_old_candidate(client, auth_headers):
@@ -855,6 +891,213 @@ def test_cancel_during_checker_never_promotes_old_candidate(client, auth_headers
     assert candidates[0]["draft_text"] == "新" * 4000
     assert candidates[0]["checker_result"] is None
     assert candidates[0]["is_current"] is False
+
+
+def test_edit_during_checker_keeps_manual_text_and_marks_old_job_changed(client, auth_headers):
+    from threading import Event
+
+    class BlockingChecker:
+        def __init__(self):
+            self.started = Event()
+            self.release = Event()
+
+        def complete_json(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            return {"verdict": "passed", "issues": []}
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    baseline = "旧稿"
+    client.post(f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": baseline}).raise_for_status()
+    checker = BlockingChecker()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("候选" * 2000)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    started = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).json()
+    assert checker.started.wait(timeout=3)
+
+    manual = "人工编辑" * 1200
+    patched = client.patch(
+        f"/api/v1/chapters/{chapter['id']}", headers=auth_headers, json={"draft_text": manual}
+    )
+    assert patched.status_code == 200
+    checker.release.set()
+    live = write_registry.get(chapter["id"])
+    if live and live.thread:
+        live.thread.join(timeout=3)
+
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert current["draft_text"] == manual
+    assert current["status"] == "draft_ready"
+    assert status["job_id"] == started["job_id"]
+    assert status["phase"] == "cancelled"
+    assert status["error_code"] == "chapter_changed"
+    assert status["outcome_current"] is False
+    assert all(not candidate["is_current"] for candidate in stored_candidates(chapter["id"]))
+
+
+@pytest.mark.parametrize("mutation", ["import", "links"])
+def test_edit_during_writer_cannot_restore_old_baseline(client, auth_headers, mutation):
+    from threading import Event
+
+    class BlockingWriter(TextLLM):
+        def __init__(self):
+            super().__init__("候选" * 2000)
+            self.started = Event()
+            self.release = Event()
+
+        def complete_stream(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            yield from self.text
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    client.post(f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "旧稿"}).raise_for_status()
+    writer = BlockingWriter()
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    started = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).json()
+    assert writer.started.wait(timeout=3)
+
+    if mutation == "import":
+        manual = "导入正文" * 1000
+        response = client.post(
+            f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": manual}
+        )
+    else:
+        manual = "旧稿"
+        response = client.patch(
+            f"/api/v1/chapters/{chapter['id']}",
+            headers=auth_headers,
+            json={"character_links": [{"character_id": character["id"]}]},
+        )
+    assert response.status_code == 200
+    writer.release.set()
+    live = write_registry.get(chapter["id"])
+    if live and live.thread:
+        live.thread.join(timeout=3)
+
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert current["draft_text"] == manual
+    assert status["job_id"] == started["job_id"]
+    assert status["phase"] == "cancelled"
+    assert status["error_code"] == "chapter_changed"
+
+
+@pytest.mark.parametrize("stage", ["writer", "checker"])
+@pytest.mark.parametrize("mutation", ["world", "character", "delete_character"])
+def test_writer_input_owners_cancel_blocked_jobs_without_promoting_old_text(
+    client, auth_headers, stage, mutation
+):
+    from threading import Event
+
+    class BlockingWriter(TextLLM):
+        def __init__(self):
+            super().__init__("候选" * 2000)
+            self.started = Event()
+            self.release = Event()
+
+        def complete_stream(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            yield from self.text
+
+    class BlockingChecker:
+        def __init__(self):
+            self.started = Event()
+            self.release = Event()
+
+        def complete_json(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            return {"verdict": "passed", "issues": []}
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters",
+        headers=auth_headers,
+        json={"user_prompt": "行动", "character_links": [{"character_id": character["id"]}]},
+    ).json()
+    baseline = "旧稿"
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": baseline}
+    ).raise_for_status()
+    if stage == "writer":
+        blocker = BlockingWriter()
+        client.app.dependency_overrides[get_writer_client] = lambda: blocker
+    else:
+        blocker = BlockingChecker()
+        client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("候选" * 2000)
+        client.app.dependency_overrides[get_checker_client] = lambda: blocker
+    started = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).json()
+    assert blocker.started.wait(timeout=3)
+
+    if mutation == "world":
+        response = client.patch(f"/api/v1/books/{book['id']}", headers=auth_headers, json={"world_setting": "新规则"})
+    elif mutation == "character":
+        response = client.patch(
+            f"/api/v1/characters/{character['id']}", headers=auth_headers, json={"fixed_profile": "新的固定设定"}
+        )
+    else:
+        response = client.delete(f"/api/v1/characters/{character['id']}", headers=auth_headers)
+    assert response.status_code in {200, 204}
+    blocker.release.set()
+    live = write_registry.get(chapter["id"])
+    if live and live.thread:
+        live.thread.join(timeout=3)
+
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert current["draft_text"] == baseline
+    assert status["job_id"] == started["job_id"]
+    assert status["phase"] == "cancelled"
+    assert status["error_code"] == "chapter_changed"
+    assert status["outcome_current"] is False
+
+
+def test_non_prompt_book_and_unlinked_character_edits_do_not_cancel_writer(client, auth_headers, wait_for_terminal):
+    from threading import Event
+
+    class BlockingWriter(TextLLM):
+        def __init__(self):
+            super().__init__("候选" * 2000)
+            self.started = Event()
+            self.release = Event()
+
+        def complete_stream(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            yield from self.text
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    unlinked = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "未入场"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    writer = BlockingWriter()
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
+    assert writer.started.wait(timeout=3)
+    assert client.patch(f"/api/v1/books/{book['id']}", headers=auth_headers, json={"title": "改标题"}).status_code == 200
+    assert client.patch(
+        f"/api/v1/characters/{unlinked['id']}", headers=auth_headers, json={"role": "路人"}
+    ).status_code == 200
+    writer.release.set()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
 
 def test_delete_finalized_chapter_cascades_events_and_reverts_dynamic_state(client, auth_headers, wait_for_terminal):

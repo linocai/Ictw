@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import Base, make_engine
 from app.llm.base import LLMError
-from app.models import Book, Chapter, Character, JobRun, LLMCallAudit
+from app.models import Book, Chapter, ChapterArchiveRevision, Character, JobRun, LLMCallAudit
+from app.services.archive_v2 import archive_input_fingerprint
 from app.services.context import (
     CHARACTER_EVENT_MAX_CHARS,
     MIN_DRAFT_NONSPACE_CHARS,
@@ -176,6 +177,50 @@ def test_recover_interrupted_jobs_marks_failed(client, auth_headers):
         db.close()
 
 
+def test_recovery_never_refinalizes_reopened_extractor_job(client, auth_headers):
+    import app.db as db_module
+    from app.main import recover_interrupted_chapters
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    finalized = client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"title": "已接受"}).json()
+    reopened = client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"title": "已重开"}).json()
+    db = db_module.SessionLocal()
+    try:
+        final_chapter = db.get(Chapter, finalized["id"])
+        reopened_chapter = db.get(Chapter, reopened["id"])
+        final_chapter.status = "finalized"
+        reopened_chapter.status = "draft_ready"
+        revisions = []
+        for chapter in (final_chapter, reopened_chapter):
+            revision = ChapterArchiveRevision(
+                chapter_id=chapter.id,
+                revision=1,
+                provenance="live",
+                input_fingerprint=archive_input_fingerprint(chapter),
+                status="extracting",
+            )
+            db.add(revision)
+            revisions.append(revision)
+        db.flush()
+        runs = [
+            JobRun(chapter_id=final_chapter.id, kind="extract", phase="extracting", archive_revision_id=revisions[0].id),
+            JobRun(chapter_id=reopened_chapter.id, kind="extract", phase="extracting", archive_revision_id=revisions[1].id),
+        ]
+        db.add_all(runs)
+        db.commit()
+        recover_interrupted_chapters(db)
+        db.expire_all()
+
+        assert db.get(Chapter, final_chapter.id).status == "finalized"
+        assert db.get(ChapterArchiveRevision, revisions[0].id).status == "failed"
+        assert db.get(JobRun, runs[0].id).phase == "failed"
+        assert db.get(Chapter, reopened_chapter.id).status == "draft_ready"
+        assert db.get(ChapterArchiveRevision, revisions[1].id).status == "stale"
+        assert db.get(JobRun, runs[1].id).phase == "cancelled"
+    finally:
+        db.close()
+
+
 # --- B4 LLM audit -------------------------------------------------------------
 
 
@@ -234,7 +279,7 @@ def test_llm_audit_records_error_code_on_failure(client, auth_headers, wait_for_
     assert any(row.agent_role == "writer" and row.error_code == "llm_upstream_unavailable" for row in rows)
 
 
-def test_llm_audit_records_upstream_reason_without_prompt_or_key(client, auth_headers, wait_for_terminal):
+def test_llm_audit_drops_untrusted_upstream_reason_without_prompt_or_key(client, auth_headers, wait_for_terminal):
     import app.db as db_module
     from app.llm.factory import get_writer_client
 
@@ -244,7 +289,7 @@ def test_llm_audit_records_upstream_reason_without_prompt_or_key(client, auth_he
                 "upstream rejected",
                 code="llm_upstream_rejected",
                 status_code=400,
-                upstream_reason="content policy violation | invalid_request_error | invalid_request_error_type",
+                upstream_reason="PROMPT_ECHO_MARKER",
             )
             yield  # pragma: no cover - keep generator
 
@@ -265,13 +310,10 @@ def test_llm_audit_records_upstream_reason_without_prompt_or_key(client, auth_he
         db.close()
     writer_rows = [row for row in rows if row.agent_role == "writer"]
     assert writer_rows
-    assert (
-        writer_rows[0].upstream_reason
-        == "content policy violation | invalid_request_error | invalid_request_error_type"
-    )
+    assert writer_rows[0].upstream_reason is None
 
     # Same invariant as test_llm_audit_records_writer_row_without_secrets, re-asserted
-    # here because this row is the one that actually carries a populated upstream_reason.
+    # here because this row came from an upstream failure path.
     columns = set(LLMCallAudit.__table__.columns.keys())
     assert not (columns & {"api_key", "prompt", "content", "draft_text", "system_prompt", "body"})
 
@@ -373,7 +415,7 @@ def test_chapter_patch_summary_compatibility_and_headline(client, auth_headers):
 
 
 def test_health_reports_current_version(client, auth_headers):
-    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.8.1"
+    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.8.3"
 
 
 # --- B8 migration from the production revision --------------------------------
@@ -424,8 +466,10 @@ def test_v1_1_migration_upgrades_from_v1_head(tmp_path, monkeypatch):
             "chapter_archive_state_deltas",
         }
         archive_defaults = migrated.exec_driver_sql(
-            "SELECT archive_status, legacy_archive_eligible FROM chapters WHERE id='c'"
+            "SELECT archive_status, legacy_archive_eligible, write_generation FROM chapters WHERE id='c'"
         ).one()
-        assert tuple(archive_defaults) == ("legacy", 1)
+        assert tuple(archive_defaults) == ("legacy", 1, 0)
+        job_columns = {row[1] for row in migrated.exec_driver_sql("PRAGMA table_info(job_runs)").fetchall()}
+        assert "chapter_write_generation" in job_columns
         assert migrated.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
     get_settings.cache_clear()

@@ -22,6 +22,7 @@ from app.models import (
     ChapterArchiveFactParticipant,
     ChapterArchiveRevision,
     ChapterArchiveStateDelta,
+    JobRun,
 )
 from app.models.entities import utc_now
 from app.services.character_state_projection import (
@@ -167,6 +168,8 @@ def build_archive_user_message(chapter: Chapter, prior_fields: dict[str, dict[st
                 "状态槽由 slot 机械决定，不需要输出 scope。snapshot 只输出实际变化的"
                 "当前位置、当前行动或情绪状态，不必为了凑齐三槽重复未变化内容；"
                 "persistent 只允许身体状态、当前目标、秘密状态；relationship 只允许关系槽。"
+                "relationship delta 所引用 fact 的 participant_names 必须恰好两人；"
+                "delta 不要重复输出 character_name 或 other_character_name，后端直接从 fact 推导关系双方。"
                 "没有明确章末净变化就不输出 delta，不得填未知或占位值。"
             ),
             "# 已接受正文（稳定句号）\n" + numbered_text,
@@ -275,20 +278,14 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
     for raw in raw_deltas:
         if not isinstance(raw, dict):
             raise ArchiveV2ValidationError("state delta must be an object")
-        required_fields = {"fact_ref", "character_name", "slot", "operation", "value"}
-        allowed_fields = required_fields | {"other_character_name", "scope"}
+        required_fields = {"fact_ref", "slot", "operation", "value"}
+        allowed_fields = required_fields | {"character_name", "other_character_name", "scope"}
         if not required_fields.issubset(raw) or not set(raw).issubset(allowed_fields):
             raise ArchiveV2ValidationError("state delta contains unsupported fields")
         source_fact_ref = raw.get("fact_ref")
         fact = fact_by_source_ref.get(source_fact_ref.strip()) if isinstance(source_fact_ref, str) else None
         if fact is None:
             raise ArchiveV2ValidationError("state delta references an unknown fact")
-        name = raw.get("character_name")
-        if not isinstance(name, str) or name not in name_to_id:
-            raise ArchiveV2ValidationError("state delta references an unselected character")
-        character_id = name_to_id[name]
-        if character_id not in fact.participant_ids:
-            raise ArchiveV2ValidationError("state delta owner must participate in its fact")
         slot, operation = raw.get("slot"), raw.get("operation")
         value = raw.get("value")
         if operation not in {"set", "clear"}:
@@ -302,33 +299,50 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
         elif value is not None:
             raise ArchiveV2ValidationError("clear state delta value must be null")
 
-        supplied_other_name = raw.get("other_character_name")
-        if supplied_other_name is not None and (
-            not isinstance(supplied_other_name, str) or supplied_other_name not in name_to_id
-        ):
-            raise ArchiveV2ValidationError("state delta references an unselected character")
-
         other_id: str | None = None
         batch_id = ""
-        if slot in SNAPSHOT_SLOTS:
-            scope = "snapshot"
-            batch_id = f"snapshot:{character_id}"
-            key = (character_id, scope, slot, None)
-        elif slot in PERSISTENT_SLOTS:
-            scope = "persistent"
-            key = (character_id, scope, slot, None)
-        elif slot == "relationship":
+        if slot == "relationship":
             scope = "relationship"
-            other_name = supplied_other_name
-            if not isinstance(other_name, str) or other_name not in name_to_id:
-                raise ArchiveV2ValidationError("relationship target must be selected")
-            other_id = name_to_id[other_name]
-            if other_id == character_id:
-                raise ArchiveV2ValidationError("relationship target must be another character")
-            if set(fact.participant_ids) != {character_id, other_id}:
-                raise ArchiveV2ValidationError("relationship delta participants must match its fact")
-            character_id, other_id = sorted((character_id, other_id))
+            if len(fact.participant_ids) != 2:
+                raise ArchiveV2ValidationError(
+                    "relationship delta fact must have exactly two participants"
+                )
+            character_id, other_id = sorted(fact.participant_ids)
+            supplied_name = raw.get("character_name")
+            supplied_other_name = raw.get("other_character_name")
+            if supplied_name is not None or supplied_other_name is not None:
+                if (
+                    not isinstance(supplied_name, str)
+                    or supplied_name not in name_to_id
+                    or not isinstance(supplied_other_name, str)
+                    or supplied_other_name not in name_to_id
+                    or supplied_name == supplied_other_name
+                    or {name_to_id[supplied_name], name_to_id[supplied_other_name]}
+                    != {character_id, other_id}
+                ):
+                    raise ArchiveV2ValidationError(
+                        "legacy relationship delta participants must match its fact"
+                    )
             key = (character_id, scope, slot, other_id)
+        elif slot in SNAPSHOT_SLOTS or slot in PERSISTENT_SLOTS:
+            name = raw.get("character_name")
+            if not isinstance(name, str) or name not in name_to_id:
+                raise ArchiveV2ValidationError("state delta references an unselected character")
+            character_id = name_to_id[name]
+            if character_id not in fact.participant_ids:
+                raise ArchiveV2ValidationError("state delta owner must participate in its fact")
+            supplied_other_name = raw.get("other_character_name")
+            if supplied_other_name is not None and (
+                not isinstance(supplied_other_name, str) or supplied_other_name not in name_to_id
+            ):
+                raise ArchiveV2ValidationError("state delta references an unselected character")
+            if slot in SNAPSHOT_SLOTS:
+                scope = "snapshot"
+                batch_id = f"snapshot:{character_id}"
+                key = (character_id, scope, slot, None)
+            else:
+                scope = "persistent"
+                key = (character_id, scope, slot, None)
         else:
             raise ArchiveV2ValidationError("state delta slot is unsupported")
         if key in delta_keys:
@@ -386,16 +400,32 @@ def activate_archive_revision(
     validated: ValidatedArchive,
     *,
     model_name: str | None,
+    job_id: str | None = None,
 ) -> tuple[list[str], list[str]]:
+    db.refresh(chapter)
+    db.refresh(revision)
+    run = db.get(JobRun, job_id) if job_id else None
     current = archive_input_fingerprint(chapter)
-    if current != revision.input_fingerprint:
+    if (
+        chapter.status != "finalized"
+        or revision.status != "extracting"
+        or current != revision.input_fingerprint
+        or (job_id is not None and (
+            run is None
+            or run.kind != "extract"
+            or run.archive_revision_id != revision.id
+            or run.phase != "extracting"
+        ))
+    ):
         revision.status = "stale"
-        revision.error_code = "archive_input_changed"
-        revision.error_message = "正文或人物白名单已变更，本次归档不再适用"
+        revision.is_active = False
+        revision.error_code = "archive_lifecycle_changed"
+        revision.error_message = "章节归档生命周期已变更，本次归档不再适用"
         revision.finished_at = utc_now()
-        chapter.archive_status = "stale"
-        chapter.active_archive_revision_id = None
-        chapter.legacy_archive_eligible = False
+        if chapter.status == "finalized":
+            chapter.archive_status = "stale"
+            chapter.active_archive_revision_id = None
+            chapter.legacy_archive_eligible = False
         raise ArchiveFingerprintMismatch(revision.error_message)
 
     db.execute(
@@ -459,6 +489,38 @@ def activate_archive_revision(
     chapter.legacy_archive_eligible = False
     db.flush()
     return sorted(updated_character_ids), []
+
+
+def stale_archives_for_reopen(db: Session, chapter: Chapter) -> list[str]:
+    """Invalidate every unfinished extractor attempt within the reopen txn."""
+    runs = list(
+        db.scalars(
+            select(JobRun).where(
+                JobRun.chapter_id == chapter.id,
+                JobRun.kind == "extract",
+                JobRun.phase.notin_(("done", "failed", "cancelled")),
+            )
+        ).all()
+    )
+    now = utc_now()
+    for run in runs:
+        run.phase = "cancelled"
+        run.error_code = "archive_reopened"
+        run.error_message = "章节已重开，归档任务已取消"
+        run.finished_at = now
+    revisions = db.scalars(
+        select(ChapterArchiveRevision).where(
+            ChapterArchiveRevision.chapter_id == chapter.id,
+            ChapterArchiveRevision.status.in_(("pending", "extracting")),
+        )
+    ).all()
+    for revision in revisions:
+        revision.status = "stale"
+        revision.is_active = False
+        revision.error_code = "archive_reopened"
+        revision.error_message = "章节已重开，归档结果已失效"
+        revision.finished_at = now
+    return [run.id for run in runs]
 
 
 def mark_revision_partial(

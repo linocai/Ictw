@@ -87,6 +87,10 @@ class Chapter(Base):
     active_archive_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     archive_input_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     legacy_archive_eligible: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Persistent ownership token for background Writer jobs.  A client-side
+    # chapter edit advances it, so a task holding an older token can never
+    # promote a candidate or restore its old baseline.
+    write_generation: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     source: Mapped[str] = mapped_column(String(32), default="agent", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
@@ -435,6 +439,8 @@ class JobRun(Base):
     # Logical audit link.  Kept without a database FK so the additive SQLite
     # migration never has to rebuild the high-write job_runs table.
     archive_revision_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    # NULL preserves the timestamp reconciliation rule for pre-v1.8.3 runs.
+    chapter_write_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

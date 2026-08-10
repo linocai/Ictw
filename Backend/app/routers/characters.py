@@ -26,6 +26,7 @@ from app.schemas.character import (
 )
 from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
 from app.services.character_state_projection import rebuild_book_projection
+from app.services.write_ownership import cancel_local_writer_jobs, chapters_for_character, invalidate_writer_inputs
 from app.services.archive_v2 import invalidate_archive_if_input_changed, invalidate_downstream_archives
 
 router = APIRouter(tags=["characters"])
@@ -182,12 +183,16 @@ def patch_character(character_id: str, payload: CharacterPatch, db: Session = De
     if character is None:
         raise HTTPException(status_code=404, detail="character not found")
     old_name = character.name
-    for key, value in payload.model_dump(exclude_unset=True, exclude={"dynamic_fields"}).items():
+    writer_input_changed = bool({"name", "role", "fixed_profile", "dynamic_fields"} & payload.model_fields_set)
+    updates = payload.model_dump(exclude_unset=True, exclude={"dynamic_fields"})
+    for key, value in updates.items():
         setattr(character, key, value)
     if character.name != old_name:
         db.flush()
         rebuild_book_projection(db, character.book_id)
+    invalidated = invalidate_writer_inputs(db, chapters_for_character(db, character.id)) if writer_input_changed else []
     db.commit()
+    cancel_local_writer_jobs(invalidated)
     db.refresh(character)
     return _character_read(db, character)
 
@@ -200,6 +205,7 @@ def delete_character(character_id: str, db: Session = Depends(get_db)) -> Respon
         affected_chapters = sorted(
             (link.chapter for link in character.chapter_links), key=lambda chapter: chapter.index
         )
+        invalidated = invalidate_writer_inputs(db, affected_chapters)
         for chapter in affected_chapters:
             invalidate_archive_if_input_changed(db, chapter, force=True)
         db.delete(character)
@@ -210,6 +216,7 @@ def delete_character(character_id: str, db: Session = Depends(get_db)) -> Respon
             )
         rebuild_book_projection(db, book_id)
         db.commit()
+        cancel_local_writer_jobs(invalidated)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

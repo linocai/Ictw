@@ -19,15 +19,19 @@ final class AppSession: ObservableObject {
     }
 
     func bootstrap() async {
-        let savedBaseURL = UserDefaults.standard.string(forKey: "linoi.baseURL")
-            ?? "https://linoi.neluvee.top"
+        let migration = ConnectionEndpoint.migratedBaseURL(
+            saved: UserDefaults.standard.string(forKey: "linoi.baseURL")
+        )
+        if migration.shouldPersist {
+            UserDefaults.standard.set(migration.value, forKey: "linoi.baseURL")
+        }
         let savedToken = KeychainStore.get("appToken")
         #if DEBUG
         let environment = ProcessInfo.processInfo.environment
-        baseURL = environment["LINOI_DEBUG_BASE_URL"] ?? savedBaseURL
+        baseURL = environment["LINOI_DEBUG_BASE_URL"] ?? migration.value
         token = environment["LINOI_DEBUG_TOKEN"] ?? savedToken
         #else
-        baseURL = savedBaseURL
+        baseURL = migration.value
         token = savedToken
         #endif
     }

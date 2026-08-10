@@ -76,38 +76,53 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
         ],
         "additionalProperties": False,
     }
-    delta = {
+    common_delta_properties = {
+        "fact_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": MAX_FACT_REF_CHARS,
+            "description": "必须精确引用 facts 中某条事实的临时 fact_ref。",
+        },
+        "operation": {"type": "string", "enum": ["set", "clear"]},
+        "value": {
+            "anyOf": [
+                {"type": "string", "minLength": 1, "maxLength": MAX_STATE_VALUE_CHARS},
+                {"type": "null"},
+            ]
+        },
+    }
+    character_delta = {
         "type": "object",
+        "description": "单个人物的章末净状态变化；character_name 必须参与所引用的 fact。",
         "properties": {
-            "fact_ref": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": MAX_FACT_REF_CHARS,
-                "description": "必须精确引用 facts 中某条事实的临时 fact_ref。",
-            },
+            **common_delta_properties,
             "character_name": name,
-            "other_character_name": {"anyOf": [name, {"type": "null"}]},
             "slot": {
                 "type": "string",
-                "enum": [*SNAPSHOT_SLOTS, *PERSISTENT_SLOTS, "relationship"],
+                "enum": [*SNAPSHOT_SLOTS, *PERSISTENT_SLOTS],
                 "description": (
                     "后端由 slot 机械确定状态类别；当前位置、当前行动、情绪状态可只输出实际变化项，"
-                    "身体状态、当前目标、秘密状态为持续状态，relationship 为人物关系。"
+                    "身体状态、当前目标、秘密状态为持续状态。"
                 ),
             },
-            "operation": {"type": "string", "enum": ["set", "clear"]},
-            "value": {
-                "anyOf": [
-                    {"type": "string", "minLength": 1, "maxLength": MAX_STATE_VALUE_CHARS},
-                    {"type": "null"},
-                ]
-            },
         },
-        "required": [
-            "fact_ref", "character_name", "slot", "operation", "value"
-        ],
+        "required": ["fact_ref", "character_name", "slot", "operation", "value"],
         "additionalProperties": False,
     }
+    relationship_delta = {
+        "type": "object",
+        "description": (
+            "两个人物的关系净变化。所引用 fact 的 participant_names 必须恰好两人；"
+            "不要重复输出 character_name 或 other_character_name，后端会从 fact 机械推导双方。"
+        ),
+        "properties": {
+            **common_delta_properties,
+            "slot": {"type": "string", "enum": ["relationship"]},
+        },
+        "required": ["fact_ref", "slot", "operation", "value"],
+        "additionalProperties": False,
+    }
+    delta = {"oneOf": [character_delta, relationship_delta]}
     empty_when_no_characters = {"maxItems": 0} if not selected_character_names else {}
     return {
         "type": "object",
@@ -218,16 +233,6 @@ def extractor_schema(selected_character_names: list[str]) -> dict[str, Any]:
             "state_updates": {"type": "array", "items": state_update, **arrays_extra},
         },
         "required": ["headline", "long_summary", "state_changes", "unresolved_items", "atomic_memories", "character_events", "state_updates"],
-        "additionalProperties": False,
-    }
-
-
-def extractor_event_repair_schema(selected_character_names: list[str]) -> dict[str, Any]:
-    """Narrow online correction contract: preserve every non-event archive field."""
-    return {
-        "type": "object",
-        "properties": {"character_events": _character_events_schema(selected_character_names)},
-        "required": ["character_events"],
         "additionalProperties": False,
     }
 
@@ -375,18 +380,6 @@ class ExtractorAgent:
         self.llm = llm
         self.system_prompt = compose_system_prompt("extractor", editable_persona)
 
-    def extract(self, user_message: str, selected_characters: list[SelectedCharacter] | None = None) -> dict[str, Any]:
-        selected = selected_characters or []
-        names = [name.strip() for _, name in selected]
-        if any(not name for name in names) or len(set(names)) != len(names):
-            raise ExtractorContractError("selected character names must be non-empty and unique")
-        output = self.llm.complete_json(
-            system=self.system_prompt, user=user_message, schema=extractor_schema(names), temperature=0.1,
-            timeout=EXTRACTOR_TIMEOUT_SECONDS, hard_timeout=True,
-            max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
-        )
-        return bind_extractor_character_names(output, selected)
-
     def extract_v2(
         self, user_message: str, selected_characters: list[SelectedCharacter] | None = None
     ) -> dict[str, Any]:
@@ -403,38 +396,6 @@ class ExtractorAgent:
             hard_timeout=True,
             max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
         )
-
-    def repair_character_events(
-        self, user_message: str, selected_characters: list[SelectedCharacter] | None = None
-    ) -> list[dict[str, Any]]:
-        """Re-extract only strict character events after an event-gate failure."""
-        selected = selected_characters or []
-        names = [name.strip() for _, name in selected]
-        if any(not name for name in names) or len(set(names)) != len(names):
-            raise ExtractorContractError("selected character names must be non-empty and unique")
-        output = self.llm.complete_json(
-            system=(
-                self.system_prompt
-                + "\n\n本次只纠正 character_events。其他摘要、章节归档与人物状态已固定，"
-                "不得重新生成，也不得在输出中出现。"
-            ),
-            user=user_message,
-            schema=extractor_event_repair_schema(names),
-            temperature=0.1,
-            timeout=EXTRACTOR_TIMEOUT_SECONDS,
-            hard_timeout=True,
-            max_tokens=EXTRACTOR_MAX_OUTPUT_TOKENS,
-        )
-        wrapped = {
-            "headline": "event-repair",
-            "long_summary": "event-repair",
-            "state_changes": [],
-            "unresolved_items": [],
-            "atomic_memories": [],
-            "character_events": output.get("character_events"),
-            "state_updates": [],
-        }
-        return bind_extractor_character_names(wrapped, selected)["character_events"]
 
     def extract_state_updates(
         self, user_message: str, selected_characters: list[SelectedCharacter] | None = None

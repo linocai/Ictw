@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import Base, make_engine
 from app.llm.openai_compatible import OpenAICompatibleClient
+from app.llm.factory import LLMConfigurationError, build_llm_client
 from app.models import AgentModelBinding, LLMProfile
 from app.routers.settings import _sanitize_profile_bindings, patch_binding, patch_profile
 from app.schemas.settings import AgentModelBindingPatch, LLMProfilePatch
@@ -40,6 +41,51 @@ def test_registered_model_capabilities_are_explicit() -> None:
     unknown = resolve_capabilities("deepseek-chat")
     assert unknown.family == "unknown"
     assert unknown.thinking_toggle_supported is False
+
+
+@pytest.mark.parametrize(
+    ("agent_role", "profile_id", "expected_code"),
+    [
+        ("writer", None, "llm_profile_not_configured"),
+        ("checker", "missing-profile", "llm_profile_missing"),
+    ],
+)
+def test_llm_configuration_errors_have_fixed_safe_codes(tmp_path, agent_role, profile_id, expected_code) -> None:
+    engine = make_engine(f"sqlite:///{tmp_path / 'config-errors.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        binding = AgentModelBinding(agent_role=agent_role, llm_profile_id=None)
+        db.add(binding)
+        db.commit()
+        binding.llm_profile_id = profile_id
+        with db.no_autoflush:
+            with pytest.raises(LLMConfigurationError) as caught:
+                build_llm_client(db, agent_role)
+    assert caught.value.code == expected_code
+    assert caught.value.agent_role == agent_role
+    assert "missing-profile" not in caught.value.message
+
+
+def test_extractor_incompatible_capability_is_safe_configuration_error(tmp_path) -> None:
+    engine = make_engine(f"sqlite:///{tmp_path / 'extractor-config-error.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        profile = LLMProfile(
+            id="profile",
+            name="P",
+            provider="openai-compatible",
+            base_url="https://api.example",
+            api_key_encrypted="encrypted",
+            model_name="unknown-model",
+        )
+        db.add(profile)
+        db.commit()
+        db.add(AgentModelBinding(agent_role="extractor", llm_profile_id=profile.id))
+        db.commit()
+        with pytest.raises(LLMConfigurationError) as caught:
+            build_llm_client(db, "extractor")
+    assert caught.value.code == "extractor_thinking_not_disableable"
+    assert caught.value.agent_role == "extractor"
 
 
 def test_binding_patch_distinguishes_omitted_and_null_and_clears_effort(tmp_path) -> None:

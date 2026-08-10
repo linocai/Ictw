@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.checker import CheckerAgent
 from app.agents.extractor import ExtractorContractError
 from app.agents.memory_selector import MemorySelection, MemorySelectorAgent
 from app.agents.writer import WriterAgent
-from app.llm.base import LLMError
+from app.llm.base import LLMError, safe_block_reason, safe_finish_reason, safe_upstream_reason
 from app.models import Chapter, ChapterArchiveRevision, ChapterDraftCandidate, JobRun
 from app.models.entities import utc_now
 from app.services.audit import record_llm_call
@@ -29,13 +31,6 @@ from app.services.context import (
     pack_writer_context,
     writer_user_message,
 )
-from app.services.extraction import (
-    ExtractorValidationError,
-    OnlineExtractorSalvage,
-    apply_extractor_output,
-    salvage_online_extractor_output,
-    validate_extractor_output,
-)
 from app.services.archive_v2 import (
     ArchiveFingerprintMismatch,
     ArchiveV2ValidationError,
@@ -47,10 +42,15 @@ from app.services.archive_v2 import (
     validate_archive_output,
 )
 from app.services.character_state_projection import rebuild_book_projection
+from app.services.write_ownership import (
+    cancel_local_writer_jobs,
+    chapters_for_character,
+    invalidate_writer_inputs,
+)
 
 
 TERMINAL_PHASES = {"done", "failed", "cancelled"}
-MAX_EXTRACTOR_VALIDATION_ATTEMPTS = 3
+logger = logging.getLogger(__name__)
 
 
 class WriteJobConflict(Exception):
@@ -79,6 +79,7 @@ class WriteJob:
         bible_snapshot: str = "",
         bible_sha256: str = "",
         archive_revision_id: str = "",
+        chapter_write_generation: int | None = None,
     ) -> None:
         self.chapter_id = chapter_id
         self.job_id = job_id
@@ -97,6 +98,7 @@ class WriteJob:
         self.bible_snapshot = bible_snapshot
         self.bible_sha256 = bible_sha256 or hashlib.sha256(bible_snapshot.encode()).hexdigest()
         self.archive_revision_id = archive_revision_id
+        self.chapter_write_generation = chapter_write_generation
         self.cancel_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.discard_on_cancel = False
@@ -173,7 +175,8 @@ class WriteJobRegistry:
                 or job.is_terminal
             ):
                 return False
-            persist()
+            if persist() is False:
+                return False
             job.mark_terminal(phase)
             return True
 
@@ -217,8 +220,41 @@ def record_job_phase(session_factory: sessionmaker[Session], job_id: str, phase:
 def _error_context(exc: LLMError) -> dict[str, Any]:
     return {key: value for key, value in {
         "agent_role": exc.agent_role, "model_name": exc.model_name, "http_status": exc.status_code,
-        "upstream_reason": exc.upstream_reason, "finish_reason": exc.finish_reason, "block_reason": exc.block_reason,
+        "upstream_reason": safe_upstream_reason(exc.upstream_reason),
+        "finish_reason": safe_finish_reason(exc.finish_reason),
+        "block_reason": safe_block_reason(exc.block_reason),
     }.items() if value is not None}
+
+
+def _log_archive_failure(
+    job: WriteJob,
+    *,
+    stage: str,
+    error_code: str,
+    reason: str | None = None,
+    client: Any | None = None,
+    error_context: dict[str, Any] | None = None,
+    exception_type: str | None = None,
+) -> None:
+    """Emit only operational metadata; never include prompts, prose or model output."""
+    payload: dict[str, Any] = {
+        "event": "archive_job_failed",
+        "chapter_id": job.chapter_id,
+        "job_id": job.job_id,
+        "revision_id": job.archive_revision_id,
+        "stage": stage,
+        "error_code": error_code,
+        "attempts": 1,
+    }
+    if reason:
+        payload["reason"] = reason
+    if client is not None:
+        payload["model_name"] = str(getattr(client, "model_name", "") or "")
+    if error_context:
+        payload.update(error_context)
+    if exception_type:
+        payload["exception_type"] = exception_type
+    logger.warning("archive_job_failure %s", json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
 def _record_llm(session_factory: sessionmaker[Session], agent_role: str, client: Any, start: float,
@@ -305,9 +341,17 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             record_job_phase(sf, job.job_id, "failed", error_code="chapter_missing", error_message="章节不存在")
             job.mark_terminal("failed")
             return
+        if not _generation_matches(db, job):
+            _mark_chapter_changed(sf, job)
+            job.mark_terminal("cancelled")
+            return
         # The snapshot must still match before any model output can affect storage.
         if hashlib.sha256(chapter.user_prompt.encode()).hexdigest() != job.bible_sha256:
-            record_job_phase(sf, job.job_id, "cancelled", error_code="bible_changed", error_message="Bible 已变更，已取消旧写作任务")
+            if not _restore_baseline(
+                db, job, phase="cancelled", error_code="bible_changed",
+                error_message="Bible 已变更，已取消旧写作任务",
+            ):
+                _mark_chapter_changed(sf, job)
             job.mark_terminal("cancelled")
             return
         memories: list[MemoryBlock] = []
@@ -340,7 +384,11 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             ]
             record_job_phase(sf, job.job_id, "writing", memory_context=manifest, bible_sha256=job.bible_sha256)
         if _should_stop(job):
-            _restore_baseline(db, job); job.mark_terminal(); return
+            if not _restore_baseline(
+                db, job, phase="cancelled", error_code="write_cancelled", error_message="写作任务已取消"
+            ):
+                _mark_chapter_changed(sf, job)
+            job.mark_terminal(); return
         from app.services.character_state_projection import projected_fields_before_chapter
         message = writer_user_message(
             chapter.book, chapter, memories, previous_ending, bible=job.bible_snapshot,
@@ -351,7 +399,11 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             record_job_phase(sf, job.job_id, "writing", attempt=attempt)
             text = _run_writer(job, sf, message)
             if _should_stop(job):
-                _restore_baseline(db, job); job.mark_terminal(); return
+                if not _restore_baseline(
+                    db, job, phase="cancelled", error_code="write_cancelled", error_message="写作任务已取消"
+                ):
+                    _mark_chapter_changed(sf, job)
+                job.mark_terminal(); return
             _normal_finish_or_raise(job, "writer", job.writer)
             violations = draft_violations(db, chapter, text, job.writer.finish_reason if job.writer else None)
             last_candidate = _persist_candidate(db, job, chapter, text, attempt, violations)
@@ -360,16 +412,30 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 break
             if attempt == 1 and length_only:
                 continue  # exact same original input; never expand the first text.
-            _restore_baseline(db, job)
             code = "writer_minimum_failed" if length_only else "writer_validation_failed"
-            record_job_phase(sf, job.job_id, "failed", attempt=attempt, violations=violations, error_code=code,
-                             error_message="整章生成未通过确定性校验；失败稿已后台留档，未替换当前正文",
-                             error_context={"agent_role": "writer"})
+            if not _restore_baseline(
+                db, job, phase="failed", attempt=attempt, violations=violations, error_code=code,
+                error_message="整章生成未通过确定性校验；失败稿已后台留档，未替换当前正文",
+                error_context={"agent_role": "writer"},
+            ):
+                _mark_chapter_changed(sf, job)
+                job.mark_terminal("cancelled")
+                return
             job.mark_terminal("failed")
             return
         assert last_candidate is not None
-        if hashlib.sha256(chapter.user_prompt.encode()).hexdigest() != job.bible_sha256 or not write_registry.is_current(job):
-            _restore_baseline(db, job); job.mark_terminal(); return
+        db.refresh(chapter)
+        if (
+            hashlib.sha256(chapter.user_prompt.encode()).hexdigest() != job.bible_sha256
+            or not _generation_matches(db, job)
+            or _should_stop(job)
+        ):
+            if not _restore_baseline(
+                db, job, phase="cancelled", error_code="write_cancelled", error_message="写作任务已取消"
+            ):
+                _mark_chapter_changed(sf, job)
+            job.mark_terminal("cancelled")
+            return
         # Keep the candidate backend-only until Checker explicitly passes it.
         # The visible chapter stays on its pre-generation baseline throughout
         # checking, so rejected/unavailable output can never flash into the UI.
@@ -388,9 +454,28 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         except LLMError as exc:
             checker_result = {"status": "unavailable", "draft_fingerprint": fingerprint, "error_code": exc.code, "error_context": _error_context(exc)}
         except Exception as exc:  # malformed checker output never destroys the Writer candidate
-            checker_result = {"status": "unavailable", "draft_fingerprint": fingerprint, "error_code": "checker_invalid", "error_message": str(exc)}
+            checker_result = {
+                "status": "unavailable",
+                "draft_fingerprint": fingerprint,
+                "error_code": "checker_invalid",
+                "error_message": "Checker 返回无效结果",
+            }
         if checker_result.get("verdict") == "passed":
-            def persist_passed() -> None:
+            def persist_passed() -> bool:
+                # The candidate, visible chapter and terminal JobRun are one
+                # transaction.  The database generation is the authorization;
+                # the registry merely narrows same-process cancellation races.
+                result = db.execute(
+                    update(Chapter)
+                    .where(
+                        Chapter.id == chapter.id,
+                        Chapter.write_generation == job.chapter_write_generation,
+                    )
+                    .values(draft_text=last_candidate.draft_text, status="draft_ready", updated_at=utc_now())
+                )
+                if result.rowcount != 1:
+                    db.rollback()
+                    return False
                 last_candidate.checker_result = checker_result
                 db.execute(
                     update(ChapterDraftCandidate)
@@ -398,9 +483,6 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                     .values(is_current=False)
                 )
                 last_candidate.is_current = True
-                chapter.draft_text, chapter.status = last_candidate.draft_text, "draft_ready"
-                # Flush the authoritative chapter timestamp before stamping the
-                # terminal run, so outcome_current remains deterministic.
                 db.flush()
                 if not _apply_job_phase(
                     db,
@@ -412,9 +494,12 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 ):
                     raise RuntimeError("write job terminal row is no longer writable")
                 db.commit()
+                return True
 
             if not write_registry.finish_if_current(job, persist_passed, phase="done"):
                 db.rollback()
+                _mark_chapter_changed(sf, job)
+                job.mark_terminal("cancelled")
                 return
         else:
             error_code = checker_result.get("error_code") or "checker_rejected"
@@ -429,9 +514,19 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             error_message = checker_result.get("error_message") or default_message
             error_context = checker_result.get("error_context") or {"agent_role": "checker"}
 
-            def persist_rejected() -> None:
+            def persist_rejected() -> bool:
+                result = db.execute(
+                    update(Chapter)
+                    .where(
+                        Chapter.id == chapter.id,
+                        Chapter.write_generation == job.chapter_write_generation,
+                    )
+                    .values(draft_text=job.baseline_text, status=job.baseline_status, updated_at=utc_now())
+                )
+                if result.rowcount != 1:
+                    db.rollback()
+                    return False
                 last_candidate.checker_result = checker_result
-                chapter.draft_text, chapter.status = job.baseline_text, job.baseline_status
                 db.flush()
                 if not _apply_job_phase(
                     db,
@@ -446,17 +541,30 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 ):
                     raise RuntimeError("write job terminal row is no longer writable")
                 db.commit()
+                return True
 
             if not write_registry.finish_if_current(job, persist_rejected, phase="failed"):
                 db.rollback()
+                _mark_chapter_changed(sf, job)
+                job.mark_terminal("cancelled")
                 return
     except LLMError as exc:
-        db.rollback(); _restore_baseline(db, job)
-        record_job_phase(sf, job.job_id, "failed", error_code=exc.code, error_message=str(exc), error_context=_error_context(exc))
+        db.rollback()
+        if not _restore_baseline(
+            db, job, phase="failed", error_code=exc.code, error_message=str(exc), error_context=_error_context(exc)
+        ):
+            _mark_chapter_changed(sf, job)
+            job.mark_terminal("cancelled")
+            return
         job.mark_terminal("failed")
     except Exception as exc:
-        db.rollback(); _restore_baseline(db, job)
-        record_job_phase(sf, job.job_id, "failed", error_code="write_failed", error_message=str(exc))
+        db.rollback()
+        if not _restore_baseline(
+            db, job, phase="failed", error_code="write_failed", error_message="写作任务执行失败"
+        ):
+            _mark_chapter_changed(sf, job)
+            job.mark_terminal("cancelled")
+            return
         job.mark_terminal("failed")
     finally:
         db.close()
@@ -465,6 +573,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
 def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     """Run one v2 archive call; accepted prose is never rolled back."""
     db = sf()
+    client: Any | None = None
     try:
         chapter = db.get(Chapter, job.chapter_id)
         revision = db.get(ChapterArchiveRevision, job.archive_revision_id) if job.archive_revision_id else None
@@ -477,6 +586,19 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 error_message="章节或归档任务不存在",
             )
             job.mark_terminal("failed")
+            return
+        run = db.get(JobRun, job.job_id)
+        # A different process may have reopened the chapter before this worker
+        # acquired its session.  The durable run/revision lifecycle, not this
+        # process's registry, decides whether an Extractor call is still valid.
+        if (
+            run is None
+            or run.phase in TERMINAL_PHASES
+            or chapter.status != "finalized"
+            or revision.status not in {"pending", "extracting"}
+        ):
+            db.rollback()
+            job.mark_terminal("cancelled")
             return
         mark_revision_extracting(revision, chapter)
         db.commit()
@@ -509,18 +631,32 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 db.commit()
             return
 
+        invalidated_writer_chapters: list[str] = []
+
         def persist_complete() -> None:
+            nonlocal invalidated_writer_chapters
             updated_ids, event_ids = activate_archive_revision(
                 db,
                 chapter,
                 revision,
                 validated,
                 model_name=getattr(client, "model_name", None),
+                job_id=job.job_id,
             )
             invalidated_downstream = invalidate_downstream_archives(
                 db, chapter.book_id, after_index=chapter.index
             )
             rebuild_book_projection(db, chapter.book_id)
+            # Extractor-owned dynamic projections are Writer prompt input for
+            # chapters selecting the changed characters. Persist the
+            # generation bump in this same archive transaction; local thread
+            # cancellation remains only a post-commit optimization.
+            affected_writer_chapters = [
+                affected
+                for character_id in updated_ids
+                for affected in chapters_for_character(db, character_id)
+            ]
+            invalidated_writer_chapters = invalidate_writer_inputs(db, affected_writer_chapters)
             if not _apply_job_phase(
                 db,
                 job.job_id,
@@ -540,8 +676,17 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
 
         if not write_registry.finish_if_current(job, persist_complete, phase="done"):
             db.rollback()
+        else:
+            cancel_local_writer_jobs(invalidated_writer_chapters)
     except LLMError as exc:
         db.rollback()
+        _log_archive_failure(
+            job,
+            stage="upstream",
+            error_code=exc.code,
+            client=client,
+            error_context=_error_context(exc),
+        )
         chapter = db.get(Chapter, job.chapter_id)
         revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
         if chapter is not None and revision is not None:
@@ -560,6 +705,13 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         job.mark_terminal("failed")
     except ArchiveFingerprintMismatch as exc:
         db.rollback()
+        _log_archive_failure(
+            job,
+            stage="activation",
+            error_code="archive_input_changed",
+            reason="archive input fingerprint changed",
+            client=client,
+        )
         chapter = db.get(Chapter, job.chapter_id)
         revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
         if chapter is not None and revision is not None:
@@ -587,6 +739,13 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         chapter = db.get(Chapter, job.chapter_id)
         revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
         reason = str(exc)
+        _log_archive_failure(
+            job,
+            stage="archive_validation",
+            error_code="archive_validation_failed",
+            reason=reason,
+            client=client,
+        )
         if chapter is not None and revision is not None:
             summary = output.get("summary", "") if "output" in locals() and isinstance(output, dict) else ""
             mark_revision_partial(revision, chapter, reason=reason, summary=summary)
@@ -604,10 +763,17 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         job.mark_terminal("failed")
     except Exception as exc:
         db.rollback()
+        _log_archive_failure(
+            job,
+            stage="persistence",
+            error_code="extract_failed",
+            client=client,
+            exception_type=type(exc).__name__,
+        )
         chapter = db.get(Chapter, job.chapter_id)
         revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
         if chapter is not None and revision is not None:
-            message = f"归档失败：{exc}"
+            message = "归档任务执行失败"
             mark_revision_failed(revision, chapter, error_code="extract_failed", error_message=message)
             db.flush()
             _apply_job_phase(
@@ -622,147 +788,6 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         job.mark_terminal("failed")
     finally:
         db.close()
-
-
-def _run_extractor_with_correction(
-    job: WriteJob, chapter: Chapter, sf: sessionmaker[Session]
-) -> tuple[dict[str, Any] | None, int, list[str], list[str]]:
-    """Return one fully validated output within three actual model calls.
-
-    Length-truncated JSON is compacted and retried in-job. Once a complete
-    archive exists, character events are validated independently; unsafe
-    optional entries are omitted without rewriting or blocking the archive.
-    Transport, policy and other upstream errors remain truthful terminal
-    failures. Every actual model call receives its own audit row.
-    """
-    message = job.extractor_user_message
-    client = getattr(job.extractor, "llm", None)
-    last_error: Exception | None = None
-    last_output: dict[str, Any] | None = None
-    salvage_candidate: OnlineExtractorSalvage | None = None
-    repair_events = False
-    for attempt in range(1, MAX_EXTRACTOR_VALIDATION_ATTEMPTS + 1):
-        repairing_events_now = repair_events and last_output is not None
-        start = time.monotonic()
-        try:
-            if repairing_events_now:
-                repaired_events = job.extractor.repair_character_events(
-                    _extractor_event_repair_message(job.extractor_user_message, attempt, last_error),
-                    job.selected_characters,
-                )
-                output = {**last_output, "character_events": repaired_events}
-            else:
-                output = job.extractor.extract(message, job.selected_characters)
-        except LLMError as exc:
-            _record_llm(sf, "extractor", client, start, exc.code, job, upstream_reason=exc.upstream_reason)
-            if exc.code == "llm_output_truncated" and attempt < MAX_EXTRACTOR_VALIDATION_ATTEMPTS:
-                last_error = exc
-                repair_events = repairing_events_now
-                if not repairing_events_now:
-                    message += _extractor_length_correction_message(attempt)
-                if _should_stop(job):
-                    return None, attempt, [], []
-                continue
-            exc.agent_role, exc.model_name = "extractor", getattr(client, "model_name", None)
-            raise
-        except ExtractorContractError as exc:
-            _record_llm(sf, "extractor", client, start, None, job)
-            last_error = exc
-            repair_events = repairing_events_now
-        else:
-            _record_llm(sf, "extractor", client, start, None, job)
-            last_output = output
-            try:
-                validate_extractor_output(chapter, output)
-            except ExtractorValidationError as exc:
-                last_error = exc
-                repair_events = _is_character_event_validation_error(exc)
-                try:
-                    salvage_candidate = salvage_online_extractor_output(chapter, output)
-                except ExtractorValidationError:
-                    pass
-                else:
-                    if repair_events and salvage_candidate.dropped_event_reasons:
-                        return (
-                            salvage_candidate.output,
-                            attempt,
-                            salvage_candidate.dropped_event_reasons,
-                            salvage_candidate.dropped_state_reasons,
-                        )
-            else:
-                return output, attempt, [], []
-
-        if _should_stop(job):
-            return None, attempt, [], []
-        if attempt < MAX_EXTRACTOR_VALIDATION_ATTEMPTS and not repair_events:
-            message += _extractor_correction_message(attempt, last_error)
-
-    if salvage_candidate is not None:
-        return (
-            salvage_candidate.output,
-            MAX_EXTRACTOR_VALIDATION_ATTEMPTS,
-            salvage_candidate.dropped_event_reasons,
-            salvage_candidate.dropped_state_reasons,
-        )
-
-    exhausted = ExtractorValidationError(str(last_error or "unknown Extractor contract failure"))
-    exhausted.attempts = MAX_EXTRACTOR_VALIDATION_ATTEMPTS  # type: ignore[attr-defined]
-    exhausted.last_reason = str(last_error or exhausted)  # type: ignore[attr-defined]
-    raise exhausted
-
-
-def _is_character_event_validation_error(error: Exception) -> bool:
-    reason = str(error)
-    return reason.startswith(
-        (
-            "character_events ",
-            "selected character event ",
-            "character event evidence ",
-            "character event exceeds ",
-            "character events exceed ",
-            "duplicate character event",
-            "event_type ",
-        )
-    )
-
-
-def _extractor_event_repair_message(
-    original_message: str, attempt: int, error: Exception | None
-) -> str:
-    return (
-        f"# 人物事件定向纠偏 {attempt}/{MAX_EXTRACTOR_VALIDATION_ATTEMPTS}\n"
-        f"上一版 character_events 未通过确定性校验：{error}。\n"
-        "只重新提取 character_events，不得输出或改写任何其他字段。"
-        "event_type 只能使用 schema 枚举；event_text 必须明确写出并以所属人物精确姓名开头；"
-        "事件按重要性排序，每个人物最多 3 条、本章最多 8 条；同一事实只保留一条，"
-        "普通动作、对白和过程流水账不建事件；"
-        "evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，不得转述、加标签或解释。"
-        "无法逐字举证的事件直接省略，允许返回空数组。\n\n"
-        + original_message
-    )
-
-
-def _extractor_length_correction_message(attempt: int) -> str:
-    return (
-        f"\n\n# 输出截断自动重试 {attempt}/{MAX_EXTRACTOR_VALIDATION_ATTEMPTS - 1}\n"
-        "上一次 JSON 达到模型输出长度上限而被截断。请重新输出完整合法 JSON；"
-        "删除重复、近义和无法逐字举证的条目，每项只保留最精确的事实，禁止解释性赘述。"
-        "所有 schema 必填字段仍须存在，不得输出局部补丁。"
-    )
-
-
-def _extractor_correction_message(attempt: int, error: Exception | None) -> str:
-    return (
-        f"\n\n# 自动纠偏 {attempt}/{MAX_EXTRACTOR_VALIDATION_ATTEMPTS - 1}\n"
-        f"上一次完整 JSON 未通过确定性校验：{error}。请重新输出完整 JSON，不是局部补丁。"
-        "只保留正文中能逐字举证的事实；找不到合格证据的条目必须删除，宁缺毋滥。"
-        "每条带人物归属的 text 与 event_text 必须明确写出并以所属人物精确姓名开头；"
-        "event_type 只能使用 schema 枚举；state_updates 的即时快照必须完整包含位置、行动、情绪三槽，"
-        "持续状态与唯一人物关系只能 set/clear；同一无向人物对整份输出只能写一次，"
-        "放在人物白名单顺序更靠前的一方，value 写双方共同关系状态；"
-        "event 与状态操作的 evidence 必须直接复制包含所属人物姓名的正文原句或连续段落，"
-        "不得转述、概括、添加标签、引号或解释。"
-    )
 
 
 def _extractor_user_reason(reason: str) -> str:
@@ -832,11 +857,42 @@ def _should_stop(job: WriteJob) -> bool:
     return job.cancel_event.is_set() or not write_registry.is_current(job)
 
 
-def _restore_baseline(db: Session, job: WriteJob) -> None:
-    if not write_registry.is_current(job): return
-    chapter = db.get(Chapter, job.chapter_id)
-    if chapter is not None:
-        chapter.draft_text, chapter.status = job.baseline_text, job.baseline_status; db.commit()
+def _generation_matches(db: Session, job: WriteJob) -> bool:
+    if job.chapter_write_generation is None:
+        return False
+    return db.scalar(select(Chapter.write_generation).where(Chapter.id == job.chapter_id)) == job.chapter_write_generation
+
+
+def _mark_chapter_changed(session_factory: sessionmaker[Session], job: WriteJob) -> None:
+    record_job_phase(
+        session_factory,
+        job.job_id,
+        "cancelled",
+        error_code="chapter_changed",
+        error_message="章节已编辑，旧写作任务已取消",
+    )
+
+
+def _restore_baseline(db: Session, job: WriteJob, *, phase: str | None = None, **fields: Any) -> bool:
+    """Restore only if this job still owns the persisted chapter generation."""
+    if job.chapter_write_generation is None:
+        return False
+    result = db.execute(
+        update(Chapter)
+        .where(
+            Chapter.id == job.chapter_id,
+            Chapter.write_generation == job.chapter_write_generation,
+        )
+        .values(draft_text=job.baseline_text, status=job.baseline_status, updated_at=utc_now())
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        return False
+    if phase is not None and not _apply_job_phase(db, job.job_id, phase, **fields):
+        db.rollback()
+        return False
+    db.commit()
+    return True
 
 
 def _restore_draft_ready(db: Session, job: WriteJob) -> None:
