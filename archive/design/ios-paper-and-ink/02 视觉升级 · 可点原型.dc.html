@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><meta name="design_doc_mode" content="canvas"><style>
+body{margin:0;background:#E8E5DE}
+a{color:#C0472C}a:hover{color:#9E3821}
+[data-theme]{--bg:#F4F2ED;--bg2:#EAE7E0;--surface:#FFFFFF;--surface2:#FAF8F5;--ink:#17181C;--ink2:#494B52;--muted:#84868E;--faint:#ABADB4;--line:rgba(23,24,28,.09);--line2:rgba(23,24,28,.16);--green:#2F6B52;--amber:#9A6A1C;--danger:#B3453A;--shadow:0 1px 2px rgba(23,24,28,.04);--cover1:#E4DCCB;--cover2:#D5DDE3;--cover3:#D9E1D4;--coverink:#3D3B34}
+[data-theme="dark"]{--bg:#121316;--bg2:#0C0D0F;--surface:#1B1D21;--surface2:#212429;--ink:#EDEBE6;--ink2:#C4C3BF;--muted:#8B8D95;--faint:#6B6D75;--line:rgba(255,255,255,.10);--line2:rgba(255,255,255,.18);--green:#5DA485;--amber:#D0A051;--danger:#DE7264;--shadow:none;--cover1:#3A362E;--cover2:#2C333A;--cover3:#2F362D;--coverink:#CFCABE}
+[data-accent="seal"]{--accent:#C0472C;--accentsoft:rgba(192,71,44,.10);--accenttext:#FFFFFF}
+[data-accent="seal"][data-theme="dark"]{--accent:#E2664A;--accentsoft:rgba(226,102,74,.16)}
+[data-accent="ink"]{--accent:#22242A;--accentsoft:rgba(34,36,42,.08);--accenttext:#FFFFFF}
+[data-accent="ink"][data-theme="dark"]{--accent:#E7E4DD;--accentsoft:rgba(231,228,221,.12);--accenttext:#17181C}
+[data-accent="pine"]{--accent:#2F6B52;--accentsoft:rgba(47,107,82,.10);--accenttext:#FFFFFF}
+[data-accent="pine"][data-theme="dark"]{--accent:#5DA485;--accentsoft:rgba(93,164,133,.16)}
+[data-accent="plum"]{--accent:#7B3A63;--accentsoft:rgba(123,58,99,.10);--accenttext:#FFFFFF}
+[data-accent="plum"][data-theme="dark"]{--accent:#C081A8;--accentsoft:rgba(192,129,168,.16)}
+@keyframes scr{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes sheet{from{transform:translateY(100%)}to{transform:none}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style></helmet>
+
+<div data-theme="{{ theme }}" data-accent="{{ accent }}" style="display:flex;gap:40px;padding:40px 48px 80px;align-items:flex-start;font-family:-apple-system,system-ui,sans-serif">
+
+  <div style="width:330px;flex:none;display:flex;flex-direction:column;gap:20px">
+    <div>
+      <div style="font:700 12px/1.2 ui-monospace,Menlo,monospace;letter-spacing:1.4px;color:#8A8272">UPGRADE · 可点原型</div>
+      <h1 style="margin:9px 0 10px;font:700 27px/1.25 'Songti SC',STSong,serif;color:#1B1A17">纸与墨</h1>
+      <p style="margin:0;font:400 14px/1.7 -apple-system,system-ui;color:#57544D;text-wrap:pretty">功能一行没动，动的是壳。三件事：把牵强的蓝玻璃换成安静的实色纸面卡片；把四等分工具栏换成底部三段导航，Agent 收进设定；把渐变书卡换成真正像书的封面。工作台紧凑，编辑器和阅读页放宽。</p>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <div style="font:700 10.5px/1 -apple-system;letter-spacing:1.3px;color:#8A8272">跳转</div>
+      <div style="display:flex;flex-wrap:wrap;gap:7px">
+        <div onClick="{{ goShelf }}" style="cursor:pointer;font:600 12.5px/1 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:9px 12px;border-radius:9px" style-hover="background:#F1EEE7">书架</div>
+        <div onClick="{{ goChapters }}" style="cursor:pointer;font:600 12.5px/1 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:9px 12px;border-radius:9px" style-hover="background:#F1EEE7">稿件</div>
+        <div onClick="{{ goCharacters }}" style="cursor:pointer;font:600 12.5px/1 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:9px 12px;border-radius:9px" style-hover="background:#F1EEE7">人物</div>
+        <div onClick="{{ goSettings }}" style="cursor:pointer;font:600 12.5px/1 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:9px 12px;border-radius:9px" style-hover="background:#F1EEE7">设定</div>
+        <div onClick="{{ goAgents }}" style="cursor:pointer;font:600 12.5px/1 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:9px 12px;border-radius:9px" style-hover="background:#F1EEE7">Agent</div>
+        <div onClick="{{ goEditor }}" style="cursor:pointer;font:600 12.5px/1 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:9px 12px;border-radius:9px" style-hover="background:#F1EEE7">章节编辑器</div>
+        <div onClick="{{ goReader }}" style="cursor:pointer;font:600 12.5px/1 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:9px 12px;border-radius:9px" style-hover="background:#F1EEE7">阅读页</div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <div style="font:700 10.5px/1 -apple-system;letter-spacing:1.3px;color:#8A8272">动效演示</div>
+      <div onClick="{{ demoGenerate }}" style="cursor:pointer;font:600 12.5px/1.2 -apple-system;color:#fff;background:#1B1A17;padding:11px 13px;border-radius:9px">跑一次生成流程 →</div>
+      <div onClick="{{ runFailure }}" style="cursor:pointer;font:600 12.5px/1.2 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:11px 13px;border-radius:9px">看失败态与豁免重试</div>
+      <div onClick="{{ demoLoadFail }}" style="cursor:pointer;font:600 12.5px/1.2 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:11px 13px;border-radius:9px">看读取中 → 读取失败</div>
+      <div onClick="{{ toggleDark }}" style="cursor:pointer;font:600 12.5px/1.2 -apple-system;color:#3B3831;background:#FDFCFA;border:1px solid rgba(0,0,0,.10);padding:11px 13px;border-radius:9px">切换深色 / 浅色</div>
+      <div style="font:400 12px/1.6 -apple-system;color:#7A766D">其它可点的：章节行、底部三段导航、人物、留痕两个抽屉、预览/编辑、接受本章、Agent 行进详情页、阅读页点正文收起工具栏、Aa 面板改主题字号、书架第三本是空书（空态）。</div>
+    </div>
+
+    <div style="height:1px;background:rgba(0,0,0,.10)"></div>
+
+    <div style="display:flex;flex-direction:column;gap:11px">
+      <div style="font:700 10.5px/1 -apple-system;letter-spacing:1.3px;color:#8A8272">设计决定</div>
+      <div style="font:400 12.5px/1.65 -apple-system;color:#57544D"><b style="color:#1B1A17">封面</b>：渐变+两个字 → 纸色书封，竖排书名、细压边框、书脊暗边。四种纸色按书轮换，不再靠渐变区分。</div>
+      <div style="font:400 12.5px/1.65 -apple-system;color:#57544D"><b style="color:#1B1A17">玻璃</b>：只留在真正悬浮、需要透出下层的地方（阅读页工具条、吸底操作栏）。列表和表单一律实色纸面 + 1px 分隔线。</div>
+      <div style="font:400 12.5px/1.65 -apple-system;color:#57544D"><b style="color:#1B1A17">工具栏</b>：四等分 segmented 拆成底部三段（稿件/人物/设定），Agent 与连接收进设定的分组列表，层级和手指都对了。</div>
+      <div style="font:400 12.5px/1.65 -apple-system;color:#57544D"><b style="color:#1B1A17">字体</b>：界面圆体 → SF Pro；书名、章节名、正文统一宋体，作者写的东西是宋体，系统说的话是黑体。</div>
+      <div style="font:400 12.5px/1.65 -apple-system;color:#57544D"><b style="color:#1B1A17">动效</b>：换页 220ms 上浮淡入，不做交叉淡化；生成流程用一条真实推进的步骤条代替四个转圈。</div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:11px;flex:none">
+    <div style="display:flex;align-items:baseline;gap:9px"><span style="font:600 11px/1 ui-monospace,Menlo,monospace;background:#1B1A17;color:#fff;padding:4px 7px;border-radius:5px">2a</span><span style="font:600 14px/1.2 -apple-system;color:#1B1A17">LinoI · 视觉升级</span><span style="font:400 12px/1.2 -apple-system;color:#8A8272">iPhone 17 Pro</span></div>
+
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" dark="{{ dark }}" hint-size="402px,874px">
+      <div style="height:100%;overflow:hidden;background:var(--bg);position:relative;transition:background .25s ease">
+
+        <sc-if value="{{ isShelf }}" hint-placeholder-val="{{ true }}">
+          <div style="height:100%;display:flex;flex-direction:column;animation:scr .22s ease-out">
+            <div style="padding:63px 20px 0;flex:none">
+              <div style="display:flex;align-items:flex-end;gap:12px">
+                <div style="flex:1;min-width:0">
+                  <div style="font:400 11.5px/1 -apple-system;letter-spacing:1.6px;color:var(--muted)">LINOI</div>
+                  <div style="margin-top:7px;font:700 30px/1.15 'Songti SC',STSong,serif;color:var(--ink)">书架</div>
+                </div>
+                <div onClick="{{ goConnection }}" style="cursor:pointer;display:flex;align-items:center;gap:6px;height:34px;padding:0 11px;border-radius:999px;background:var(--surface);border:1px solid var(--line)">
+                  <div style="width:6px;height:6px;border-radius:50%;background:var(--green)"></div>
+                  <span style="font:500 12px/1 -apple-system;color:var(--ink2)">已连接</span>
+                </div>
+              </div>
+              <div style="margin-top:6px;font:400 13.5px/1.5 -apple-system;color:var(--muted)">3 本书 · 31 章 · 上次写作 2 小时前</div>
+            </div>
+
+            <div style="flex:1;min-height:0;overflow:auto;padding:24px 20px 0">
+              <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 18px;padding-bottom:28px">
+                <sc-for list="{{ books }}" as="b" hint-placeholder-count="3">
+                  <div onClick="{{ b.open }}" style="cursor:pointer;display:flex;flex-direction:column;gap:11px">
+                    <div style="position:relative;aspect-ratio:3/4;border-radius:4px 10px 10px 4px;background:{{ b.tone }};box-shadow:var(--shadow),inset 5px 0 0 rgba(0,0,0,.055),inset 0 0 0 1px rgba(0,0,0,.05);overflow:hidden;transition:transform .18s ease" style-active="transform:scale(.975)">
+                      <div style="position:absolute;inset:12px 12px 12px 20px;border:1px solid rgba(61,59,52,.20);border-radius:2px"></div>
+                      <div style="position:absolute;top:24px;left:0;right:0;display:flex;justify-content:center">
+                        <div style="writing-mode:vertical-rl;font:600 19px/1 'Songti SC',STSong,serif;letter-spacing:5px;color:var(--coverink)">{{ b.title }}</div>
+                      </div>
+                      <div style="position:absolute;left:0;right:0;bottom:22px;text-align:center;font:400 9.5px/1 -apple-system;letter-spacing:2.4px;color:rgba(61,59,52,.55)">{{ b.mark }}</div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:3px">
+                      <div style="font:600 15px/1.3 'Songti SC',STSong,serif;color:var(--ink)">{{ b.title }}</div>
+                      <div style="font:400 11.5px/1.3 -apple-system;color:var(--muted)">{{ b.meta }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+                <div onClick="{{ openNewBook }}" style="cursor:pointer;aspect-ratio:3/4;border-radius:4px 10px 10px 4px;border:1px dashed var(--line2);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:var(--muted)">
+                  <svg width="19" height="19" viewBox="0 0 20 20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"></path></svg>
+                  <span style="font:500 12.5px/1 -apple-system">新建书</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isBook }}" hint-placeholder-val="{{ false }}">
+          <div style="height:100%;display:flex;flex-direction:column">
+            <div style="flex:none;padding:63px 0 0;background:var(--bg)">
+              <div style="height:46px;display:flex;align-items:center;gap:6px;padding:0 12px 0 8px">
+                <div onClick="{{ goShelf }}" style="cursor:pointer;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center">
+                  <svg width="10" height="17" viewBox="0 0 12 20" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2 2 10l7.5 8"></path></svg>
+                </div>
+                <div style="flex:1;min-width:0;font:600 17px/1.2 'Songti SC',STSong,serif;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ bookTitle }}</div>
+                <div style="width:38px;height:38px;display:flex;align-items:center;justify-content:center;font:600 16px/1 -apple-system;color:var(--muted)">···</div>
+              </div>
+            </div>
+
+            <sc-if value="{{ isChapters }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;min-height:0;overflow:auto;padding:8px 16px 0;animation:scr .22s ease-out">
+                <div style="display:flex;align-items:flex-end;gap:10px;padding:0 4px 12px">
+                  <div style="flex:1">
+                    <div style="font:700 22px/1.2 'Songti SC',STSong,serif;color:var(--ink)">稿件</div>
+                    <div style="margin-top:5px;font:400 12px/1.4 -apple-system;color:var(--muted)">{{ chapterMeta }}</div>
+                  </div>
+                  <div style="cursor:pointer;height:32px;padding:0 12px;border-radius:999px;background:var(--accent);display:flex;align-items:center;gap:5px">
+                    <svg width="12" height="12" viewBox="0 0 20 20" stroke="var(--accenttext)" stroke-width="2.4" stroke-linecap="round"><path d="M10 4v12M4 10h12"></path></svg>
+                    <span style="font:600 12.5px/1 -apple-system;color:var(--accenttext)">新章</span>
+                  </div>
+                </div>
+
+                <sc-if value="{{ noChapters }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:44px 24px;border-radius:16px;background:var(--surface);border:1px dashed var(--line2);display:flex;flex-direction:column;align-items:center;gap:10px;animation:scr .22s ease-out">
+                    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="var(--faint)" stroke-width="1.3" stroke-linejoin="round"><path d="M7 9.5h13L25 14v12.5H7z"></path><path d="M20 9.5V14h5"></path><path d="M11 5.5h11.5L27 10"></path></svg>
+                    <div style="font:600 16px/1.3 'Songti SC',STSong,serif;color:var(--ink)">还没有章节</div>
+                    <div style="max-width:220px;text-align:center;font:400 12.5px/1.7 -apple-system;color:var(--muted)">先新建一章，再填写剧情 Bible 和允许人物。</div>
+                    <div style="cursor:pointer;margin-top:4px;height:38px;padding:0 18px;border-radius:999px;background:var(--accent);display:flex;align-items:center;font:600 13.5px/1 -apple-system;color:var(--accenttext)">新建章节</div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ hasChapters }}" hint-placeholder-val="{{ true }}">
+                <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden">
+                  <sc-for list="{{ chapters }}" as="c" hint-placeholder-count="6">
+                    <div onClick="{{ c.open }}" style="cursor:pointer;display:flex;align-items:center;gap:13px;padding:0 14px;height:60px;border-bottom:1px solid var(--line);transition:background .14s ease" style-active="background:var(--surface2)">
+                      <div style="width:26px;flex:none;text-align:center;font:400 15px/1 'Songti SC',STSong,serif;color:var(--faint)">{{ c.index }}</div>
+                      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+                        <div style="font:600 15.5px/1.2 'Songti SC',STSong,serif;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.title }}</div>
+                        <div style="display:flex;align-items:center;gap:6px">
+                          <div style="width:5px;height:5px;border-radius:50%;background:{{ c.color }}"></div>
+                          <span style="font:400 11.5px/1 -apple-system;color:{{ c.color }}">{{ c.statusLabel }}</span>
+                          <span style="font:400 11.5px/1 -apple-system;color:var(--faint)">{{ c.words }}</span>
+                        </div>
+                      </div>
+                      <svg width="7" height="12" viewBox="0 0 9 14" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l5 5-5 5"></path></svg>
+                    </div>
+                  </sc-for>
+                </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isCharacters }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;min-height:0;overflow:auto;padding:8px 16px 0;animation:scr .22s ease-out">
+                <div style="display:flex;align-items:flex-end;gap:10px;padding:0 4px 12px">
+                  <div style="flex:1">
+                    <div style="font:700 22px/1.2 'Songti SC',STSong,serif;color:var(--ink)">人物</div>
+                    <div style="margin-top:5px;font:400 12px/1.4 -apple-system;color:var(--muted)">固定设定你维护，动态字段由 Extractor 更新</div>
+                  </div>
+                  <div onClick="{{ openImportChar }}" style="cursor:pointer;height:32px;padding:0 12px;border-radius:999px;background:var(--accent);display:flex;align-items:center;gap:5px">
+                    <svg width="12" height="12" viewBox="0 0 20 20" stroke="var(--accenttext)" stroke-width="2.4" stroke-linecap="round"><path d="M10 4v12M4 10h12"></path></svg>
+                    <span style="font:600 12.5px/1 -apple-system;color:var(--accenttext)">新建</span>
+                  </div>
+                </div>
+
+                <sc-if value="{{ noChapters }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:44px 24px;border-radius:16px;background:var(--surface);border:1px dashed var(--line2);display:flex;flex-direction:column;align-items:center;gap:10px;animation:scr .22s ease-out">
+                    <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="var(--faint)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="11" r="4.6"></circle><path d="M5 26c.7-4.6 4.1-7.2 8-7.2s7.3 2.6 8 7.2"></path><path d="M21 6.4a4.6 4.6 0 0 1 0 8"></path></svg>
+                    <div style="font:600 16px/1.3 'Songti SC',STSong,serif;color:var(--ink)">还没有人物</div>
+                    <div style="max-width:230px;text-align:center;font:400 12.5px/1.7 -apple-system;color:var(--muted)">可以从已有的人物卡文本导入，也可以先建一个空人物。</div>
+                    <div onClick="{{ openImportChar }}" style="cursor:pointer;margin-top:4px;height:38px;padding:0 18px;border-radius:999px;background:var(--accent);display:flex;align-items:center;font:600 13.5px/1 -apple-system;color:var(--accenttext)">导入人物卡</div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ hasChapters }}" hint-placeholder-val="{{ true }}">
+                <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden;margin-bottom:14px">
+                  <sc-for list="{{ characters }}" as="p" hint-placeholder-count="4">
+                    <div onClick="{{ p.select }}" style="cursor:pointer;display:flex;align-items:center;gap:12px;padding:0 14px;height:58px;border-bottom:1px solid var(--line);transition:background .14s ease" style-active="background:var(--surface2)">
+                      <div style="width:34px;height:34px;flex:none;border-radius:50%;background:{{ p.tone }};display:flex;align-items:center;justify-content:center;font:500 15px/1 'Songti SC',STSong,serif;color:var(--coverink)">{{ p.initial }}</div>
+                      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                        <div style="font:600 15px/1.2 'Songti SC',STSong,serif;color:var(--ink)">{{ p.name }}</div>
+                        <div style="font:400 11.5px/1.2 -apple-system;color:var(--muted)">{{ p.role }}</div>
+                      </div>
+                      <div style="font:400 11.5px/1 -apple-system;color:var(--faint)">{{ p.events }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);padding:16px;display:flex;flex-direction:column;gap:14px">
+                  <div style="display:flex;align-items:center;gap:12px">
+                    <div style="width:46px;height:46px;flex:none;border-radius:50%;background:var(--cover1);display:flex;align-items:center;justify-content:center;font:500 20px/1 'Songti SC',STSong,serif;color:var(--coverink)">{{ sel.initial }}</div>
+                    <div style="flex:1;min-width:0">
+                      <div style="font:700 18px/1.25 'Songti SC',STSong,serif;color:var(--ink)">{{ sel.name }}</div>
+                      <div style="margin-top:3px;font:400 12px/1.2 -apple-system;color:var(--muted)">{{ sel.role }}</div>
+                    </div>
+                    <div onClick="{{ confirmDeleteCharacter }}" style="cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font:600 15px/1 -apple-system;color:var(--muted)">···</div>
+                  </div>
+                  <div style="height:1px;background:var(--line)"></div>
+                  <div>
+                    <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">固定设定</div>
+                    <div style="margin-top:8px;font:400 14px/1.85 'Songti SC',STSong,serif;color:var(--ink2);text-wrap:pretty">{{ sel.profile }}</div>
+                  </div>
+                  <div>
+                    <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">动态字段 · Extractor</div>
+                    <div style="margin-top:8px;display:flex;flex-direction:column;gap:1px;border-radius:11px;overflow:hidden;background:var(--line)">
+                      <div style="display:flex;gap:10px;padding:10px 12px;background:var(--surface2)">
+                        <span style="width:60px;flex:none;font:500 12px/1.5 -apple-system;color:var(--muted)">当前位置</span>
+                        <span style="flex:1;font:400 12.5px/1.5 -apple-system;color:var(--ink2)">雾港北栈桥</span>
+                        <span style="font:400 11px/1.5 -apple-system;color:var(--faint)">第 17 章</span>
+                      </div>
+                      <div style="display:flex;gap:10px;padding:10px 12px;background:var(--surface2)">
+                        <span style="width:60px;flex:none;font:500 12px/1.5 -apple-system;color:var(--muted)">立场</span>
+                        <span style="flex:1;font:400 12.5px/1.5 -apple-system;color:var(--ink2)">对柯明远保留戒备</span>
+                        <span style="font:400 11px/1.5 -apple-system;color:var(--faint)">第 16 章</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">人物故事线</div>
+                      <div style="flex:1"></div>
+                      <div style="font:400 11px/1 -apple-system;color:var(--faint)">{{ sel.events }}</div>
+                    </div>
+                    <div style="margin-top:11px;display:flex;flex-direction:column;gap:0">
+                      <div style="display:flex;gap:12px">
+                        <div style="width:44px;flex:none;display:flex;flex-direction:column;align-items:center">
+                          <div style="width:7px;height:7px;border-radius:50%;background:var(--accent);margin-top:5px"></div>
+                          <div style="flex:1;width:1px;background:var(--line)"></div>
+                        </div>
+                        <div style="flex:1;padding-bottom:16px">
+                          <div style="font:500 11px/1 -apple-system;color:var(--muted)">第 17 章</div>
+                          <div style="margin-top:6px;font:400 13.5px/1.8 'Songti SC',STSong,serif;color:var(--ink2)">在灯塔下拒绝柯明远的交易，要求先交名单。</div>
+                        </div>
+                        <div style="width:26px;flex:none;text-align:right;font:600 14px/1.6 -apple-system;color:var(--faint)">···</div>
+                      </div>
+                      <div style="display:flex;gap:12px">
+                        <div style="width:44px;flex:none;display:flex;flex-direction:column;align-items:center">
+                          <div style="width:7px;height:7px;border-radius:50%;background:var(--line2);margin-top:5px"></div>
+                          <div style="flex:1;width:1px;background:var(--line)"></div>
+                        </div>
+                        <div style="flex:1;padding-bottom:16px">
+                          <div style="font:500 11px/1 -apple-system;color:var(--muted)">第 16 章</div>
+                          <div style="margin-top:6px;font:400 13.5px/1.8 'Songti SC',STSong,serif;color:var(--ink2)">夜里在北栈桥等一条不该进港的船，第一次见到白露。</div>
+                        </div>
+                        <div style="width:26px;flex:none;text-align:right;font:600 14px/1.6 -apple-system;color:var(--faint)">···</div>
+                      </div>
+                      <div style="display:flex;gap:12px">
+                        <div style="width:44px;flex:none;display:flex;flex-direction:column;align-items:center">
+                          <div style="width:7px;height:7px;border-radius:50%;background:var(--line2);margin-top:5px"></div>
+                        </div>
+                        <div style="flex:1">
+                          <div style="font:500 11px/1 -apple-system;color:var(--muted)">第 13 章</div>
+                          <div style="margin-top:6px;font:400 13.5px/1.8 'Songti SC',STSong,serif;color:var(--ink2)">当众记下柯明远关于档案的允诺。</div>
+                        </div>
+                        <div style="width:26px;flex:none;text-align:right;font:600 14px/1.6 -apple-system;color:var(--faint)">···</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;min-height:0;overflow:auto;padding:8px 16px 0;animation:scr .22s ease-out">
+                <div style="padding:0 4px 12px">
+                  <div style="font:700 22px/1.2 'Songti SC',STSong,serif;color:var(--ink)">设定</div>
+                  <div style="margin-top:5px;font:400 12px/1.4 -apple-system;color:var(--muted)">世界观进入 Writer 的硬约束区</div>
+                </div>
+
+                <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px">
+                  <div style="padding:13px 14px 11px;border-bottom:1px solid var(--line)">
+                    <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">书名</div>
+                    <div style="margin-top:8px;font:600 17px/1.2 'Songti SC',STSong,serif;color:var(--ink)">雾港纪事</div>
+                  </div>
+                  <div style="padding:13px 14px 14px">
+                    <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">世界观设定</div>
+                    <div style="margin-top:8px;font:400 14px/1.9 'Songti SC',STSong,serif;color:var(--ink2);text-wrap:pretty">故事发生在常年起雾的北方港口城市。港务局与三家船行分权，海关档案在 1998 年火灾中大部分损毁——凡涉及该年之前的记录，一律以口述为准，不得出现书面证据。</div>
+                  </div>
+                </div>
+
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint);padding:0 4px 8px">导出</div>
+                <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px">
+                  <div style="cursor:pointer;display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;border-bottom:1px solid var(--line)" style-active="background:var(--surface2)">
+                    <span style="flex:1;font:400 15px/1 -apple-system;color:var(--ink)">导出全书</span>
+                    <span style="font:400 12.5px/1 -apple-system;color:var(--faint)">.txt</span>
+                    <svg width="7" height="12" viewBox="0 0 9 14" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l5 5-5 5"></path></svg>
+                  </div>
+                  <div style="cursor:pointer;display:flex;align-items:center;gap:10px;height:52px;padding:0 14px" style-active="background:var(--surface2)">
+                    <span style="flex:1;font:400 15px/1 -apple-system;color:var(--ink)">导出记忆</span>
+                    <span style="font:400 12.5px/1 -apple-system;color:var(--faint)">.txt</span>
+                    <svg width="7" height="12" viewBox="0 0 9 14" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l5 5-5 5"></path></svg>
+                  </div>
+                </div>
+
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint);padding:0 4px 8px">模型与连接</div>
+                <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden">
+                  <div onClick="{{ goAgents }}" style="cursor:pointer;display:flex;align-items:center;gap:10px;height:56px;padding:0 14px;border-bottom:1px solid var(--line)" style-active="background:var(--surface2)">
+                    <div style="flex:1;min-width:0">
+                      <div style="font:400 15px/1.2 -apple-system;color:var(--ink)">Agent 与模型</div>
+                      <div style="margin-top:3px;font:400 11.5px/1.2 -apple-system;color:var(--muted)">4 个 Agent · 2 个 Profile</div>
+                    </div>
+                    <svg width="7" height="12" viewBox="0 0 9 14" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l5 5-5 5"></path></svg>
+                  </div>
+                  <div onClick="{{ goConnection }}" style="cursor:pointer;display:flex;align-items:center;gap:10px;height:56px;padding:0 14px" style-active="background:var(--surface2)">
+                    <div style="flex:1;min-width:0">
+                      <div style="font:400 15px/1.2 -apple-system;color:var(--ink)">后端连接</div>
+                      <div style="margin-top:3px;font:400 11.5px/1.2 -apple-system;color:var(--muted)">linoi.example.com · Token 已存 Keychain</div>
+                    </div>
+                    <div style="width:6px;height:6px;border-radius:50%;background:var(--green)"></div>
+                    <svg width="7" height="12" viewBox="0 0 9 14" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l5 5-5 5"></path></svg>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+            <div style="flex:none;padding:6px 12px 30px;background:var(--bg);border-top:1px solid var(--line);display:flex">
+              <div onClick="{{ goChapters }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;padding:7px 0">
+                <svg width="21" height="21" viewBox="0 0 22 22" fill="none" stroke="{{ tabChapters }}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3.5h9.5L18 8v10.5H4z"></path><path d="M13.5 3.5V8H18M7 11.5h8M7 14.5h5.5"></path></svg>
+                <span style="font:500 10.5px/1 -apple-system;color:{{ tabChapters }}">稿件</span>
+              </div>
+              <div onClick="{{ goCharacters }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;padding:7px 0">
+                <svg width="21" height="21" viewBox="0 0 22 22" fill="none" stroke="{{ tabCharacters }}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7.5" r="3.4"></circle><path d="M3 18.5c.5-3.3 3-5.2 6-5.2s5.5 1.9 6 5.2"></path><path d="M15 4.6a3.4 3.4 0 0 1 0 5.9M19.5 17.8c-.3-2.3-1.4-3.8-3-4.5"></path></svg>
+                <span style="font:500 10.5px/1 -apple-system;color:{{ tabCharacters }}">人物</span>
+              </div>
+              <div onClick="{{ goSettings }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;padding:7px 0">
+                <svg width="21" height="21" viewBox="0 0 22 22" fill="none" stroke="{{ tabSettings }}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="3"></circle><path d="M11 2.6v2.2M11 17.2v2.2M19.4 11h-2.2M4.8 11H2.6M17 5l-1.6 1.6M6.6 15.4 5 17M17 17l-1.6-1.6M6.6 6.6 5 5"></path></svg>
+                <span style="font:500 10.5px/1 -apple-system;color:{{ tabSettings }}">设定</span>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}">
+          <div style="height:100%;display:flex;flex-direction:column;animation:scr .22s ease-out">
+            <div style="flex:none;padding:63px 0 0;background:var(--bg);border-bottom:1px solid var(--line)">
+              <div style="height:46px;display:flex;align-items:center;gap:6px;padding:0 12px 0 8px">
+                <div onClick="{{ goChapters }}" style="cursor:pointer;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center">
+                  <svg width="10" height="17" viewBox="0 0 12 20" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2 2 10l7.5 8"></path></svg>
+                </div>
+                <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px">
+                  <span style="font:600 15px/1.2 'Songti SC',STSong,serif;color:var(--ink)">第 17 章</span>
+                  <span style="width:5px;height:5px;border-radius:50%;background:{{ genColor }}"></span>
+                  <span style="font:400 11.5px/1 -apple-system;color:{{ genColor }}">{{ genLabel }}</span>
+                </div>
+                <span style="font:400 11.5px/1 -apple-system;color:var(--faint)">已同步</span>
+                <div onClick="{{ confirmDeleteChapter }}" style="cursor:pointer;width:34px;height:38px;display:flex;align-items:center;justify-content:flex-end;font:600 16px/1 -apple-system;color:var(--muted)">···</div>
+              </div>
+            </div>
+
+            <div style="flex:1;min-height:0;overflow:auto;padding:20px 20px 0">
+              <sc-if value="{{ restored }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-bottom:16px;display:flex;align-items:center;gap:10px;padding:11px 13px;border-radius:12px;background:var(--accentsoft);animation:rise .22s ease-out">
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4.2V8l2.4 1.6"></path><path d="M14 8a6 6 0 1 1-1.9-4.4"></path><path d="M14.2 1.4v3.2H11"></path></svg>
+                  <span style="flex:1;font:500 12.5px/1.4 -apple-system;color:var(--accent)">已恢复本地草稿</span>
+                  <span onClick="{{ dismissRestored }}" style="cursor:pointer;font:500 12px/1 -apple-system;color:var(--muted)">知道了</span>
+                </div>
+              </sc-if>
+              <input value="灯塔下的交易" style="width:100%;box-sizing:border-box;border:none;outline:none;background:transparent;font:700 26px/1.3 'Songti SC',STSong,serif;color:var(--ink);padding:0;margin:0" />
+              <div style="margin-top:9px;display:flex;align-items:center;gap:8px;font:400 12px/1 -apple-system;color:var(--faint)">
+                <span>{{ words }} 字</span><span>·</span><span>最低 4000 字</span>
+              </div>
+
+              <div style="margin-top:22px;display:flex;align-items:center;gap:8px">
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">本章剧情 BIBLE</div>
+                <div style="flex:1;height:1px;background:var(--line)"></div>
+              </div>
+              <div style="margin-top:11px;padding:14px;border-radius:14px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);font:400 14.5px/1.9 'Songti SC',STSong,serif;color:var(--ink2);text-wrap:pretty">沈砚在灯塔下见到柯明远，对方提出用 1998 年前的口述记录换取通行许可。白露旁听但不表态。本章结束时交易未达成。</div>
+
+              <div style="margin-top:22px;display:flex;align-items:center;gap:8px">
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">本章允许人物</div>
+                <div style="flex:1;height:1px;background:var(--line)"></div>
+                <div style="font:400 11.5px/1 -apple-system;color:var(--faint)">{{ chipCount }}</div>
+              </div>
+              <div style="margin-top:11px;display:flex;flex-wrap:wrap;gap:8px">
+                <sc-for list="{{ chips }}" as="ch" hint-placeholder-count="4">
+                  <div onClick="{{ ch.toggle }}" style="cursor:pointer;display:flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:999px;background:{{ ch.bg }};border:1px solid {{ ch.border }};transition:background .18s ease,border-color .18s ease">
+                    <span style="font:500 13px/1 -apple-system;color:{{ ch.fg }}">{{ ch.name }}</span>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div style="margin-top:22px;display:flex;align-items:center;gap:8px">
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">流程</div>
+                <div style="flex:1;height:1px;background:var(--line)"></div>
+              </div>
+              <div style="margin-top:11px;padding:14px;border-radius:14px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:11px">
+                <sc-for list="{{ steps }}" as="s" hint-placeholder-count="4">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div style="width:16px;height:16px;flex:none;border-radius:50%;border:1.5px solid {{ s.color }};background:{{ s.fill }};display:flex;align-items:center;justify-content:center;animation:{{ s.anim }}">
+                      <div style="width:5px;height:5px;border-radius:50%;background:{{ s.dot }}"></div>
+                    </div>
+                    <span style="flex:1;font:500 13px/1 -apple-system;color:{{ s.text }}">{{ s.name }}</span>
+                    <span style="font:400 11.5px/1 -apple-system;color:{{ s.color }}">{{ s.state }}</span>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ failed }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:3px;padding-top:12px;border-top:1px solid var(--line);animation:scr .2s ease-out">
+                    <div style="display:flex;gap:9px">
+                      <div style="width:3px;flex:none;border-radius:2px;background:var(--danger)"></div>
+                      <div style="flex:1">
+                        <div style="font:600 13px/1.3 -apple-system;color:var(--danger)">Writer 未完成</div>
+                        <div style="margin-top:6px;font:400 12.5px/1.75 -apple-system;color:var(--ink2)">正文长度不足 4000 字，已从同一输入完整重写一次仍未通过。当前正文区保留生成前的草稿。</div>
+                        <div style="margin-top:8px;font:400 11.5px/1.5 ui-monospace,Menlo,monospace;color:var(--muted)">错误代码：writer_length_short</div>
+                      </div>
+                    </div>
+                    <div style="margin-top:12px;padding:11px 12px;border-radius:11px;background:var(--surface2)">
+                      <div style="font:500 12px/1.6 -apple-system;color:var(--amber)">以下人物未被选中，但出现在正文或 Bible 中：老周</div>
+                      <div style="margin-top:9px;display:flex;gap:9px">
+                        <div onClick="{{ demoGenerate }}" style="cursor:pointer;height:36px;padding:0 14px;border-radius:10px;background:var(--accent);display:flex;align-items:center;font:600 13px/1 -apple-system;color:var(--accenttext)">重新生成</div>
+                        <div onClick="{{ demoGenerate }}" style="cursor:pointer;height:36px;padding:0 14px;border-radius:10px;background:var(--surface);border:1px solid var(--line2);display:flex;align-items:center;font:500 13px/1 -apple-system;color:var(--ink)">本章豁免并重试</div>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+
+              <div style="margin-top:22px;display:flex;align-items:center;gap:8px">
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">正文</div>
+                <div style="flex:1;height:1px;background:var(--line)"></div>
+                <div onClick="{{ openImport }}" style="cursor:pointer;font:500 12px/1 -apple-system;color:var(--accent);padding:0 4px">导入</div>
+                <div style="display:flex;gap:2px;padding:2px;border-radius:8px;background:var(--bg2)">
+                  <div onClick="{{ setPreview }}" style="cursor:pointer;height:26px;padding:0 11px;border-radius:6px;display:flex;align-items:center;font:500 12px/1 -apple-system;background:{{ previewBg }};color:{{ previewFg }};transition:background .18s ease">预览</div>
+                  <div onClick="{{ setEdit }}" style="cursor:pointer;height:26px;padding:0 11px;border-radius:6px;display:flex;align-items:center;font:500 12px/1 -apple-system;background:{{ editBg }};color:{{ editFg }};transition:background .18s ease">编辑</div>
+                </div>
+              </div>
+              <div style="margin-top:11px;padding:16px;border-radius:14px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow)">
+                <p style="margin:0 0 15px;font:400 15px/2 'Songti SC',STSong,serif;color:var(--ink)">雾从北面压过来的时候，灯塔刚亮到第三圈。沈砚把手套摘了一半，又戴回去。</p>
+                <p style="margin:0 0 15px;font:400 15px/2 'Songti SC',STSong,serif;color:var(--ink)">柯明远比约定的时间早到了二十分钟，这不像他。</p>
+                <p style="margin:0;font:400 15px/2 'Songti SC',STSong,serif;color:var(--ink)">"1998 年以前的事，没有纸。"他说，"只有嘴。"</p>
+              </div>
+              <div style="margin-top:22px;display:flex;align-items:center;gap:8px">
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">留痕</div>
+                <div style="flex:1;height:1px;background:var(--line)"></div>
+              </div>
+              <div style="margin-top:11px;border-radius:14px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden">
+                <div onClick="{{ toggleCtx }}" style="cursor:pointer;display:flex;align-items:center;gap:10px;height:52px;padding:0 14px" style-active="background:var(--surface2)">
+                  <div style="flex:1;min-width:0">
+                    <div style="font:500 14.5px/1.2 -apple-system;color:var(--ink)">本次写作上下文</div>
+                  </div>
+                  <span style="font:400 11.5px/1 -apple-system;color:var(--faint)">简报 8 条 · 来源 16</span>
+                  <svg width="11" height="7" viewBox="0 0 12 8" fill="none" stroke="var(--faint)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate({{ ctxRot }});transition:transform .2s ease"><path d="M1.5 2 6 6.2 10.5 2"></path></svg>
+                </div>
+                <sc-if value="{{ ctxOpen }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:2px 14px 16px;border-top:1px solid var(--line);animation:scr .2s ease-out">
+                    <div style="margin-top:14px;font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">WRITER 实际记忆简报</div>
+                    <div style="margin-top:8px;font:400 13.5px/1.85 'Songti SC',STSong,serif;color:var(--ink2);text-wrap:pretty">柯明远在第 13 章承诺过"档案的事由他处理"，至今未兑现；白露自第 9 章起不再向港务局主动开口；1998 年前记录一律无纸质证据。</div>
+                    <div style="margin-top:14px;font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">上一章尾段</div>
+                    <div style="margin-top:8px;padding:11px 12px;border-radius:11px;background:var(--surface2);font:400 13.5px/1.85 'Songti SC',STSong,serif;color:var(--ink2);text-wrap:pretty">他没有回头，只把灯塔的钥匙放在栏杆上，任雾把它盖住。</div>
+                    <div style="margin-top:12px;font:400 11.5px/1.5 -apple-system;color:var(--muted)">简报占用：612 字符 · 16 条审计来源</div>
+                    <div style="margin-top:10px;display:flex;flex-direction:column;gap:1px;border-radius:11px;overflow:hidden;background:var(--line)">
+                      <div style="display:flex;gap:10px;padding:9px 12px;background:var(--surface2)"><span style="width:52px;flex:none;font:500 11.5px/1.6 -apple-system;color:var(--muted)">第 13 章</span><span style="flex:1;font:400 12.5px/1.6 -apple-system;color:var(--ink2)">柯明远当众允诺处理档案缺口</span></div>
+                      <div style="display:flex;gap:10px;padding:9px 12px;background:var(--surface2)"><span style="width:52px;flex:none;font:500 11.5px/1.6 -apple-system;color:var(--muted)">第 9 章</span><span style="flex:1;font:400 12.5px/1.6 -apple-system;color:var(--ink2)">白露对港务局不再主动开口</span></div>
+                    </div>
+                    <div style="margin-top:12px;display:flex;gap:9px;padding:11px 12px;border-radius:11px;background:var(--accentsoft)">
+                      <div style="width:3px;flex:none;border-radius:2px;background:var(--amber)"></div>
+                      <div>
+                        <div style="font:600 11.5px/1.2 -apple-system;color:var(--amber)">Bible 冲突提示</div>
+                        <div style="margin-top:5px;font:400 12.5px/1.7 -apple-system;color:var(--ink2)">记忆称档案室仍存半份底册，本章 Bible 写"全部损毁"——以本章 Bible 为准。</div>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <div onClick="{{ toggleChk }}" style="cursor:pointer;display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;border-top:1px solid var(--line)" style-active="background:var(--surface2)">
+                  <div style="flex:1;min-width:0">
+                    <div style="font:500 14.5px/1.2 -apple-system;color:var(--ink)">Bible 检查结果</div>
+                  </div>
+                  <div style="width:5px;height:5px;border-radius:50%;background:var(--green)"></div>
+                  <span style="font:400 11.5px/1 -apple-system;color:var(--green)">通过</span>
+                  <svg width="11" height="7" viewBox="0 0 12 8" fill="none" stroke="var(--faint)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate({{ chkRot }});transition:transform .2s ease"><path d="M1.5 2 6 6.2 10.5 2"></path></svg>
+                </div>
+                <sc-if value="{{ chkOpen }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:2px 14px 16px;border-top:1px solid var(--line);animation:scr .2s ease-out">
+                    <div style="margin-top:14px;font:500 13px/1.5 -apple-system;color:var(--green)">当前正文 · 通过</div>
+                    <div style="margin-top:6px;font:400 12.5px/1.7 -apple-system;color:var(--muted)">Checker 只检查剧情边界，不评价文风。</div>
+                    <div style="margin-top:12px;display:flex;flex-direction:column;gap:1px;border-radius:11px;overflow:hidden;background:var(--line)">
+                      <div style="padding:11px 12px;background:var(--surface2)">
+                        <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">正文证据</div>
+                        <div style="margin-top:6px;font:400 13px/1.75 'Songti SC',STSong,serif;color:var(--ink2)">"1998 年以前的事，没有纸。"</div>
+                      </div>
+                      <div style="padding:11px 12px;background:var(--surface2)">
+                        <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">BIBLE 证据</div>
+                        <div style="margin-top:6px;font:400 13px/1.75 'Songti SC',STSong,serif;color:var(--ink2)">凡涉及 1998 年前的记录，一律以口述为准。</div>
+                      </div>
+                    </div>
+                    <div style="margin-top:12px;display:flex;gap:9px">
+                      <div style="cursor:pointer;height:36px;padding:0 14px;border-radius:10px;background:var(--surface2);border:1px solid var(--line2);display:flex;align-items:center;font:500 13px/1 -apple-system;color:var(--ink)">重新检查</div>
+                      <div onClick="{{ setEdit }}" style="cursor:pointer;height:36px;padding:0 14px;border-radius:10px;background:var(--surface2);border:1px solid var(--line2);display:flex;align-items:center;font:500 13px/1 -apple-system;color:var(--ink)">编辑后检查</div>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+
+              <div style="margin-top:22px;display:flex;align-items:center;gap:8px">
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">EXTRACTOR 结果</div>
+                <div style="flex:1;height:1px;background:var(--line)"></div>
+                <div style="font:400 11.5px/1 -apple-system;color:var(--faint)">可编辑</div>
+              </div>
+              <div style="margin-top:11px;border-radius:14px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden">
+                <div style="padding:13px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">大事记</div>
+                  <input value="沈砚拒绝柯明远的口述换许可" style="margin-top:8px;width:100%;box-sizing:border-box;border:none;outline:none;background:transparent;padding:0;font:600 15.5px/1.35 'Songti SC',STSong,serif;color:var(--ink)" />
+                </div>
+                <div style="padding:13px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">章节摘要</div>
+                  <div style="margin-top:8px;font:400 14px/1.9 'Songti SC',STSong,serif;color:var(--ink2);text-wrap:pretty">雾夜，沈砚在灯塔下与柯明远见面。柯提出以 1998 年前的口述记录换取通行许可，沈砚未答应，只要求对方先交出名单。白露全程旁听未表态，离开前熄了一盏灯。</div>
+                </div>
+                <div style="padding:13px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">状态变化</div>
+                  <div style="margin-top:9px;display:flex;flex-direction:column;gap:7px">
+                    <div style="display:flex;gap:9px"><span style="color:var(--faint);font:400 13px/1.6 -apple-system">—</span><span style="flex:1;font:400 13px/1.6 -apple-system;color:var(--ink2)">沈砚 · 立场：对柯明远保留戒备 → 明确设防</span></div>
+                    <div style="display:flex;gap:9px"><span style="color:var(--faint);font:400 13px/1.6 -apple-system">—</span><span style="flex:1;font:400 13px/1.6 -apple-system;color:var(--ink2)">白露 · 当前位置：灯塔顶层 → 北栈桥</span></div>
+                  </div>
+                </div>
+                <div style="padding:13px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">未决事项</div>
+                  <div style="margin-top:9px;display:flex;flex-direction:column;gap:7px">
+                    <div style="display:flex;gap:9px"><span style="color:var(--faint);font:400 13px/1.6 -apple-system">—</span><span style="flex:1;font:400 13px/1.6 -apple-system;color:var(--ink2)">柯明远承诺的名单尚未交出</span></div>
+                    <div style="display:flex;gap:9px"><span style="color:var(--faint);font:400 13px/1.6 -apple-system">—</span><span style="flex:1;font:400 13px/1.6 -apple-system;color:var(--ink2)">白露熄掉的那盏灯没有解释</span></div>
+                  </div>
+                </div>
+                <div style="padding:13px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">原子记忆</div>
+                  <div style="margin-top:9px;display:flex;flex-direction:column;gap:7px">
+                    <div style="display:flex;gap:9px"><span style="color:var(--faint);font:400 13px/1.6 -apple-system">—</span><span style="flex:1;font:400 13px/1.6 -apple-system;color:var(--ink2)">灯塔第三圈亮起时雾最厚</span></div>
+                    <div style="display:flex;gap:9px"><span style="color:var(--faint);font:400 13px/1.6 -apple-system">—</span><span style="flex:1;font:400 13px/1.6 -apple-system;color:var(--ink2)">柯明远习惯提前二十分钟到场</span></div>
+                  </div>
+                </div>
+                <div style="padding:12px 14px 14px;display:flex;align-items:center;gap:10px">
+                  <div style="flex:1;font:400 11.5px/1.5 -apple-system;color:var(--amber)">修改会影响后续章节的候选记忆。</div>
+                  <div style="cursor:pointer;height:36px;padding:0 14px;border-radius:10px;background:var(--surface2);border:1px solid var(--line2);display:flex;align-items:center;font:500 13px/1 -apple-system;color:var(--ink);flex:none">保存归档</div>
+                </div>
+              </div>
+
+              <div style="height:30px"></div>
+            </div>
+
+            <div style="flex:none;padding:10px 16px 30px;background:var(--bg);border-top:1px solid var(--line);display:flex;gap:10px;align-items:center">
+              <sc-if value="{{ running }}" hint-placeholder-val="{{ false }}">
+                <div onClick="{{ stopGeneration }}" style="cursor:pointer;height:48px;padding:0 16px;flex:none;border-radius:14px;background:var(--surface);border:1px solid var(--danger);display:flex;align-items:center;gap:7px">
+                  <div style="width:11px;height:11px;border-radius:2px;background:var(--danger)"></div>
+                  <span style="font:600 14px/1 -apple-system;color:var(--danger)">停止</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ notRunning }}" hint-placeholder-val="{{ true }}">
+                <div onClick="{{ demoGenerate }}" style="cursor:pointer;width:48px;height:48px;flex:none;border-radius:14px;background:var(--surface);border:1px solid var(--line2);display:flex;align-items:center;justify-content:center">
+                  <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="var(--ink)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 9a6 6 0 1 1-1.9-4.4"></path><path d="M15.2 1.8v3.4h-3.4"></path></svg>
+                </div>
+              </sc-if>
+              <div onClick="{{ accept }}" style="cursor:pointer;flex:1;height:48px;border-radius:14px;background:{{ acceptBg }};display:flex;align-items:center;justify-content:center;gap:7px;transition:background .2s ease">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="{{ acceptFg }}" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.6 6.2 12.3 13.5 4"></path></svg>
+                <span style="font:600 15px/1 -apple-system;color:{{ acceptFg }}">{{ acceptLabel }}</span>
+              </div>
+              <div onClick="{{ goReader }}" style="cursor:pointer;width:48px;height:48px;flex:none;border-radius:14px;background:var(--surface);border:1px solid var(--line2);display:flex;align-items:center;justify-content:center">
+                <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="var(--ink)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4.4C7.6 3.2 5.6 2.8 3 3v10c2.6-.2 4.6.2 6 1.4 1.4-1.2 3.4-1.6 6-1.4V3c-2.6-.2-4.6.2-6 1.4z"></path><path d="M9 4.4v10"></path></svg>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isReader }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ toggleChrome }}" style="height:100%;display:flex;flex-direction:column;background:{{ readerBg }};transition:background .25s ease;animation:fadein .2s ease-out">
+            <div style="flex:none;height:{{ chromeH }};overflow:hidden;transition:height .22s ease,opacity .22s ease;opacity:{{ chromeOpacity }}">
+              <div style="padding:59px 0 0"></div>
+              <div style="height:48px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid {{ readerLine }}">
+                <div onClick="{{ goEditor }}" style="cursor:pointer;width:38px;height:38px;display:flex;align-items:center;justify-content:center">
+                  <svg width="10" height="17" viewBox="0 0 12 20" fill="none" stroke="{{ readerInk }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2 2 10l7.5 8"></path></svg>
+                </div>
+                <div style="flex:1;text-align:center;font:500 12.5px/1 -apple-system;color:{{ readerMuted }}">雾港纪事 · 第 16 章</div>
+                <div onClick="{{ toggleReaderPanel }}" style="cursor:pointer;width:38px;height:38px;display:flex;align-items:baseline;justify-content:center;gap:1px">
+                  <span style="font:600 15px/1 -apple-system;color:{{ readerInk }}">A</span><span style="font:600 11px/1 -apple-system;color:{{ readerInk }}">A</span>
+                </div>
+              </div>
+            </div>
+
+            <div style="flex:1;min-height:0;overflow:auto;padding:26px 26px 0">
+              <div style="font:400 11.5px/1 -apple-system;letter-spacing:1.4px;color:{{ readerMuted }}">第 16 章</div>
+              <div style="margin-top:10px;font:700 25px/1.4 'Songti SC',STSong,serif;color:{{ readerInk }}">雾中来客</div>
+              <div style="margin:20px 0 24px;width:38px;height:1.5px;background:{{ readerRule }}"></div>
+              <p style="margin:0 0 22px;font:400 {{ readerFont }}/2 'Songti SC',STSong,serif;color:{{ readerInk }};text-wrap:pretty">那年冬天雾大得离奇，连灯塔的光都像被裹在棉花里，只在最近的水面上留下一小块亮。</p>
+              <p style="margin:0 0 22px;font:400 {{ readerFont }}/2 'Songti SC',STSong,serif;color:{{ readerInk }};text-wrap:pretty">沈砚站在北栈桥的尽头，等一条本不该进港的船。</p>
+              <p style="margin:0;font:400 {{ readerFont }}/2 'Songti SC',STSong,serif;color:{{ readerInk }};text-wrap:pretty">船靠岸的时候没有人喊号子，缆绳落在桩上的声音闷得像叹气。</p>
+            </div>
+
+            <div style="flex:none;padding:0 20px 30px;opacity:{{ chromeOpacity }};transition:opacity .22s ease">
+              <div style="display:flex;align-items:center;gap:14px;height:48px;padding:0 8px 0 16px;border-radius:999px;background:{{ readerBar }};backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);border:1px solid {{ readerLine }}">
+                <span style="flex:1;font:400 11.5px/1 -apple-system;color:{{ readerMuted }}">读到 34%</span>
+                <div style="cursor:pointer;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center"><svg width="9" height="15" viewBox="0 0 12 20" fill="none" stroke="{{ readerInk }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2 2 10l7.5 8"></path></svg></div>
+                <div style="cursor:pointer;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center"><svg width="9" height="15" viewBox="0 0 12 20" fill="none" stroke="{{ readerInk }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2 10 10l-7.5 8"></path></svg></div>
+              </div>
+            </div>
+
+            <sc-if value="{{ readerPanel }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;left:14px;right:14px;top:112px;padding:16px;border-radius:18px;background:{{ readerBar }};backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid {{ readerLine }};box-shadow:0 14px 36px rgba(0,0,0,.16);animation:scr .2s ease-out">
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:{{ readerMuted }}">阅读主题</div>
+                <div style="margin-top:11px;display:flex;gap:10px">
+                  <sc-for list="{{ readerThemes }}" as="t" hint-placeholder-count="3">
+                    <div onClick="{{ t.pick }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:7px">
+                      <div style="width:100%;height:52px;border-radius:12px;background:{{ t.swatch }};border:2px solid {{ t.ring }};display:flex;align-items:center;justify-content:center;font:400 17px/1 'Songti SC',STSong,serif;color:{{ t.ink }};transition:border-color .18s ease">文</div>
+                      <span style="font:500 11.5px/1 -apple-system;color:{{ t.label }}">{{ t.name }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="margin-top:16px;font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:{{ readerMuted }}">字号</div>
+                <div style="margin-top:11px;display:flex;gap:8px">
+                  <sc-for list="{{ readerSizes }}" as="z" hint-placeholder-count="3">
+                    <div onClick="{{ z.pick }}" style="cursor:pointer;flex:1;height:40px;border-radius:11px;background:{{ z.bg }};border:1px solid {{ z.border }};display:flex;align-items:center;justify-content:center;font:500 {{ z.size }}/1 'Songti SC',STSong,serif;color:{{ z.fg }};transition:background .18s ease">{{ z.name }}</div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isAgents }}" hint-placeholder-val="{{ false }}">
+          <div style="height:100%;display:flex;flex-direction:column;animation:scr .22s ease-out">
+            <div style="flex:none;padding:63px 0 0;background:var(--bg);border-bottom:1px solid var(--line)">
+              <div style="height:46px;display:flex;align-items:center;gap:6px;padding:0 12px 0 8px">
+                <div onClick="{{ goSettings }}" style="cursor:pointer;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center">
+                  <svg width="10" height="17" viewBox="0 0 12 20" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2 2 10l7.5 8"></path></svg>
+                </div>
+                <div style="flex:1;font:600 15px/1.2 -apple-system;color:var(--ink)">Agent 与模型</div>
+              </div>
+            </div>
+            <div style="flex:1;min-height:0;overflow:auto;padding:16px 16px 0">
+              <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint);padding:0 4px 8px">四个现役 AGENT</div>
+              <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px">
+                <sc-for list="{{ agents }}" as="a" hint-placeholder-count="4">
+                  <div onClick="{{ a.open }}" style="cursor:pointer;display:flex;align-items:center;gap:12px;height:62px;padding:0 14px;border-bottom:1px solid var(--line)" style-active="background:var(--surface2)">
+                    <div style="flex:1;min-width:0">
+                      <div style="font:500 15px/1.2 -apple-system;color:var(--ink)">{{ a.name }}</div>
+                      <div style="margin-top:4px;font:400 11.5px/1.2 -apple-system;color:var(--muted)">{{ a.model }}</div>
+                    </div>
+                    <div style="font:400 11.5px/1 -apple-system;color:var(--faint)">{{ a.thinking }}</div>
+                    <svg width="7" height="12" viewBox="0 0 9 14" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l5 5-5 5"></path></svg>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint);padding:0 4px 8px">LLM PROFILE</div>
+              <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden">
+                <div style="display:flex;align-items:center;gap:12px;height:62px;padding:0 14px;border-bottom:1px solid var(--line)">
+                  <div style="flex:1;min-width:0">
+                    <div style="font:500 15px/1.2 -apple-system;color:var(--ink)">主力写作</div>
+                    <div style="margin-top:4px;font:400 11.5px/1.2 -apple-system;color:var(--muted)">deepseek-v4-pro · api.deepseek.com</div>
+                  </div>
+                  <div style="font:600 15px/1 -apple-system;color:var(--muted)">···</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;height:62px;padding:0 14px;border-bottom:1px solid var(--line)">
+                  <div style="flex:1;min-width:0">
+                    <div style="font:500 15px/1.2 -apple-system;color:var(--ink)">检查与提取</div>
+                    <div style="margin-top:4px;font:400 11.5px/1.2 -apple-system;color:var(--muted)">glm-5.2 · open.bigmodel.cn</div>
+                  </div>
+                  <div style="font:600 15px/1 -apple-system;color:var(--muted)">···</div>
+                </div>
+                <div onClick="{{ openProfile }}" style="cursor:pointer;display:flex;align-items:center;gap:8px;height:52px;padding:0 14px">
+                  <svg width="14" height="14" viewBox="0 0 20 20" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round"><path d="M10 4v12M4 10h12"></path></svg>
+                  <span style="font:500 15px/1 -apple-system;color:var(--accent)">新增 Profile</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isAgentDetail }}" hint-placeholder-val="{{ false }}">
+          <div style="height:100%;display:flex;flex-direction:column;animation:scr .22s ease-out">
+            <div style="flex:none;padding:63px 0 0;background:var(--bg);border-bottom:1px solid var(--line)">
+              <div style="height:46px;display:flex;align-items:center;gap:6px;padding:0 12px 0 8px">
+                <div onClick="{{ goAgents }}" style="cursor:pointer;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center">
+                  <svg width="10" height="17" viewBox="0 0 12 20" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2 2 10l7.5 8"></path></svg>
+                </div>
+                <div style="flex:1;font:600 15px/1.2 -apple-system;color:var(--ink)">{{ agentName }}</div>
+              </div>
+            </div>
+            <div style="flex:1;min-height:0;overflow:auto;padding:16px 16px 0">
+              <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint);padding:0 4px 8px">模型与推理</div>
+              <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px">
+                <div style="cursor:pointer;display:flex;align-items:center;gap:10px;height:54px;padding:0 14px;border-bottom:1px solid var(--line)">
+                  <span style="flex:1;font:400 15px/1 -apple-system;color:var(--ink)">绑定模型</span>
+                  <span style="font:400 14px/1 -apple-system;color:var(--muted)">主力写作</span>
+                  <svg width="7" height="12" viewBox="0 0 9 14" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l5 5-5 5"></path></svg>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;height:54px;padding:0 14px;border-bottom:1px solid var(--line)">
+                  <span style="flex:1;font:400 15px/1 -apple-system;color:var(--ink)">启用思考</span>
+                  <div onClick="{{ toggleThinking }}" style="cursor:pointer;width:50px;height:30px;border-radius:15px;background:{{ thinkingBg }};padding:2px;box-sizing:border-box;display:flex;justify-content:{{ thinkingAlign }};transition:background .2s ease">
+                    <div style="width:26px;height:26px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.22);transition:transform .2s ease"></div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;min-height:54px;padding:10px 14px;border-bottom:1px solid var(--line)">
+                  <span style="flex:1;font:400 15px/1 -apple-system;color:var(--ink)">思考强度</span>
+                  <div style="display:flex;gap:2px;padding:2px;border-radius:9px;background:var(--bg2)">
+                    <sc-for list="{{ efforts }}" as="e" hint-placeholder-count="3">
+                      <div onClick="{{ e.pick }}" style="cursor:pointer;height:28px;padding:0 12px;border-radius:7px;display:flex;align-items:center;font:500 12.5px/1 -apple-system;background:{{ e.bg }};color:{{ e.fg }};transition:background .18s ease">{{ e.name }}</div>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="padding:13px 14px 15px">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="flex:1;font:400 15px/1 -apple-system;color:var(--ink)">Temperature</span>
+                    <span style="font:600 14px/1 ui-monospace,Menlo,monospace;color:var(--accent)">0.85</span>
+                    <span style="font:500 12px/1 -apple-system;color:var(--muted)">默认</span>
+                  </div>
+                  <div style="margin-top:12px;position:relative;height:26px;display:flex;align-items:center">
+                    <div style="width:100%;height:3px;border-radius:2px;background:var(--line2)"></div>
+                    <div style="position:absolute;left:0;width:42%;height:3px;border-radius:2px;background:var(--accent)"></div>
+                    <div style="position:absolute;left:42%;width:24px;height:24px;border-radius:50%;background:var(--surface);border:1px solid var(--line2);box-shadow:0 1px 4px rgba(0,0,0,.14);transform:translateX(-12px)"></div>
+                  </div>
+                  <div style="margin-top:6px;font:400 11.5px/1.6 -apple-system;color:var(--muted)">当前实际生效：开启 / 高。开启思考时 temperature 不生效。</div>
+                </div>
+              </div>
+
+              <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint);padding:0 4px 8px">人格</div>
+              <div style="border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden;margin-bottom:24px">
+                <div style="padding:13px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">可编辑人格词</div>
+                  <div style="margin-top:9px;font:400 14px/1.9 'Songti SC',STSong,serif;color:var(--ink2);text-wrap:pretty">克制、冷调，少用比喻。对话短，动作多。不写内心独白，情绪只通过动作和物件体现。</div>
+                </div>
+                <div style="padding:13px 14px;border-bottom:1px solid var(--line);background:var(--surface2)">
+                  <div style="display:flex;align-items:center;gap:7px">
+                    <svg width="12" height="13" viewBox="0 0 14 15" fill="none" stroke="var(--faint)" stroke-width="1.5"><rect x="2.6" y="6.4" width="8.8" height="7" rx="1.6"></rect><path d="M4.6 6.4V4.2a2.4 2.4 0 0 1 4.8 0v2.2"></path></svg>
+                    <span style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">程序协议 · 只读，始终生效</span>
+                  </div>
+                  <div style="margin-top:9px;font:400 12.5px/1.75 -apple-system;color:var(--muted);text-wrap:pretty">一次生成完整整章，不扩写旧稿；只使用本章白名单人物；不得引用未在记忆简报中出现的事实。</div>
+                </div>
+                <div style="padding:12px 14px;display:flex;align-items:center;gap:10px">
+                  <div style="cursor:pointer;height:36px;padding:0 14px;border-radius:10px;background:var(--surface2);border:1px solid var(--line2);display:flex;align-items:center;font:500 13px/1 -apple-system;color:var(--ink)">恢复默认</div>
+                  <div style="flex:1"></div>
+                  <div style="cursor:pointer;height:36px;padding:0 16px;border-radius:10px;background:var(--accent);display:flex;align-items:center;font:600 13px/1 -apple-system;color:var(--accenttext)">保存人格</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showConnection }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:rgba(0,0,0,.28);animation:fadein .2s ease" onClick="{{ closeSheet }}"></div>
+        </sc-if>
+        <sc-if value="{{ showConnection }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;left:0;right:0;bottom:0;border-radius:20px 20px 0 0;background:var(--bg);animation:sheet .26s cubic-bezier(.32,.72,0,1);overflow:hidden">
+            <div style="height:5px;width:36px;border-radius:3px;background:var(--line2);margin:8px auto 0"></div>
+            <div style="height:50px;display:flex;align-items:center;padding:0 16px;position:relative">
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;font:400 16px/1 -apple-system;color:var(--accent)">取消</div>
+              <div style="position:absolute;left:0;right:0;text-align:center;font:600 16px/1 -apple-system;color:var(--ink)">后端连接</div>
+            </div>
+            <div style="padding:6px 16px 34px;display:flex;flex-direction:column;gap:14px">
+              <div style="border-radius:14px;background:var(--surface);border:1px solid var(--line);overflow:hidden">
+                <div style="padding:11px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">地址</div>
+                  <div style="margin-top:7px;font:400 15px/1 -apple-system;color:var(--ink)">https://linoi.example.com</div>
+                </div>
+                <div style="padding:11px 14px">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">BEARER TOKEN</div>
+                  <div style="margin-top:7px;font:400 15px/1 -apple-system;color:var(--ink)">••••••••••••••</div>
+                </div>
+              </div>
+              <div style="font:400 12px/1.55 -apple-system;color:var(--muted)">Token 保存到 Keychain，保存后会重新读取书架。</div>
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;height:48px;border-radius:14px;background:var(--accent);display:flex;align-items:center;justify-content:center;font:600 15px/1 -apple-system;color:var(--accenttext)">保存连接</div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showNewBook }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:rgba(0,0,0,.28);animation:fadein .2s ease" onClick="{{ closeSheet }}"></div>
+        </sc-if>
+        <sc-if value="{{ showNewBook }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;left:0;right:0;bottom:0;border-radius:20px 20px 0 0;background:var(--bg);animation:sheet .26s cubic-bezier(.32,.72,0,1);overflow:hidden">
+            <div style="height:5px;width:36px;border-radius:3px;background:var(--line2);margin:8px auto 0"></div>
+            <div style="height:50px;display:flex;align-items:center;padding:0 16px;position:relative">
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;font:400 16px/1 -apple-system;color:var(--accent)">取消</div>
+              <div style="position:absolute;left:0;right:0;text-align:center;font:600 16px/1 -apple-system;color:var(--ink)">新建书</div>
+            </div>
+            <div style="padding:6px 16px 34px;display:flex;flex-direction:column;gap:14px">
+              <div style="padding:12px 14px;border-radius:14px;background:var(--surface);border:1px solid var(--line)">
+                <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">书名</div>
+                <div style="margin-top:8px;font:600 17px/1.2 'Songti SC',STSong,serif;color:var(--faint)">未命名书籍</div>
+              </div>
+              <div style="font:400 12px/1.55 -apple-system;color:var(--muted)">世界观设定进入书籍后再填写，方便先把项目建起来。</div>
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;height:48px;border-radius:14px;background:var(--accent);display:flex;align-items:center;justify-content:center;font:600 15px/1 -apple-system;color:var(--accenttext)">创建</div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showImport }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:14px 0 0;border-radius:20px 20px 0 0;background:var(--bg);animation:sheet .28s cubic-bezier(.32,.72,0,1);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -10px 40px rgba(0,0,0,.20)">
+            <div style="height:5px;width:36px;border-radius:3px;background:var(--line2);margin:8px auto 0;flex:none"></div>
+            <div style="height:50px;flex:none;display:flex;align-items:center;padding:0 16px;position:relative">
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;font:400 16px/1 -apple-system;color:var(--accent)">取消</div>
+              <div style="position:absolute;left:0;right:0;text-align:center;font:600 16px/1 -apple-system;color:var(--ink)">导入正文</div>
+            </div>
+            <div style="flex:1;min-height:0;overflow:auto;padding:4px 16px 0">
+              <div style="min-height:300px;padding:14px;border-radius:14px;background:var(--surface);border:1px solid var(--line);font:400 15px/1.95 'Songti SC',STSong,serif;color:var(--faint)">粘贴本章正文。导入后章节进入待接受状态。</div>
+              <div style="margin-top:10px;font:400 11.5px/1.6 -apple-system;color:var(--muted)">导入的正文同样要过 Bible 检查，检查通过后才能接受。</div>
+            </div>
+            <div style="flex:none;padding:12px 16px 30px">
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;height:48px;border-radius:14px;background:var(--accent);display:flex;align-items:center;justify-content:center;font:600 15px/1 -apple-system;color:var(--accenttext)">导入正文</div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showImportChar }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:14px 0 0;border-radius:20px 20px 0 0;background:var(--bg);animation:sheet .28s cubic-bezier(.32,.72,0,1);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -10px 40px rgba(0,0,0,.20)">
+            <div style="height:5px;width:36px;border-radius:3px;background:var(--line2);margin:8px auto 0;flex:none"></div>
+            <div style="height:50px;flex:none;display:flex;align-items:center;padding:0 16px;position:relative">
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;font:400 16px/1 -apple-system;color:var(--accent)">取消</div>
+              <div style="position:absolute;left:0;right:0;text-align:center;font:600 16px/1 -apple-system;color:var(--ink)">导入人物卡</div>
+            </div>
+            <div style="flex:1;min-height:0;overflow:auto;padding:4px 16px 0">
+              <div style="border-radius:14px;background:var(--surface);border:1px solid var(--line);overflow:hidden;margin-bottom:14px">
+                <div style="padding:11px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">姓名</div>
+                  <div style="margin-top:7px;font:600 16px/1.2 'Songti SC',STSong,serif;color:var(--faint)">未命名人物</div>
+                </div>
+                <div style="padding:11px 14px">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">身份 / 职能（可选）</div>
+                  <div style="margin-top:7px;font:400 15px/1.2 -apple-system;color:var(--faint)">例：档案员</div>
+                </div>
+              </div>
+              <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint);padding:0 4px 8px">人物卡文本</div>
+              <div style="min-height:230px;padding:14px;border-radius:14px;background:var(--surface);border:1px solid var(--line);font:400 15px/1.95 'Songti SC',STSong,serif;color:var(--faint)">粘贴你已有的人物卡。第一版按纯文本保存为固定设定。</div>
+            </div>
+            <div style="flex:none;padding:12px 16px 30px">
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;height:48px;border-radius:14px;background:var(--accent);display:flex;align-items:center;justify-content:center;font:600 15px/1 -apple-system;color:var(--accenttext)">导入人物卡</div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showProfile }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:14px 0 0;border-radius:20px 20px 0 0;background:var(--bg);animation:sheet .28s cubic-bezier(.32,.72,0,1);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -10px 40px rgba(0,0,0,.20)">
+            <div style="height:5px;width:36px;border-radius:3px;background:var(--line2);margin:8px auto 0;flex:none"></div>
+            <div style="height:50px;flex:none;display:flex;align-items:center;padding:0 16px;position:relative">
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;font:400 16px/1 -apple-system;color:var(--accent)">取消</div>
+              <div style="position:absolute;left:0;right:0;text-align:center;font:600 16px/1 -apple-system;color:var(--ink)">新增 Profile</div>
+            </div>
+            <div style="flex:1;min-height:0;overflow:auto;padding:4px 16px 0">
+              <div style="border-radius:14px;background:var(--surface);border:1px solid var(--line);overflow:hidden">
+                <div style="padding:11px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">PROFILE 名称</div>
+                  <div style="margin-top:7px;font:400 15px/1.2 -apple-system;color:var(--faint)">例：主力写作</div>
+                </div>
+                <div style="padding:11px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">BASE URL</div>
+                  <div style="margin-top:7px;font:400 14px/1.2 ui-monospace,Menlo,monospace;color:var(--faint)">https://api.example.com/v1</div>
+                </div>
+                <div style="padding:11px 14px;border-bottom:1px solid var(--line)">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">MODEL NAME</div>
+                  <div style="margin-top:7px;font:400 14px/1.2 ui-monospace,Menlo,monospace;color:var(--faint)">deepseek-v4-pro</div>
+                </div>
+                <div style="padding:11px 14px">
+                  <div style="font:600 10.5px/1 -apple-system;letter-spacing:1.2px;color:var(--faint)">API KEY</div>
+                  <div style="margin-top:7px;font:400 15px/1.2 -apple-system;color:var(--faint)">••••••••••••</div>
+                </div>
+              </div>
+              <div style="margin-top:12px;font:400 11.5px/1.7 -apple-system;color:var(--muted)">协议固定为 OpenAI-compatible。编辑 Profile 时，密钥不会从后端回显。</div>
+            </div>
+            <div style="flex:none;padding:12px 16px 30px">
+              <div onClick="{{ closeSheet }}" style="cursor:pointer;height:48px;border-radius:14px;background:var(--accent);display:flex;align-items:center;justify-content:center;font:600 15px/1 -apple-system;color:var(--accenttext)">创建 Profile</div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ confirmOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:rgba(0,0,0,.30);animation:fadein .18s ease" onClick="{{ closeConfirm }}"></div>
+        </sc-if>
+        <sc-if value="{{ confirmOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;left:10px;right:10px;bottom:12px;animation:rise .24s cubic-bezier(.32,.72,0,1)">
+            <div style="border-radius:16px;background:var(--surface);overflow:hidden;border:1px solid var(--line)">
+              <div style="padding:16px 20px 14px;text-align:center;border-bottom:1px solid var(--line)">
+                <div style="font:600 13.5px/1.4 -apple-system;color:var(--ink)">{{ confirmTitle }}</div>
+                <div style="margin-top:6px;font:400 12px/1.65 -apple-system;color:var(--muted);text-wrap:pretty">{{ confirmMessage }}</div>
+              </div>
+              <div onClick="{{ closeConfirm }}" style="cursor:pointer;height:54px;display:flex;align-items:center;justify-content:center;font:600 17px/1 -apple-system;color:var(--danger)">{{ confirmAction }}</div>
+            </div>
+            <div onClick="{{ closeConfirm }}" style="cursor:pointer;margin-top:8px;height:54px;border-radius:16px;background:var(--surface);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 17px/1 -apple-system;color:var(--ink)">取消</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isLoadingChapter }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;animation:fadein .2s ease">
+            <div style="width:26px;height:26px;border-radius:50%;border:2px solid var(--line2);border-top-color:var(--accent);animation:spin .8s linear infinite"></div>
+            <div style="font:400 13px/1 -apple-system;color:var(--muted)">读取章节</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isChapterError }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column;animation:fadein .2s ease">
+            <div style="flex:none;padding:63px 0 0">
+              <div style="height:46px;display:flex;align-items:center;padding:0 12px 0 8px">
+                <div onClick="{{ goChapters }}" style="cursor:pointer;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center">
+                  <svg width="10" height="17" viewBox="0 0 12 20" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2 2 10l7.5 8"></path></svg>
+                </div>
+              </div>
+            </div>
+            <div style="flex:1;display:flex;align-items:center;padding:0 20px 60px">
+              <div style="width:100%;padding:44px 24px;border-radius:16px;background:var(--surface);border:1px dashed var(--line2);display:flex;flex-direction:column;align-items:center;gap:10px">
+                <svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="var(--danger)" stroke-width="1.3" stroke-linecap="round"><circle cx="16" cy="16" r="11"></circle><path d="M16 10.5v7M16 21v1.4"></path></svg>
+                <div style="font:600 16px/1.3 'Songti SC',STSong,serif;color:var(--ink)">章节读取失败</div>
+                <div style="max-width:220px;text-align:center;font:400 12.5px/1.7 -apple-system;color:var(--muted)">返回章节列表后再试一次。</div>
+                <div onClick="{{ goChapters }}" style="cursor:pointer;margin-top:4px;height:38px;padding:0 18px;border-radius:999px;background:var(--surface2);border:1px solid var(--line2);display:flex;align-items:center;font:600 13.5px/1 -apple-system;color:var(--ink)">返回章节</div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;left:20px;right:20px;bottom:104px;display:flex;justify-content:center;animation:rise .24s ease-out">
+            <div style="display:flex;align-items:center;gap:9px;padding:11px 16px;border-radius:14px;background:var(--ink);box-shadow:0 8px 24px rgba(0,0,0,.18)">
+              <div style="width:6px;height:6px;border-radius:50%;background:var(--green)"></div>
+              <span style="font:500 13.5px/1.3 -apple-system;color:var(--bg)">{{ toast }}</span>
+            </div>
+          </div>
+        </sc-if>
+
+      </div>
+    </x-import>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;seal&quot;,&quot;ink&quot;,&quot;pine&quot;,&quot;plum&quot;],&quot;default&quot;:&quot;seal&quot;,&quot;tsType&quot;:&quot;'seal'|'ink'|'pine'|'plum'&quot;,&quot;section&quot;:&quot;视觉&quot;}}">
+const STATUS = {
+  finalized: ['已完成', 'var(--green)'],
+  draft_ready: ['待接受', 'var(--amber)'],
+  writing: ['写作中', 'var(--accent)'],
+  failed: ['未完成', 'var(--danger)'],
+  draft: ['草稿', 'var(--muted)'],
+  extracting: ['提取中', 'var(--amber)'],
+};
+
+const BOOKS = [
+  { id: 'b1', title: '雾港纪事', tone: 'var(--cover1)', mark: 'JIU', meta: '18 章 · 7 人物 · 2 小时前' },
+  { id: 'b2', title: '长夜将至', tone: 'var(--cover2)', mark: 'YE', meta: '4 章 · 3 人物 · 3 天前' },
+  { id: 'b3', title: '无岸之潮', tone: 'var(--cover3)', mark: 'CHAO', meta: '9 章 · 5 人物 · 上周' },
+];
+
+const CHAPTERS = [
+  { index: '18', title: '第 18 章', status: 'draft', words: '—' },
+  { index: '17', title: '灯塔下的交易', status: 'draft_ready', words: '4218 字' },
+  { index: '16', title: '雾中来客', status: 'finalized', words: '4602 字' },
+  { index: '15', title: '旧码头', status: 'failed', words: '3140 字' },
+  { index: '14', title: '纸与灰', status: 'finalized', words: '4380 字' },
+  { index: '13', title: '第三次涨潮', status: 'finalized', words: '4915 字' },
+];
+
+const PEOPLE = [
+  { id: 'p1', name: '沈砚', role: '港务稽查', tone: 'var(--cover1)', events: '11 条', profile: '三十四岁，港务稽查。左手常年戴一只旧海军手套，说话短促，习惯先给结论再补理由。厌恶被人称"长官"。' },
+  { id: 'p2', name: '白露', role: '灯塔守夜人', tone: 'var(--cover2)', events: '8 条', profile: '灯塔守夜人，父辈也是。夜里不喝热的，只喝凉水。对港务局的人一律不主动开口。' },
+  { id: 'p3', name: '柯明远', role: '船行东家', tone: 'var(--cover3)', events: '6 条', profile: '三家船行里最年轻的东家，靠 1998 年之后的空档起家。所有承诺都留一个可退的口子。' },
+  { id: 'p4', name: '老周', role: '档案员', tone: 'var(--cover1)', events: '3 条', profile: '海关档案员，火灾之后仍守着空柜子。记性极好，但不肯写下来。' },
+];
+
+const AGENTS = [
+  { name: 'Memory Selector', model: '检查与提取 · glm-5.2', thinking: '思考 中' },
+  { name: 'Writer', model: '主力写作 · deepseek-v4-pro', thinking: '思考 高' },
+  { name: 'Checker', model: '检查与提取 · glm-5.2', thinking: '思考 中' },
+  { name: 'Extractor', model: '检查与提取 · glm-5.2', thinking: '模型默认' },
+];
+
+const STEPS = ['Memory Selector', 'Writer', 'Bible 检查', 'Extractor'];
+
+class Component extends DCLogic {
+  state = {
+    screen: 'shelf', tab: 'chapters', dark: false, sheet: null,
+    bookId: 'b1', restored: true, readerPanel: false, fontScale: 'medium',
+    agentRole: 'Writer', thinking: true, effort: 'high',
+    selChar: 'p1', chips: { p1: true, p3: true },
+    gen: 'ready', genStep: 3, words: 4218,
+    draftMode: 'preview', accepted: false, ctxOpen: false, chkOpen: false,
+    readerTheme: 'day', chrome: true, toast: null, confirm: null, load: 'ok',
+  };
+
+  componentWillUnmount() { clearInterval(this.timer); clearTimeout(this.toastTimer); clearTimeout(this.loadTimer); }
+
+  go = (screen, extra) => {
+    clearTimeout(this.loadTimer);
+    this.setState({ screen, sheet: null, confirm: null, load: 'ok', ...(extra || {}) });
+  };
+
+  flash = (msg) => {
+    clearTimeout(this.toastTimer);
+    this.setState({ toast: msg });
+    this.toastTimer = setTimeout(() => this.setState({ toast: null }), 2600);
+  };
+
+  runGeneration = () => {
+    clearInterval(this.timer);
+    this.setState({ screen: 'editor', gen: 'running', genStep: 0, accepted: false, words: 0 });
+    this.timer = setInterval(() => {
+      this.setState((s) => {
+        const next = s.genStep + 1;
+        if (next >= 3) {
+          clearInterval(this.timer);
+          return { genStep: 3, gen: 'ready', words: 4218 };
+        }
+        return { genStep: next, words: next === 2 ? 4218 : Math.round(4218 * next / 2) };
+      });
+    }, 1100);
+  };
+
+  demoLoadFail = () => {
+    clearTimeout(this.loadTimer);
+    this.setState({ screen: 'editor', load: 'loading' });
+    this.loadTimer = setTimeout(() => this.setState({ load: 'error' }), 1200);
+  };
+
+  askConfirm = (title, message, action) => this.setState({ confirm: { title, message, action } });
+
+  stopGeneration = () => {
+    clearInterval(this.timer);
+    this.setState({ gen: 'ready', words: 4218 });
+    this.flash('任务已停止，当前草稿仍保留');
+  };
+
+  runFailure = () => {
+    clearInterval(this.timer);
+    this.setState({ screen: 'editor', gen: 'failed', genStep: 1, accepted: false, words: 3140 });
+  };
+
+  accept = () => {
+    if (this.state.gen === 'running') return;
+    if (this.state.accepted) { this.go('reader'); return; }
+    this.setState({ accepted: true, gen: 'finalized' });
+    this.flash('已接受本章，Extractor 归档完成');
+  };
+
+  readerPalette() {
+    const t = this.state.readerTheme;
+    if (t === 'night') return { bg: '#17181A', ink: '#CFCDC8', muted: '#7E7F88', line: 'rgba(255,255,255,.10)', rule: 'rgba(255,255,255,.22)', bar: 'rgba(23,24,26,.72)' };
+    if (t === 'sepia') return { bg: '#F1E7D2', ink: '#42372A', muted: '#96876C', line: 'rgba(120,90,50,.18)', rule: 'rgba(120,90,50,.45)', bar: 'rgba(241,231,210,.72)' };
+    return { bg: '#F8F6F1', ink: '#22232A', muted: '#8A8B93', line: 'rgba(23,24,28,.10)', rule: 'rgba(23,24,28,.30)', bar: 'rgba(248,246,241,.72)' };
+  }
+
+  renderVals() {
+    const s = this.state;
+    const accentOn = 'var(--accent)';
+    const tabColor = (t) => (s.screen === 'book' && s.tab === t ? accentOn : 'var(--muted)');
+    const rp = this.readerPalette();
+    const genState = s.accepted ? 'finalized' : (s.gen === 'running' ? 'writing' : 'draft_ready');
+
+    return {
+      theme: s.dark ? 'dark' : 'light',
+      accent: this.props.accent ?? 'seal',
+      dark: s.dark,
+      toggleDark: () => this.setState({ dark: !s.dark }),
+
+      isShelf: s.screen === 'shelf',
+      isBook: s.screen === 'book',
+      isEditor: s.screen === 'editor',
+      isReader: s.screen === 'reader',
+      isAgents: s.screen === 'agents',
+      isChapters: s.screen === 'book' && s.tab === 'chapters',
+      isCharacters: s.screen === 'book' && s.tab === 'characters',
+      isSettings: s.screen === 'book' && s.tab === 'settings',
+      showConnection: s.sheet === 'connection',
+
+      goShelf: () => this.go('shelf'),
+      goChapters: () => this.go('book', { tab: 'chapters' }),
+      goCharacters: () => this.go('book', { tab: 'characters' }),
+      goSettings: () => this.go('book', { tab: 'settings' }),
+      goEditor: () => this.go('editor'),
+      goReader: () => this.go('reader', { chrome: true }),
+      goAgents: () => this.go('agents'),
+      goConnection: () => this.setState({ sheet: 'connection' }),
+      closeSheet: () => this.setState({ sheet: null }),
+
+      tabChapters: tabColor('chapters'),
+      tabCharacters: tabColor('characters'),
+      tabSettings: tabColor('settings'),
+
+      books: BOOKS.map((b) => ({ ...b, open: () => this.go('book', { tab: 'chapters', bookId: b.id }) })),
+      bookTitle: (BOOKS.find((b) => b.id === s.bookId) || BOOKS[0]).title,
+      chapterMeta: s.bookId === 'b1' ? '18 章 · 已完成 15 · 待接受 1' : s.bookId === 'b2' ? '4 章 · 已完成 4' : '还没有章节',
+      hasChapters: s.bookId !== 'b3',
+      noChapters: s.bookId === 'b3',
+      openNewBook: () => this.setState({ sheet: 'newbook' }),
+      showNewBook: s.sheet === 'newbook',
+      openImport: () => this.setState({ sheet: 'import' }),
+      showImport: s.sheet === 'import',
+      openImportChar: () => this.setState({ sheet: 'importChar' }),
+      showImportChar: s.sheet === 'importChar',
+      openProfile: () => this.setState({ sheet: 'profile' }),
+      showProfile: s.sheet === 'profile',
+
+      confirmOpen: !!s.confirm,
+      confirmTitle: s.confirm ? s.confirm.title : '',
+      confirmMessage: s.confirm ? s.confirm.message : '',
+      confirmAction: s.confirm ? s.confirm.action : '',
+      closeConfirm: () => this.setState({ confirm: null }),
+      confirmDeleteChapter: () => this.askConfirm('删除第 17 章《灯塔下的交易》？', '此操作不可撤销。本章正文、人物关联与本章事件都会被删除，后续章节序号将自动收拢。', '永久删除本章'),
+      confirmDeleteCharacter: () => this.askConfirm('删除这个人物？', '此操作不可撤销，该人物的固定设定、动态字段与故事线都会被删除。', '删除人物'),
+
+      isLoadingChapter: s.screen === 'editor' && s.load === 'loading',
+      isChapterError: s.screen === 'editor' && s.load === 'error',
+      demoLoadFail: this.demoLoadFail,
+
+      chapters: (s.bookId === 'b2' ? CHAPTERS.slice(2) : CHAPTERS).map((c) => {
+        const st = c.index === '17' ? genState : c.status;
+        const [label, color] = STATUS[st];
+        return { ...c, statusLabel: label, color, open: () => this.go('editor') };
+      }),
+
+      characters: PEOPLE.map((p) => ({ ...p, initial: p.name.slice(0, 1), select: () => this.setState({ selChar: p.id }) })),
+
+      restored: s.restored && s.screen === 'editor' && s.gen !== 'running',
+      dismissRestored: () => this.setState({ restored: false }),
+      failed: s.gen === 'failed',
+      running: s.gen === 'running',
+      notRunning: s.gen !== 'running',
+      stopGeneration: this.stopGeneration,
+      runFailure: this.runFailure,
+      sel: (() => {
+        const p = PEOPLE.find((x) => x.id === s.selChar) || PEOPLE[0];
+        return { ...p, initial: p.name.slice(0, 1) };
+      })(),
+
+      agents: AGENTS.map((a) => ({ ...a, open: () => this.go('agentDetail', { agentRole: a.name }) })),
+      isAgentDetail: s.screen === 'agentDetail',
+      agentName: s.agentRole,
+      toggleThinking: () => this.setState({ thinking: !s.thinking }),
+      thinkingBg: s.thinking ? 'var(--accent)' : 'var(--line2)',
+      thinkingAlign: s.thinking ? 'flex-end' : 'flex-start',
+      efforts: [['low', '低'], ['medium', '中'], ['high', '高']].map(([id, name]) => ({
+        name,
+        bg: s.effort === id ? 'var(--surface)' : 'transparent',
+        fg: s.effort === id ? 'var(--ink)' : 'var(--muted)',
+        pick: () => this.setState({ effort: id }),
+      })),
+
+      words: s.words.toLocaleString('en-US'),
+      chipCount: `已选 ${Object.values(s.chips).filter(Boolean).length} / ${PEOPLE.length}`,
+      chips: PEOPLE.map((p) => {
+        const on = !!s.chips[p.id];
+        return {
+          name: p.name,
+          bg: on ? 'var(--accent)' : 'var(--surface)',
+          border: on ? 'var(--accent)' : 'var(--line2)',
+          fg: on ? 'var(--accenttext)' : 'var(--ink2)',
+          toggle: () => this.setState((st) => ({ chips: { ...st.chips, [p.id]: !st.chips[p.id] } })),
+        };
+      }),
+
+      steps: STEPS.map((name, i) => {
+        const done = s.accepted ? true : i < s.genStep;
+        const active = !s.accepted && s.gen === 'running' && i === s.genStep;
+        const waiting = !done && !active;
+        return {
+          name,
+          state: done ? '已完成' : active ? '进行中' : '待进行',
+          color: done ? 'var(--green)' : active ? 'var(--accent)' : 'var(--faint)',
+          fill: done ? 'var(--green)' : 'transparent',
+          dot: done ? 'var(--surface)' : active ? 'var(--accent)' : 'transparent',
+          text: waiting ? 'var(--faint)' : 'var(--ink)',
+          anim: active ? 'pulse 1.1s ease-in-out infinite' : 'none',
+        };
+      }),
+
+      genLabel: STATUS[genState][0],
+      genColor: STATUS[genState][1],
+
+      setPreview: () => this.setState({ draftMode: 'preview' }),
+      setEdit: () => this.setState({ draftMode: 'edit' }),
+      previewBg: s.draftMode === 'preview' ? 'var(--surface)' : 'transparent',
+      previewFg: s.draftMode === 'preview' ? 'var(--ink)' : 'var(--muted)',
+      editBg: s.draftMode === 'edit' ? 'var(--surface)' : 'transparent',
+      editFg: s.draftMode === 'edit' ? 'var(--ink)' : 'var(--muted)',
+
+      ctxOpen: s.ctxOpen,
+      chkOpen: s.chkOpen,
+      ctxRot: s.ctxOpen ? '180deg' : '0deg',
+      chkRot: s.chkOpen ? '180deg' : '0deg',
+      toggleCtx: () => this.setState({ ctxOpen: !s.ctxOpen }),
+      toggleChk: () => this.setState({ chkOpen: !s.chkOpen }),
+
+      demoGenerate: this.runGeneration,
+      accept: this.accept,
+      acceptLabel: s.gen === 'running' ? '生成中…' : s.accepted ? '进入阅读' : '接受本章',
+      acceptBg: s.gen === 'running' ? 'var(--bg2)' : s.accepted ? 'var(--green)' : 'var(--accent)',
+      acceptFg: s.gen === 'running' ? 'var(--muted)' : '#FFFFFF',
+
+      readerBg: rp.bg, readerInk: rp.ink, readerMuted: rp.muted,
+      readerLine: rp.line, readerRule: rp.rule, readerBar: rp.bar,
+      chromeH: s.chrome ? '107px' : '0px',
+      chromeOpacity: s.chrome ? 1 : 0,
+      toggleChrome: () => this.setState({ chrome: !s.chrome, readerPanel: false }),
+      readerPanel: s.readerPanel,
+      toggleReaderPanel: (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        this.setState({ readerPanel: !s.readerPanel });
+      },
+      readerFont: s.fontScale === 'small' ? '16px' : s.fontScale === 'large' ? '22px' : '19px',
+      readerThemes: [
+        { id: 'day', name: '日间', swatch: '#F8F6F1', ink: '#22232A' },
+        { id: 'sepia', name: '护眼', swatch: '#F1E7D2', ink: '#42372A' },
+        { id: 'night', name: '夜间', swatch: '#17181A', ink: '#CFCDC8' },
+      ].map((t) => ({
+        ...t,
+        ring: s.readerTheme === t.id ? rp.ink : 'transparent',
+        label: s.readerTheme === t.id ? rp.ink : rp.muted,
+        pick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.setState({ readerTheme: t.id }); },
+      })),
+      readerSizes: [
+        { id: 'small', name: '小', size: '13px' },
+        { id: 'medium', name: '中', size: '16px' },
+        { id: 'large', name: '大', size: '19px' },
+      ].map((z) => ({
+        ...z,
+        bg: s.fontScale === z.id ? rp.line : 'transparent',
+        border: s.fontScale === z.id ? rp.rule : rp.line,
+        fg: rp.ink,
+        pick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.setState({ fontScale: z.id }); },
+      })),
+
+      toast: s.toast,
+    };
+  }
+}
+</script>
+</body>
+</html>

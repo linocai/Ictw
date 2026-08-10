@@ -1,1023 +1,334 @@
 # Errors
 
-## [ERR-20260802-026] Final verification used a stale unauthenticated health request
+当前无未解决错误。2026-08-08 以前的完整记录已归档至 `archive/learnings/ERRORS-through-2026-08-08.md`。
 
-**Logged**: 2026-08-02T15:05:00+08:00
+## [ERR-20260809-006] extraction-helper-removal-patch
+
+**Logged**: 2026-08-09T00:00:00+08:00
 **Priority**: low
 **Status**: resolved
-**Area**: infra
+**Area**: backend
 
 ### Summary
 
-The final aggregate verification first used a stale hostname, then called the correct protected production endpoint without its required bearer token and received HTTP 401.
-
-### Suggested Fix
-
-Use the health-check procedure in `hk_info.md`: connect to the server, load the protected environment there, and call the loopback endpoint without printing the token.
+删除旧 Extractor salvage helper 时，补丁上下文基于过期函数正文而未匹配；没有写入任何文件。
 
 ### Resolution
 
-Reran the check through the documented authenticated server-side command, then completed the App and repository checks separately.
+- **Resolved**: 2026-08-09T00:00:00+08:00
+- **Notes**: 先读取当前函数全文，再以精确上下文进行最小删除。
 
 ---
 
-## [ERR-20260801-017] Checker override test depended on another test's global character ID
+## [ERR-20260809-007] verification-working-directory
 
-**Logged**: 2026-08-01T12:55:00+08:00
-**Priority**: medium
-**Status**: resolved
-**Area**: tests
-
-### Summary
-
-Checker 覆盖接受用例单独运行时 Extractor 失败，因为默认替身读取了其它测试写入的 `pytest.character_id`。
-
-### Error
-
-```text
-expected extract phase done, got failed
-```
-
-### Context
-
-- 全量测试按既定顺序运行时会被前置用例意外初始化，因此过去保持绿色。
-- 新增定向回归把该测试隔离运行后暴露了顺序依赖，产品运行时不使用该全局变量。
-
-### Suggested Fix
-
-不需要人物输出的用例显式注入空 Extractor，避免共享 `pytest` 全局状态；每个测试自行声明完整依赖。
-
-### Metadata
-
-- Reproducible: yes
-- Related Files: Backend/tests/test_api.py, Backend/tests/conftest.py
-
-### Resolution
-
-- **Resolved**: 2026-08-01T12:56:00+08:00
-- **Notes**: Checker 失败稿改为后端闸门后不再进入 Extractor；该用例已完全移除对默认 Extractor 和全局人物 ID 的隐式依赖，可独立运行。
-
----
-
-## [ERR-20260802-025] Backend preflight used a placeholder checksum
-
-**Logged**: 2026-08-02T14:57:00+08:00
-**Priority**: medium
-**Status**: resolved
-**Area**: infra
-
-### Summary
-The first clean-package target preflight hardcoded a placeholder SHA-256 instead of the checksum emitted by the preceding local archive command.
-
-### Error
-`sha256sum: WARNING: 1 computed checksum did NOT match`
-
-### Context
-- The clean archive uploaded successfully.
-- The checksum gate failed before offline extraction and before any production stop or mutation.
-
-### Suggested Fix
-Use the actual locally emitted digest `8f7cb730e2b81aab60c78eb884be11f26057ad4afe4b0d2f717cef6291ad2a9a` in the target preflight, and keep packaging and deployment as separately inspected steps.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `/Users/linotsai/Lino/hk_info.md`
-
-### Resolution
-- **Resolved**: 2026-08-02T14:57:00+08:00
-- **Notes**: Re-ran the offline package preflight with the emitted digest; production remained untouched during the failed check.
-
----
-
-## [ERR-20260802-024] macOS tar added AppleDouble Python files to backend release
-
-**Logged**: 2026-08-02T14:55:54+08:00
-**Priority**: high
-**Status**: resolved
-**Area**: infra
-
-### Summary
-A backend archive created with macOS `tar` preserved extended attributes as `._*.py` AppleDouble files; GNU tar materialized them on Linux and Alembic tried to import them as migration modules.
-
-### Error
-`SyntaxError: source code string cannot contain null bytes`
-
-### Context
-- Production was stopped only after a verified backup and zero-active-job check.
-- `alembic upgrade head` failed before applying any migration.
-- The deployment trap restored the v1.6.4 code/database and restarted a healthy service.
-- Offline extraction confirmed only `._*.py` metadata files contained null bytes; real Python source hashes were unchanged.
-
-### Suggested Fix
-Build tracked backend deployment artifacts with `git archive HEAD:Backend`, then extract offline on the target and require zero `._*` files plus successful `compileall` and `alembic heads` before stopping production.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `Backend/alembic/versions`, `/Users/linotsai/Lino/hk_info.md`
-
-### Resolution
-- **Resolved**: 2026-08-02T14:55:54+08:00
-- **Notes**: Switched the v1.6.5 backend package to `git archive` and added target-side preflight compilation before retrying deployment.
-
----
-
-## [ERR-20260802-023] Parallel Xcode builds shared one DerivedData database
-
-**Logged**: 2026-08-02T14:50:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-Parallel iOS and macOS builds targeted the same default DerivedData directory, so the macOS build could not acquire the Xcode build database lock.
-
-### Error
-`accessing build database .../XCBuildData/build.db: database is locked`
-
-### Context
-- The simultaneous iOS build completed successfully.
-- The failure occurred before macOS compilation and does not indicate a source error.
-
-### Suggested Fix
-Run Xcode targets sequentially or give each parallel build a distinct `-derivedDataPath`.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `App/LinoI.xcodeproj`
-
-### Resolution
-- **Resolved**: 2026-08-02T14:50:00+08:00
-- **Notes**: Re-ran the macOS build with a dedicated DerivedData path.
-
----
-
-## [ERR-20260802-022] Broad lifecycle patch missed a view modifier context
-
-**Logged**: 2026-08-02T14:48:26+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: frontend
-
-### Summary
-A broad multi-file patch was rejected because the iOS confirmation-dialog modifier did not match the assumed one-line layout.
-
-### Error
-`apply_patch verification failed: Failed to find expected lines in App/LinoI/ChapterEditorViews.swift`
-
-### Context
-- The rejected patch made no file changes.
-- The intended change removes per-keystroke disk writes and adds lifecycle-boundary persistence on both platforms.
-
-### Suggested Fix
-Patch models, store logic, and each platform lifecycle hook separately after inspecting the exact local modifier layout.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `App/LinoI/ChapterEditorViews.swift`, `App/LinoIMac/MacChapterEditor.swift`, `App/LinoI/LinoStores.swift`
-- See Also: ERR-20260802-021
-
-### Resolution
-- **Resolved**: 2026-08-02T14:48:26+08:00
-- **Notes**: Switched to narrow patches against exact inspected contexts.
-
----
-
-## [ERR-20260802-022] Version and state patch used stale release wording
-
-**Logged**: 2026-08-02T09:54:10+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: release
-
-### Summary
-A combined version/state patch was rejected because the expected v1.6.3 completion sentence differed from the exact current `PROJECT_PLAN.md` wording.
-
-### Error
-`apply_patch verification failed: Failed to find expected lines in PROJECT_PLAN.md`
-
-### Context
-- The rejected patch made no file changes.
-- Code version fields and project-state prose were bundled in one patch.
-
-### Suggested Fix
-Patch deterministic version fields separately, then inspect and update state documents with their exact current wording.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `PROJECT_PLAN.md`, `App/LinoI.xcodeproj/project.pbxproj`, `Backend/app/main.py`
-
-### Resolution
-- **Resolved**: 2026-08-02T09:54:10+08:00
-- **Notes**: Split code-version and state-document edits; both applied successfully and all four target configurations now report `1.6.4(19)`.
-
----
-
-## [ERR-20260801-016] Client state harness excludes error presenter dependencies
-
-**Logged**: 2026-08-01T12:52:00+08:00
+**Logged**: 2026-08-09T00:00:00+08:00
 **Priority**: low
 **Status**: resolved
 **Area**: tests
 
 ### Summary
 
-在纯状态测试中加入统一错误文案断言后，测试脚本因未编译 `LinoErrorPresenter` 及其 `APIError` 依赖而链接失败。
-
-### Error
-
-```text
-cannot find 'LinoErrorPresenter' in scope
-```
-
-### Context
-
-- `run_client_state_tests.sh` 有意只编译 `LinoModels.swift` 与 `ClientStateTests.swift`。
-- 产品双端 target 本身包含 `LinoErrorPresenter.swift`；此前 iOS/macOS 构建均通过。
-
-### Suggested Fix
-
-纯状态 harness 继续只测试状态映射与刷新竞态；统一错误文案由双端 target 编译覆盖。若未来需要独立文案单测，再建立包含 `APIError` 最小依赖的专用 harness。
-
-### Metadata
-
-- Reproducible: yes
-- Related Files: App/Tests/run_client_state_tests.sh, App/LinoI/LinoErrorPresenter.swift
+一次组合验证在进入 `Backend/` 后读取根目录 `PROJECT_PLAN.md`，路径错误且没有改动文件。
 
 ### Resolution
 
-- **Resolved**: 2026-08-01T12:53:00+08:00
-- **Notes**: 移除越界的 harness 断言，保留产品文案修改并由双端构建验证。
+- **Resolved**: 2026-08-09T00:00:00+08:00
+- **Notes**: 后续根目录检查使用独立工作目录命令，不依赖 shell 的前序 `cd`。
 
 ---
 
-## [ERR-20260801-015] Production verification assumed non-existent job status columns
+## [ERR-20260808-001] cache-cleanup-command
 
-**Logged**: 2026-08-01T12:34:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: infra
-
-### Summary
-
-发版后只读统计先后假设 `job_runs.status` 和 `job_runs.state` 存在，SQLite 查询失败。
-
-### Error
-
-```text
-no such column: status
-no such column: state
-```
-
-### Context
-
-- 服务、迁移与数据库均已正常，失败仅发生在补充统计查询。
-- 实际任务状态列为 `phase`，人格角色列为 `agent_role`。
-
-### Suggested Fix
-
-生产核验脚本先读取 `pragma_table_info`，或直接复用当前 SQLAlchemy 模型中的列名；终态按 `phase` 的 `done/failed/cancelled` 统计。
-
-### Metadata
-
-- Reproducible: yes
-- Related Files: Backend/app/models.py, /Users/linotsai/Lino/hk_info.md
-
-### Resolution
-
-- **Resolved**: 2026-08-01T12:35:00+08:00
-- **Notes**: 按实际 `phase` 分组复核，生产任务全部处于终态。
-
----
-
-## [ERR-20260728-007] staged-secret-scan
-
-**Logged**: 2026-07-28T18:52:00+08:00
-**Priority**: medium
-**Status**: resolved
-**Area**: config
-
-### Summary
-
-提交前的宽范围凭证正则命中仓库内容，提交被安全门禁阻止。
-
-### Error
-
-```text
-POTENTIAL_SECRET_FOUND
-```
-
-### Context
-
-- 扫描对象是整个 Git index，而非仅本次 staged diff。
-- 命中内容未输出；`git commit` 和 `git push` 均未执行。
-
-### Suggested Fix
-
-只列命中文件名，再区分示例占位符、文档字面量与实际秘密；随后对 staged diff 重新扫描。
-
-### Metadata
-
-- Reproducible: yes
-- Related Files: staged release files
-
-### Resolution
-
-- **Resolved**: 2026-07-28T18:53:00+08:00
-- **Notes**: 命中仅来自已提交的 `Backend/.env.example` 明文占位符；无私钥、GitHub token 或真实 App/KEK secret。后续扫描排除该示例文件并继续提交。
-
----
-
-## [ERR-20260801-006] isolated-migration-cleanup
-
-**Logged**: 2026-08-01T11:47:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-
-隔离迁移校验命令因包含 `rm -rf` 临时目录清理而被安全策略拒绝。
-
-### Error
-
-```text
-Rejected: rm -f style commands are not permitted. Use a safer approach
-```
-
-### Context
-
-- 计划用 `mktemp -d` 创建一次性 SQLite，再在同一复合命令尾部删除临时目录。
-- 命令在进程创建前即被拒绝，因此没有运行迁移或删除任何文件。
-
-### Suggested Fix
-
-隔离校验使用明确的 scratchpad 路径并保留小型临时数据库，或通过系统临时目录生命周期清理；不要在验证命令中附带递归删除。
-
-### Metadata
-
-- Reproducible: yes
-- Related Files: Backend/alembic/versions/20260801_0007_v1_6_agent_foundation.py
-
-### Resolution
-
-- **Resolved**: 2026-08-01T11:47:00+08:00
-- **Notes**: 改为不含删除动作的安全临时数据库校验。
-
----
-
-## [ERR-20260728-006] apply_patch
-
-**Logged**: 2026-07-28T18:49:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: docs
-
-### Summary
-
-发版状态跨文件补丁因历史记录中的空格不匹配而未应用。
-
-### Error
-
-```text
-apply_patch verification failed: Failed to find expected lines in PROJECT_PLAN.md
-```
-
-### Context
-
-- 同时更新 README、AGENTS 和 PROJECT_PLAN 的生产部署状态。
-- 最后一条历史记录上下文少匹配了一个空格；工具保证没有部分应用。
-
-### Suggested Fix
-
-发布状态按文件和短段落分别更新，历史记录只用末尾插入。
-
-### Metadata
-
-- Reproducible: yes
-- Related Files: README.md, AGENTS.md, PROJECT_PLAN.md
-
-### Resolution
-
-- **Resolved**: 2026-07-28T18:49:00+08:00
-- **Notes**: 拆为独立小补丁继续。
-
----
-
-## [ERR-20260728-005] remote-log-filter
-
-**Logged**: 2026-07-28T18:46:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: infra
-
-### Summary
-
-生产服务器未安装 `rg`，附加的访问日志过滤未执行。
-
-### Error
-
-```text
-bash: line 1: rg: command not found
-```
-
-### Context
-
-- 后端部署和 macOS 换装均已成功。
-- 仅在只读确认 App 是否请求生产 API 时使用了服务器不存在的工具。
-
-### Suggested Fix
-
-远端运维命令默认使用系统自带 `grep`，除非预检确认 `rg` 可用。
-
-### Metadata
-
-- Reproducible: yes
-- Related Files: /Users/linotsai/Lino/hk_info.md
-
-### Resolution
-
-- **Resolved**: 2026-07-28T18:46:00+08:00
-- **Notes**: 改用 `grep -E` 完成日志核对。
-
----
-
-## [ERR-20260728-004] apply_patch
-
-**Logged**: 2026-07-28T18:43:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: docs
-
-### Summary
-
-香港运维记录的整块更新因旧统计表内容与预期不一致而未应用。
-
-### Error
-
-```text
-apply_patch verification failed: Failed to find expected lines in /Users/linotsai/Lino/hk_info.md
-```
-
-### Context
-
-- 部署成功后同步版本、备份和生产实体统计。
-- 旧记录中的实体数量与补丁上下文不一致；工具保证没有部分应用。
-
-### Suggested Fix
-
-先读取对应小节，再分别更新版本、健康响应、统计和备份条目。
-
-### Metadata
-
-- Reproducible: yes
-- Related Files: /Users/linotsai/Lino/hk_info.md
-
-### Resolution
-
-- **Resolved**: 2026-07-28T18:43:00+08:00
-- **Notes**: 改用精确的小范围补丁同步运维记录。
-
----
-
-## [ERR-20260728-001] collaboration.spawn_agent
-
-**Logged**: 2026-07-28T15:17:33+08:00
+**Logged**: 2026-08-08T00:00:00+08:00
 **Priority**: low
 **Status**: resolved
 **Area**: config
 
 ### Summary
 
-Planner 角色不能与完整会话继承同时传入。
+首次缓存清理命令包含递归 `rm`，在执行前被安全策略拒绝，未删除任何文件。
+
+### Resolution
+
+改用对已核准精确目录执行的 `find -delete` 与 `rmdir`；清理成功且未触及 `.venv`、源码、凭证或用户 scheme。
+
+## [ERR-20260809-001] ningbo-ssh-known-hosts
+
+**Logged**: 2026-08-09T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+首次宁波只读日志命令误用了 `.deploy/known_hosts`，SSH 在连接前因 host key 校验失败。
 
 ### Error
 
-```text
+`Host key verification failed.`
+
+### Suggested Fix
+
+宁波主机 `114.66.0.38` 使用 `.deploy/ningbo_known_hosts`；旧 `.deploy/known_hosts` 不作为宁波连接材料。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `.deploy/ningbo_known_hosts`, `/Users/linotsai/Lino/NB_info.md`
+
+### Resolution
+
+- **Resolved**: 2026-08-09T00:00:00+08:00
+- **Notes**: 改用 `.deploy/ningbo_known_hosts` 后只读 SSH 成功；服务 active、`NRestarts=0`，未修改服务器。
+
+## [ERR-20260809-002] relationship-delta-integration-test
+
+**Logged**: 2026-08-09T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+新增 relationship delta 端到端测试时，纯 validator 用例通过，但归档任务在激活路径返回 failed。
+
+### Context
+
+- 命令：`PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_v1_8_archive.py`
+- 失败测试：`test_relationship_delta_activates_with_pair_derived_from_fact`
+- 未跳过测试；正在读取脱敏 Job 错误定位激活／投影阶段。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `Backend/tests/test_v1_8_archive.py`, `Backend/app/services/archive_v2.py`
+
+### Resolution
+
+- **Resolved**: 2026-08-09T00:00:00+08:00
+- **Notes**: 失败来自测试夹具的临时 `fact_ref` 超过既有 16 字符上限；缩短为 `relation` 后，15 项 v1.8 archive 测试全部通过。产品实现无需为此放松 fact_ref 门禁。
+
+## [ERR-20260809-003] archive-log-redaction-assertion
+
+**Logged**: 2026-08-09T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+日志脱敏回归错误地使用了导入前 Chapter 响应中的空 `draft_text`，使“不包含正文”断言必然失败。
+
+### Resolution
+
+- **Resolved**: 2026-08-09T00:00:00+08:00
+- **Notes**: 改为使用接受后重新读取的非空正文检查日志；捕获到的日志本身仅含 ID、模型、stage、error code 和静态规则。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `Backend/tests/test_v1_8_archive.py`
+
+## [ERR-20260809-004] background-caplog-race
+
+**Logged**: 2026-08-09T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+后台 Extractor 线程的 warning 在全量测试顺序中偶尔晚于 `caplog` 上下文结束，造成日志断言不稳定。
+
+### Resolution
+
+- **Resolved**: 2026-08-09T00:00:00+08:00
+- **Notes**: 后台端到端用例只验证归档失败隔离；结构化日志字段与正文脱敏改由同步调用日志 helper、替换 `logger.warning` 的独立单元测试验证，避免依赖全局日志捕获状态。
+
+### Metadata
+
+- Reproducible: intermittent
+- Related Files: `Backend/tests/test_v1_8_archive.py`, `Backend/app/services/write_jobs.py`
+
+## [ERR-20260809-005] reviewer-spawn-context-conflict
+
+**Logged**: 2026-08-09T05:40:58Z
+**Priority**: low
+**Status**: resolved
+**Area**: config
+
+### Summary
+
+启动指定 `reviewer` 角色时同时请求继承完整对话，协作工具拒绝了互斥参数组合。
+
+### Error
+
+```
 Full-history forked agents inherit the parent agent type; omit agent_type, or spawn without a full-history fork.
 ```
 
 ### Context
 
-- 尝试按项目迁移门禁启动 planner。
-- 调用同时使用了 `agent_type: planner` 与 `fork_turns: all`。
+- 操作：为 Extractor 快修启动独立 Reviewer。
+- 参数组合：`agent_type=reviewer` 与 `fork_turns=all`。
 
 ### Suggested Fix
 
-需要指定 planner 角色时使用 `fork_turns: none`，并在任务消息中显式提供所需项目路径、范围与约束。
+指定 Reviewer 等角色时使用有限的最近上下文，并在任务消息中补齐完整审查范围；只有继承父角色时才使用完整历史分叉。
 
 ### Metadata
 
 - Reproducible: yes
-- Related Files: PROJECT_PLAN.md
+- Related Files: none
 
 ### Resolution
 
-- **Resolved**: 2026-07-28T15:17:33+08:00
-- **Notes**: 后续调用改用独立上下文，并在任务描述中携带完整边界。
+- **Resolved**: 2026-08-09T05:40:58Z
+- **Notes**: 改用有限上下文启动 Reviewer；不影响项目代码或审查结论。
 
----
+## [ERR-20260809-008] production-alembic-working-directory
 
-## [ERR-20260728-003] apply_patch
-
-**Logged**: 2026-07-28T18:16:00+08:00
+**Logged**: 2026-08-09T06:36:41Z
 **Priority**: low
 **Status**: resolved
-**Area**: frontend
+**Area**: infra
 
 ### Summary
 
-跨文件补丁因一段 Swift 注释上下文不完全匹配而整体未应用。
+宁波只读 Alembic 查询未先进入 Backend 工作目录，`linoi` 用户因此尝试读取 root 当前目录中的 `pyproject.toml` 并被拒绝。
 
 ### Error
 
-```text
-apply_patch verification failed: Failed to find expected lines in App/LinoI/LinoStores.swift
+```
+PermissionError: [Errno 13] Permission denied: 'pyproject.toml'
 ```
 
 ### Context
 
-- 在同一个补丁中同时重命名对账参数、更新两处调用、修改注释并补测试。
-- 目标注释的换行与补丁上下文不一致；工具保证没有部分应用。
+- 操作：部署前以服务用户查询生产 Alembic current。
+- SSH、systemd 和数据库权限检查均成功；只有 Alembic 命令工作目录错误。
+- 生产未发生任何写入。
 
 ### Suggested Fix
 
-先读取窄范围的准确上下文，再将模型、Store、测试和注释拆为小补丁。
+远端 Alembic 命令必须先 `cd /opt/linoi/backend`，再以 `linoi` 用户运行项目虚拟环境中的 Alembic。
 
 ### Metadata
 
 - Reproducible: yes
-- Related Files: App/LinoI/LinoModels.swift, App/LinoI/LinoStores.swift, App/Tests/ClientStateTests.swift
+- Related Files: `/Users/linotsai/Lino/NB_info.md`
 
 ### Resolution
 
-- **Resolved**: 2026-07-28T18:16:00+08:00
-- **Notes**: 确认无部分修改，改用精确的小范围补丁继续。
+- **Resolved**: 2026-08-09T06:36:41Z
+- **Notes**: 已改用明确的 Backend 工作目录重新执行部署前检查；不影响生产状态。
 
----
+## [ERR-20260809-009] production-sqlite-ssh-quoting
 
-## [ERR-20260801-004] apply_patch
-
-**Logged**: 2026-08-01T00:00:00+08:00
+**Logged**: 2026-08-09T06:37:36Z
 **Priority**: low
 **Status**: resolved
-**Area**: docs
+**Area**: infra
 
 ### Summary
 
-计划补丁引用的精确句子与实际文档不一致，工具未写入任何部分修改。
+通过 SSH 内嵌 SQLite SQL 时，多层 shell 引号移除了 SQL 字符串字面量的引号，导致只读任务计数查询无法解析。
 
 ### Error
 
-```text
-apply_patch verification failed: Failed to find expected lines in archive/v1.6.0施工plan.md
+```
+Error: in prepare, no such column: nonterminal_jobs
 ```
 
 ### Context
 
-- 已建立 v1.6.0 详细施工记录后，尝试在「已确认的产品决定」中补充四个 Agent 的默认人格职责。
-- 补丁用到的原句遗漏了「只读不可覆盖协议」，导致上下文不匹配。
+- 操作：部署前查询非终态 JobRun、未完成 revision 和 writing 章节数量。
+- Alembic current 已成功确认；SQLite 查询在 prepare 阶段失败。
+- 生产未发生任何写入。
 
 ### Suggested Fix
 
-先读取目标段的窄范围精确文本，再使用只改一处的小补丁；每次失败确认无部分修改后继续。
+通过标准输入把固定 SQL 传给远端 `sqlite3 -readonly`，避免在 SSH 命令、远端 shell 与 SQL 三层之间嵌套字符串引号。
 
 ### Metadata
 
 - Reproducible: yes
-- Related Files: archive/v1.6.0施工plan.md
-- See Also: ERR-20260728-003
+- Related Files: `/Users/linotsai/Lino/NB_info.md`
 
 ### Resolution
 
-- **Resolved**: 2026-08-01T00:00:00+08:00
-- **Notes**: 已按精确上下文重新定位；业务代码未受影响。
+- **Resolved**: 2026-08-09T06:37:36Z
+- **Notes**: 改用 stdin 传递 SQL 后重新执行部署前只读检查。
 
----
+## [ERR-20260809-010] deployment-tar-macos-xattr
 
-## [ERR-20260728-002] pip-install
-
-**Logged**: 2026-07-28T15:21:00+08:00
-**Priority**: medium
+**Logged**: 2026-08-09T06:39:14Z
+**Priority**: low
 **Status**: resolved
-**Area**: backend
+**Area**: infra
 
 ### Summary
 
-重建虚拟环境时，PyPI TLS 连接异常导致构建依赖无法下载。
+macOS bsdtar 创建的发布包仍携带 provenance 扩展属性，远端 GNU tar 校验时输出未知扩展头 warning。
 
 ### Error
 
-```text
-SSLError: [SSL: UNEXPECTED_EOF_WHILE_READING]
-ERROR: Could not find a version that satisfies the requirement setuptools>=68
+```
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 ```
 
 ### Context
 
-- 旧 `.venv` 已先移动到明确的 `/tmp` 备份，因此依赖和环境未丢失。
-- 新环境在 editable install 的隔离构建阶段访问 PyPI 失败。
+- 操作：上传后在宁波服务器列出 Backend 发布包关键文件。
+- 包哈希与源码文件均正确，尚未切换生产代码。
 
 ### Suggested Fix
 
-网络恢复后可重新全量创建；当前采用离线恢复旧环境并精确替换虚拟环境文本文件中的旧仓库根路径，随后验证所有入口脚本、迁移和测试。
+创建跨平台发布包时同时使用 bsdtar 的 `--no-xattrs` 与 `--no-mac-metadata`，上传为临时文件并在远端校验后原子替换。
 
 ### Metadata
 
-- Reproducible: unknown
-- Related Files: Backend/pyproject.toml
+- Reproducible: yes
+- Related Files: `.deploy/ictw-backend-v1.8.3-build34.tar.gz`
 
 ### Resolution
 
-- **Resolved**: 2026-07-28T15:21:00+08:00
-- **Notes**: 使用可回滚的旧环境备份完成离线路径重定位，并以入口命令和测试验证。
+- **Resolved**: 2026-08-09T06:39:14Z
+- **Notes**: 已重新生成不含 macOS 扩展属性的发布包，并在远端无 warning 校验。
 
----
+## [ERR-20260809-011] sqlite-pragma-notnull-keyword
 
-## [ERR-20260801-005] pytest-command-path
-
-**Logged**: 2026-08-01T00:00:00+08:00
+**Logged**: 2026-08-09T06:41:45Z
 **Priority**: low
 **Status**: resolved
-**Area**: backend
+**Area**: infra
 
 ### Summary
 
-在 `Backend/` 工作目录内重复写入 `Backend/.venv`，导致测试解释器路径不存在。
+迁移后的只读结构检查在查询 `pragma_table_info` 时直接使用 `notnull` 列名，SQLite 将其按关键字解析并报语法错误。
 
 ### Error
 
-```text
-zsh:1: no such file or directory: Backend/.venv/bin/python
+```
+Parse error near line 1: near "notnull": syntax error
 ```
 
 ### Context
 
-- 阶段 3 Extractor 变更后的定向 pytest 首次执行。
+- `alembic upgrade head` 已成功完成到 `20260809_0011`。
+- `PRAGMA integrity_check` 已先返回 `ok`；失败只发生在后续只读元数据查询。
 
 ### Suggested Fix
 
-进入 `Backend/` 后统一使用 `.venv/bin/python`；仓库根目录才使用 `Backend/.venv/bin/python`。
+生产门禁只需按列名确认新增字段存在，或在确需读取时正确引用 pragma 的 `notnull` 字段，避免裸用关键字。
 
 ### Metadata
 
 - Reproducible: yes
-- Related Files: Backend/tests
+- Related Files: `Backend/alembic/versions/20260809_0011_writer_generation.py`
 
 ### Resolution
 
-- **Resolved**: 2026-08-01T00:00:00+08:00
-- **Notes**: 已用正确路径运行定向测试，全部通过。
-
----
-## [ERR-20260801-007] UI fixture Python heredoc newline escaping
-
-**Logged**: 2026-08-01T00:00:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: testing
-
-### Summary
-An inline Python fixture script received a literal newline inside a quoted string because JavaScript template interpolation consumed `\\n`.
-
-### Error
-`SyntaxError: unterminated string literal`
-
-### Cause and correction
-When JavaScript composes a Python heredoc, escape nested newlines twice or avoid the ambiguity by joining complete Python string literals. The failed run stopped before opening the database, so no partial fixture data was written.
-## [ERR-20260801-008] Fixture assumed undeclared ORM relationships
-
-**Logged**: 2026-08-01T00:05:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: testing
-
-### Summary
-The isolated UI fixture passed `chapter=`/`job=` to models that expose only `chapter_id`/`job_id` columns.
-
-### Error
-`TypeError: 'chapter' is an invalid keyword argument for ChapterDraftCandidate`
-
-### Cause and correction
-Inspect relationship declarations before composing seed fixtures. Use explicit foreign-key IDs for `JobRun` and `ChapterDraftCandidate`; the failed transaction exited before commit.
-## [ERR-20260801-009] Fixture insert order lacked ORM dependency edge
-
-**Logged**: 2026-08-01T00:10:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: testing
-
-### Summary
-The isolated fixture added a `JobRun` and a candidate referencing it in one flush, but explicit ID-only models gave SQLAlchemy no dependency edge for insert ordering.
-
-### Error
-`sqlite3.IntegrityError: FOREIGN KEY constraint failed`
-
-### Cause and correction
-Flush the parent `JobRun` before adding `ChapterDraftCandidate` rows that reference its ID. SQLite correctly rolled back the whole failed transaction.
-## [ERR-20260801-010] Compact Swift AX helper parsing
-
-**Logged**: 2026-08-01T00:15:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: testing
-
-### Summary
-A compact inline Swift accessibility helper omitted whitespace around `== .success`, which the parser interpreted as an invalid postfix operator.
-
-### Correction
-Keep normal Swift spacing in inline helpers; do not over-compress diagnostic code.
-## [ERR-20260801-011] AX scroll action constant unavailable in Swift
-
-**Logged**: 2026-08-01T00:20:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: testing
-
-### Summary
-The Swift CoreServices overlay did not expose `kAXScrollToVisibleAction`.
-
-### Correction
-Use the documented accessibility action string `"AXScrollToVisible"` when the named constant is unavailable.
-## [ERR-20260801-012] Remote preflight script expanded by local shell
-
-**Logged**: 2026-08-01T12:20:00+08:00
-**Priority**: high
-**Status**: resolved
-**Area**: infra
-
-### Summary
-A production preflight command embedded a multi-line remote script in a locally evaluated command string; command substitutions and SQL metacharacters were expanded by the local zsh before SSH ran.
-
-### Error
-`command not found: systemctl`, local `stat`/`df` errors, and no remote execution.
-
-### Context
-- The failure occurred before connecting to or mutating the production host.
-- The script contained `$()`, SQL parentheses, and nested quotes.
-
-### Suggested Fix
-Send multi-line deployment scripts to `ssh ... bash -s` over standard input so the local shell only handles the SSH command and never parses remote script contents.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `/Users/linotsai/Lino/hk_info.md`
-
-### Resolution
-- **Resolved**: 2026-08-01T12:20:00+08:00
-- **Notes**: Switched the production workflow to a stdin-fed remote script.
-## [ERR-20260801-013] systemd active preceded backend readiness
-
-**Logged**: 2026-08-01T12:25:00+08:00
-**Priority**: high
-**Status**: resolved
-**Area**: infra
-
-### Summary
-The production deployment treated `systemctl is-active` as application readiness and issued one immediate health request before Uvicorn had bound port 8787.
-
-### Error
-`curl: (7) Failed to connect to 127.0.0.1 port 8787`
-
-### Context
-- Alembic migration and database checks had passed.
-- The guarded deployment automatically restored the pre-release database/code backup and restarted the old service.
-
-### Suggested Fix
-After starting systemd, poll the authenticated health endpoint with a bounded retry loop; service process state alone is not a readiness probe.
-
-### Metadata
-- Reproducible: timing-dependent
-- Related Files: `/Users/linotsai/Lino/hk_info.md`
-
-### Resolution
-- **Resolved**: 2026-08-01T12:25:00+08:00
-- **Notes**: Added bounded authenticated health polling before accepting the deployment.
-## [ERR-20260801-014] LaunchServices -609 after atomic App replacement
-
-**Logged**: 2026-08-01T12:30:00+08:00
-**Priority**: medium
-**Status**: resolved
-**Area**: infra
-
-### Summary
-The first macOS atomic replacement passed staging and signature checks, but `open` returned LaunchServices error `-609` immediately after quitting the old app.
-
-### Error
-`_LSOpenURLsWithCompletionHandler() failed with error -609`
-
-### Context
-- The guarded installer restored `/Applications/ICTW.app` from its backup.
-- The backend deployment was already complete and unaffected.
-
-### Suggested Fix
-Wait for the old application and LaunchServices registration to settle, register the replacement explicitly, and launch a new instance with `open -n` before judging readiness.
-
-### Metadata
-- Reproducible: timing-dependent
-- Related Files: `/Applications/ICTW.app`
-
-### Resolution
-- **Resolved**: 2026-08-01T12:30:00+08:00
-- **Notes**: Added a short post-quit delay, explicit LaunchServices registration, and new-instance launch.
-## [ERR-20260801-015] Production role audit used a nonexistent column
-
-**Logged**: 2026-08-01T13:10:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: infra
-
-### Summary
-The final read-only production audit queried `agent_personas.role`, but the deployed schema names the column `agent_role`.
-
-### Error
-`sqlite3: no such column: role`
-
-### Context
-- The failed statement was read-only and ran after service health, Alembic, integrity, foreign-key, and entity-count checks had passed.
-- `set -e` stopped the remaining remote audit statements; local App and GitHub checks continued independently.
-
-### Suggested Fix
-Inspect `pragma_table_info` before writing ad-hoc production SQL, or reuse a versioned verification query from the repository.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `/Users/linotsai/Lino/hk_info.md`
-
-### Resolution
-- **Resolved**: 2026-08-01T13:10:00+08:00
-- **Notes**: Confirmed the live column is `agent_role`, reran the role and remaining service checks, and observed no production error markers.
-## [ERR-20260801-016] New cancellation test captured assertions from its neighbor
-
-**Logged**: 2026-08-01T13:35:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-The first v1.6.2 targeted test run failed because two assertions from the existing cancellation test were left below the newly inserted test function.
-
-### Error
-`NameError: name 'started' is not defined`
-
-### Context
-- The new cancel-during-Checker behavior itself passed through all of its assertions.
-- Only the test file's function boundary was wrong; no application failure was involved.
-
-### Suggested Fix
-When inserting a test between existing functions, inspect the complete neighboring function and keep all of its assertions above the next `def`.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `Backend/tests/test_api.py`
-
-### Resolution
-- **Resolved**: 2026-08-01T13:35:00+08:00
-- **Notes**: Restored the original assertions to `test_cancelled_job_remains_current_after_chapter_restore` and reran the targeted suites.
-
-## [ERR-20260801-017] Zsh client test script invoked through Bash
-
-**Logged**: 2026-08-01T16:00:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-The Swift client-state test launcher uses zsh path expansion and fails when its shebang is bypassed with `bash`.
-
-### Error
-`App/Tests/run_client_state_tests.sh: line 4: A: unbound variable`
-
-### Context
-- The script declares `#!/bin/zsh` and uses `${0:A:h}`.
-- Invoking it as `bash App/Tests/run_client_state_tests.sh` forced the wrong shell; application code was never compiled.
-
-### Suggested Fix
-Execute `App/Tests/run_client_state_tests.sh` directly or invoke it explicitly with `zsh`.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `App/Tests/run_client_state_tests.sh`
-
-### Resolution
-- **Resolved**: 2026-08-01T16:00:00+08:00
-- **Notes**: Corrected the invocation to use the script's declared zsh runtime.
-
-## [ERR-20260801-018] Multi-file patch included context from the wrong test file
-
-**Logged**: 2026-08-01T16:05:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-A multi-file patch was rejected because an assertion from the migration test was accidentally placed under the prompt-test file section.
-
-### Error
-`apply_patch verification failed: Failed to find expected lines in Backend/tests/test_prompt.py`
-
-### Context
-- The rejected patch made no file changes.
-- The intended assertion belongs to `Backend/tests/test_v1_schema_and_settings.py`.
-
-### Suggested Fix
-Keep each file's hunk under its own update header and split broad multi-file patches when contexts are easy to confuse.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `Backend/tests/test_prompt.py`, `Backend/tests/test_v1_schema_and_settings.py`
-
-### Resolution
-- **Resolved**: 2026-08-01T16:05:00+08:00
-- **Notes**: Reapplied the changes with the migration assertion in the correct test file.
-
-## [ERR-20260801-019] SQLite batch drop cascaded chapter child rows
-
-**Logged**: 2026-08-01T16:10:00+08:00
-**Priority**: critical
-**Status**: resolved
-**Area**: backend
-
-### Summary
-Alembic batch-table recreation for dropping the legacy chapter summary column caused SQLite foreign-key cascades to delete child rows.
-
-### Error
-`test_v1_6_migration_preserves_notes_custom_persona_and_child_rows: expected 1 chapter_character, found 0`
-
-### Context
-- The data backfill itself succeeded.
-- Rebuilding the parent `chapters` table with foreign keys enabled deleted related `chapter_characters` rows when the old table was dropped.
-- The migration test also protects character events and other existing child data.
-
-### Suggested Fix
-Use SQLite's native `ALTER TABLE ... DROP COLUMN` for an unconstrained legacy column, and retain explicit pre/post foreign-key checks plus child-row regression tests.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `Backend/alembic/versions/20260801_0008_merge_chapter_summaries.py`, `Backend/tests/test_v1_schema_and_settings.py`
-
-### Resolution
-- **Resolved**: 2026-08-01T16:10:00+08:00
-- **Notes**: Replaced batch-table recreation with Alembic's native drop-column operation and reran the migration suite.
-
-## [ERR-20260801-020] Expected inactive systemd state tripped errexit
-
-**Logged**: 2026-08-01T16:05:00+08:00
-**Priority**: medium
-**Status**: resolved
-**Area**: infra
-
-### Summary
-The guarded v1.6.3 deployment stopped the backend successfully, but checking the expected inactive state with `systemctl is-active` triggered Bash `errexit` because systemd returns a nonzero status for inactive units.
-
-### Error
-`DEPLOY_FAILED status=1 line=43` followed by `ROLLBACK_SERVICE=active`
-
-### Context
-- Failure happened before the backup directory was created and before any code or database migration.
-- The rollback handler restarted the unchanged v1.6.2 service.
-- Follow-up checks confirmed Alembic `20260801_0007`, the legacy summary column, database integrity, foreign keys, and v1.6.2 health were unchanged.
-
-### Suggested Fix
-Read expected inactive state through `systemctl show -p ActiveState --value`, whose success status is independent of the unit state, instead of using `systemctl is-active` inside an errexit-sensitive command substitution.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `/Users/linotsai/Lino/hk_info.md`
-- See Also: ERR-20260801-013
-
-### Resolution
-- **Resolved**: 2026-08-01T16:05:00+08:00
-- **Notes**: Confirmed the server remained on the intact v1.6.2 state and changed the stop assertion to use `ActiveState` before retrying.
-
----
-
-## [ERR-20260802-021] Broad client patch missed an exact store branch context
-
-**Logged**: 2026-08-02T09:52:29+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: frontend
-
-### Summary
-A broad multi-file patch was rejected because one `LinoStores.swift` phase branch had additional existing statements and did not match the expected context exactly.
-
-### Error
-`apply_patch verification failed: Failed to find expected lines in App/LinoI/LinoStores.swift`
-
-### Context
-- The rejected patch made no file changes.
-- The intended changes covered models, error presentation, shared store state, and both platform views.
-- Exact branch inspection showed `checkerAppliesToVisibleDraft` is set before `writingPhase` in `selecting_memory`.
-
-### Suggested Fix
-Inspect state-machine branches first and apply model, store, and view edits as separate patches with narrow context.
-
-### Metadata
-- Reproducible: yes
-- Related Files: `App/LinoI/LinoStores.swift`, `App/LinoI/LinoModels.swift`, `App/LinoI/ChapterEditorViews.swift`, `App/LinoIMac/MacChapterEditor.swift`
-
-### Resolution
-- **Resolved**: 2026-08-02T09:52:29+08:00
-- **Notes**: Split the patch by layer, applied each hunk successfully, and passed focused Backend and client-state regression tests.
-
----
+- **Resolved**: 2026-08-09T06:41:45Z
+- **Notes**: 去掉关键字条件后重新执行完整迁移后检查；生产数据未受影响。
