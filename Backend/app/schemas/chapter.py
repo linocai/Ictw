@@ -129,6 +129,7 @@ class InspirationRequest(BaseModel):
 
     title: str = ""
     bible: str = ""
+    pacing_boundary: str = Field(default="", max_length=500)
     selected_character_ids: list[str] = Field(default_factory=list)
 
 

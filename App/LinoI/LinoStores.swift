@@ -1181,6 +1181,7 @@ final class InspirationCreatorStore: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var adoptedCardIDs: Set<String> = []
+    @Published var pacingBoundary = ""
 
     private let session: AppSession
     private var requestTask: Task<Void, Never>?
@@ -1191,20 +1192,12 @@ final class InspirationCreatorStore: ObservableObject {
         self.session = session
     }
 
-    var hasVisibleState: Bool {
-        isLoading || !cards.isEmpty || errorMessage != nil
-    }
-
-    func activate(_ chapter: Chapter) {
-        clearIfChapterChanged(to: chapter.id)
-        guard !hasVisibleState else { return }
-        generate(for: chapter)
-    }
-
     func generate(for chapter: Chapter) {
         clearIfChapterChanged(to: chapter.id)
         requestTask?.cancel()
-        let frozen = InspirationSnapshot(chapter)
+        let normalizedBoundary = InspirationDraftPolicy.normalizedPacingBoundary(pacingBoundary)
+        pacingBoundary = normalizedBoundary
+        let frozen = InspirationSnapshot(chapter, pacingBoundary: normalizedBoundary)
         let token = UUID()
         requestToken = token
         snapshot = frozen
@@ -1215,7 +1208,8 @@ final class InspirationCreatorStore: ObservableObject {
         let payload = InspirationRequestPayload(
             title: frozen.title,
             bible: frozen.bible,
-            selectedCharacterIds: frozen.selectedCharacterIDs
+            selectedCharacterIds: frozen.selectedCharacterIDs,
+            pacingBoundary: frozen.pacingBoundary
         )
         requestTask = Task { [weak self] in
             guard let self else { return }
@@ -1259,10 +1253,15 @@ final class InspirationCreatorStore: ObservableObject {
         errorMessage = nil
         adoptedCardIDs = []
         undo = nil
+        pacingBoundary = ""
     }
 
     func isStale(comparedTo chapter: Chapter?) -> Bool {
-        InspirationDraftPolicy.isStale(snapshot: snapshot, current: chapter)
+        InspirationDraftPolicy.isStale(
+            snapshot: snapshot,
+            current: chapter,
+            pacingBoundary: pacingBoundary
+        )
     }
 
     func recordAdoption(card: InspirationCard, chapterID: String, before: String, after: String) {

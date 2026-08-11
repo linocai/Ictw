@@ -278,11 +278,9 @@ struct MacWorkspaceView: View {
     }
 
     private func openInspiration() {
-        guard let chapter = editor.currentChapter else { return }
         rightTab = .inspiration
         rightPanelOpen = true
         sidebarOpen = false
-        inspiration.activate(chapter)
     }
 
     /// ⌘⇧N 落地处：与 `MacChapterSidebar` 的「+」按钮调用同一个

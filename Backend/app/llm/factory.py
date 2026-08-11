@@ -9,6 +9,7 @@ from app.models import AgentModelBinding, LLMProfile
 from app.services.crypto import decrypt_secret
 from app.services.model_capabilities import (
     effective_binding_settings,
+    requires_bounded_non_thinking,
     resolve_capabilities,
     sanitized_temperature,
 )
@@ -33,11 +34,12 @@ def build_llm_client(db: Session, agent_role: str) -> OpenAICompatibleClient:
         raise LLMConfigurationError("llm_profile_missing", agent_role)
     thinking_enabled, reasoning_effort = effective_binding_settings(binding, profile)
     capabilities = resolve_capabilities(profile.model_name, profile.base_url)
-    # Extraction is bounded archival work.  It has an explicit output budget
-    # and must not spend the request window on provider thinking tokens.
-    if agent_role == "extractor":
+    # Extraction and synchronous inspiration generation are bounded work.  They
+    # must preserve their output/request window instead of spending it on
+    # provider thinking tokens.
+    if requires_bounded_non_thinking(agent_role):
         if not capabilities.thinking_can_disable:
-            raise LLMConfigurationError("extractor_thinking_not_disableable", agent_role)
+            raise LLMConfigurationError(f"{agent_role}_thinking_not_disableable", agent_role)
         thinking_enabled, reasoning_effort = False, None
     return OpenAICompatibleClient(
         base_url=profile.base_url,

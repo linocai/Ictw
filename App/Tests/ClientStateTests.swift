@@ -120,12 +120,18 @@ private func testInspirationResponseAndEmptySnapshotRequestDecode() throws {
     let request = try api.preparedRequest(
         "/chapters/chapter-1/inspirations",
         method: "POST",
-        body: InspirationRequestPayload(title: "", bible: "", selectedCharacterIds: [])
+        body: InspirationRequestPayload(
+            title: "",
+            bible: "",
+            selectedCharacterIds: [],
+            pacingBoundary: "只推进到开始熟络，不确认关系。"
+        )
     )
     let payload = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
     try expect(payload?["title"] as? String == "", "empty title must remain a valid inspiration snapshot")
     try expect(payload?["bible"] as? String == "", "empty Bible must remain a valid inspiration snapshot")
     try expect((payload?["selected_character_ids"] as? [String]) == [], "empty character selection must remain valid")
+    try expect(payload?["pacing_boundary"] as? String == "只推进到开始熟络，不确认关系。", "pacing boundary must use its wire key")
 }
 
 private func testInspirationSnapshotStalenessAppendAndUndo() throws {
@@ -139,6 +145,20 @@ private func testInspirationSnapshotStalenessAppendAndUndo() throws {
     edited = chapter
     edited.characterLinks = [ChapterLink(characterId: "character-2")]
     try expect(InspirationDraftPolicy.isStale(snapshot: snapshot, current: edited), "character changes during generation must mark results stale")
+    let boundedSnapshot = InspirationSnapshot(chapter, pacingBoundary: "只推进到熟络")
+    try expect(
+        !InspirationDraftPolicy.isStale(snapshot: boundedSnapshot, current: chapter, pacingBoundary: "  只推进到熟络  "),
+        "boundary whitespace must normalize before staleness comparison"
+    )
+    try expect(
+        InspirationDraftPolicy.isStale(snapshot: boundedSnapshot, current: chapter, pacingBoundary: "推进到确认关系"),
+        "changed pacing boundary must mark results stale"
+    )
+    let longBoundary = String(repeating: "界", count: 510)
+    try expect(
+        InspirationDraftPolicy.normalizedPacingBoundary(longBoundary).count == 500,
+        "pacing boundary must stay within the backend request limit"
+    )
 
     let emptyInsertion = InspirationDraftPolicy.appending(body: "新的灵感", to: "  \n")
     try expect(emptyInsertion == "新的灵感", "an empty Bible must receive only the idea body")

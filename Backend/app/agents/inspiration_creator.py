@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -21,13 +22,12 @@ INSPIRATION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string"},
-                    "body": {"type": "string"},
+                    "body": {"type": "string", "minLength": 200, "maxLength": 300},
                     "history_basis": {"type": ["string", "null"]},
                     "note": {"type": ["string", "null"]},
                     "source_ids": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["title", "body", "history_basis", "note", "source_ids"],
+                "required": ["body", "history_basis", "note", "source_ids"],
                 "additionalProperties": False,
             },
         }
@@ -36,10 +36,17 @@ INSPIRATION_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-MAX_CARD_NONSPACE_CHARS = 300
+MIN_BODY_NONSPACE_CHARS = 200
+MAX_BODY_NONSPACE_CHARS = 300
+MAX_HISTORY_BASIS_NONSPACE_CHARS = 120
+MAX_NOTE_NONSPACE_CHARS = 120
 MIN_CARDS = 3
 MAX_CARDS = 5
 MAX_SOURCE_IDS_PER_CARD = 6
+DIRECTION_TITLES = ("方向一", "方向二", "方向三", "方向四", "方向五")
+SENTENCE_ENDINGS = frozenset("。！？!?")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -83,7 +90,7 @@ class InspirationCreatorAgent:
                     user=user_message + correction,
                     schema=INSPIRATION_SCHEMA,
                     temperature=0.8,
-                    max_tokens=2500,
+                    max_tokens=8192,
                     timeout=180,
                     hard_timeout=True,
                 )
@@ -94,12 +101,19 @@ class InspirationCreatorAgent:
                     selected_character_ids=selected_character_ids,
                 )
             except InspirationValidationError as exc:
+                logger.warning(
+                    "inspiration_validation_failed attempt=%s category=%s",
+                    attempt + 1,
+                    exc.category,
+                )
                 _audit(audit_attempt, started, "inspiration_invalid_response", None)
                 if attempt == 0:
                     correction = (
                         "\n\n# 程序退回\n上一次结果未通过程序校验（"
                         + exc.category
-                        + "）。请重新给出 3–5 条真正不同的灵感，并严格遵守 JSON、来源、人物与每条 300 字上限。"
+                        + "）。请重新给出 3 条真正不同的连贯剧情方向，"
+                        "每个 body 必须完整展开到 200–300 个去空白字符并自然收束，"
+                        "不要另拟标题、不要只写一句抽象梗概、不要靠重复凑字；严格遵守 JSON、推进边界、来源与人物白名单。"
                     )
                     continue
                 raise LLMError(
@@ -113,7 +127,7 @@ class InspirationCreatorAgent:
                 if attempt == 0 and exc.code in {"llm_invalid_response", "llm_output_truncated"}:
                     correction = (
                         "\n\n# 程序退回\n上一次结果不是完整合法的 JSON。"
-                        "请重新输出完整 object，并严格遵守 3–5 条、人物与 300 字上限。"
+                        "请重新输出完整 object，并严格遵守 3 条、人物与每个 body 200–300 字。"
                     )
                     continue
                 exc.agent_role = "inspiration_creator"
@@ -135,60 +149,135 @@ def validate_inspiration_output(
     known_characters: Sequence[Any],
     selected_character_ids: set[str],
 ) -> list[InspirationCard]:
-    if set(output) != {"cards"}:
+    if not isinstance(output, dict):
         raise InspirationValidationError("response_shape")
     raw_cards = output.get("cards")
-    if not isinstance(raw_cards, list) or not MIN_CARDS <= len(raw_cards) <= MAX_CARDS:
+    if not isinstance(raw_cards, list) or len(raw_cards) < MIN_CARDS:
         raise InspirationValidationError("card_count")
     cards: list[InspirationCard] = []
     normalized_ideas: list[str] = []
+    rejected_categories: list[str] = []
     for raw in raw_cards:
-        if not isinstance(raw, dict):
-            raise InspirationValidationError("card_shape")
-        if set(raw) != {"title", "body", "history_basis", "note", "source_ids"}:
-            raise InspirationValidationError("card_shape")
-        title = _required_text(raw.get("title"))
-        body = _required_text(raw.get("body"))
-        history_basis = _optional_text(raw.get("history_basis"))
-        note = _optional_text(raw.get("note"))
-        if nonspace_len(title + body + (history_basis or "") + (note or "")) > MAX_CARD_NONSPACE_CHARS:
-            raise InspirationValidationError("card_length")
-        raw_source_ids = raw.get("source_ids")
-        if not isinstance(raw_source_ids, list):
-            raise InspirationValidationError("history_sources")
-        source_ids = tuple(
-            dict.fromkeys(
-                item.strip() for item in raw_source_ids if isinstance(item, str) and item.strip()
+        try:
+            card = _validated_card(
+                raw,
+                direction_title=DIRECTION_TITLES[len(cards)],
+                source_chapter_indexes=source_chapter_indexes,
+                known_characters=known_characters,
+                selected_character_ids=selected_character_ids,
             )
-        )
-        if len(source_ids) != len(raw_source_ids) or len(source_ids) > MAX_SOURCE_IDS_PER_CARD:
-            raise InspirationValidationError("history_sources")
-        if bool(history_basis) != bool(source_ids):
-            raise InspirationValidationError("history_sources")
-        if any(source_id not in source_chapter_indexes for source_id in source_ids):
-            raise InspirationValidationError("history_sources")
-        if _contains_unselected_character(
-            "\n".join(filter(None, (title, body, note))),
-            known_characters,
-            selected_character_ids,
-        ):
-            raise InspirationValidationError("unselected_character")
-        normalized = _idea_identity(title, body)
+        except InspirationValidationError as exc:
+            rejected_categories.append(exc.category)
+            continue
+        normalized = _idea_identity(card.body)
         if any(_ideas_too_similar(normalized, previous) for previous in normalized_ideas):
-            raise InspirationValidationError("duplicate_ideas")
+            rejected_categories.append("duplicate_ideas")
+            continue
         normalized_ideas.append(normalized)
-        cards.append(
-            InspirationCard(
-                title=title,
-                body=body,
-                history_basis=history_basis,
-                note=note,
-                history_chapter_indexes=tuple(
-                    sorted({source_chapter_indexes[source_id] for source_id in source_ids})
-                ),
-            )
-        )
+        cards.append(card)
+        if len(cards) == MAX_CARDS:
+            break
+    if len(cards) < MIN_CARDS:
+        categories = ",".join(dict.fromkeys(rejected_categories)) or "card_count"
+        raise InspirationValidationError(f"insufficient_valid_cards:{len(cards)}:{categories}")
     return cards
+
+
+def _validated_card(
+    raw: Any,
+    *,
+    direction_title: str,
+    source_chapter_indexes: Mapping[str, int],
+    known_characters: Sequence[Any],
+    selected_character_ids: set[str],
+) -> InspirationCard:
+    if not isinstance(raw, dict):
+        raise InspirationValidationError("card_shape")
+    body = _body_with_natural_limit(raw.get("body"))
+    body_length = nonspace_len(body)
+    if body_length < MIN_BODY_NONSPACE_CHARS:
+        raise InspirationValidationError("body_too_short")
+    if body_length > MAX_BODY_NONSPACE_CHARS:
+        raise InspirationValidationError("body_too_long")
+
+    try:
+        note = _optional_text(raw.get("note"))
+    except InspirationValidationError:
+        note = None
+    history_basis, source_ids = _safe_history_metadata(
+        raw.get("history_basis"),
+        raw.get("source_ids"),
+        source_chapter_indexes,
+    )
+    if note is not None and nonspace_len(note) > MAX_NOTE_NONSPACE_CHARS:
+        note = None
+    if history_basis is not None and nonspace_len(history_basis) > MAX_HISTORY_BASIS_NONSPACE_CHARS:
+        history_basis, source_ids = None, ()
+
+    if _contains_unselected_character(
+        "\n".join(filter(None, (body, note))),
+        known_characters,
+        selected_character_ids,
+    ):
+        raise InspirationValidationError("unselected_character")
+    return InspirationCard(
+        title=direction_title,
+        body=body,
+        history_basis=history_basis,
+        note=note,
+        history_chapter_indexes=tuple(
+            sorted({source_chapter_indexes[source_id] for source_id in source_ids})
+        ),
+    )
+
+
+def _body_with_natural_limit(value: Any) -> str:
+    body = _required_text(value)
+    if nonspace_len(body) <= MAX_BODY_NONSPACE_CHARS:
+        return body
+
+    nonspace_count = 0
+    last_natural_end: int | None = None
+    for index, character in enumerate(body):
+        if not character.isspace():
+            nonspace_count += 1
+        if (
+            character in SENTENCE_ENDINGS
+            and MIN_BODY_NONSPACE_CHARS <= nonspace_count <= MAX_BODY_NONSPACE_CHARS
+        ):
+            last_natural_end = index + 1
+        if nonspace_count > MAX_BODY_NONSPACE_CHARS:
+            break
+    if last_natural_end is None:
+        raise InspirationValidationError("body_too_long")
+    return body[:last_natural_end].strip()
+
+
+def _safe_history_metadata(
+    raw_history_basis: Any,
+    raw_source_ids: Any,
+    source_chapter_indexes: Mapping[str, int],
+) -> tuple[str | None, tuple[str, ...]]:
+    if not source_chapter_indexes:
+        return None, ()
+    try:
+        history_basis = _optional_text(raw_history_basis)
+    except InspirationValidationError:
+        return None, ()
+    if not isinstance(raw_source_ids, list):
+        return None, ()
+    source_ids = tuple(
+        dict.fromkeys(
+            item.strip() for item in raw_source_ids if isinstance(item, str) and item.strip()
+        )
+    )
+    if len(source_ids) != len(raw_source_ids) or len(source_ids) > MAX_SOURCE_IDS_PER_CARD:
+        return None, ()
+    if bool(history_basis) != bool(source_ids):
+        return None, ()
+    if any(source_id not in source_chapter_indexes for source_id in source_ids):
+        return None, ()
+    return history_basis, source_ids
 
 
 def _required_text(value: Any) -> str:
@@ -226,8 +315,8 @@ def _contains_unselected_character(
     return False
 
 
-def _idea_identity(title: str, body: str) -> str:
-    normalized = normalize_text(title + body).casefold()
+def _idea_identity(body: str) -> str:
+    normalized = normalize_text(body).casefold()
     return "".join(character for character in normalized if character.isalnum())
 
 

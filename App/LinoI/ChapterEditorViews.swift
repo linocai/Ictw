@@ -349,8 +349,6 @@ private struct LinoIChapterEditor: View {
                 titleBlock
                 sectionHeader("本章剧情 BIBLE") {
                     Button {
-                        guard let chapter = editor.currentChapter else { return }
-                        inspiration.activate(chapter)
                         showingInspiration = true
                     } label: {
                         Label("找灵感", systemImage: "sparkles")
@@ -1496,6 +1494,7 @@ private struct LinoIInspirationSheet: View {
             Divider().overlay(LinoTheme.line)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    pacingBoundaryInput
                     snapshotHints
                     if isStale {
                         notice(
@@ -1529,13 +1528,38 @@ private struct LinoIInspirationSheet: View {
         }
     }
 
+    private var pacingBoundaryInput: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("这一章最多推进到哪里（可选）")
+                .font(LinoType.ui(12.5, .semibold))
+                .foregroundStyle(LinoTheme.ink2)
+            TextField(
+                "例如：两人只推进到开始熟络，不表白、不确认关系。",
+                text: $inspiration.pacingBoundary,
+                axis: .vertical
+            )
+            .font(LinoType.ui(14))
+            .foregroundStyle(LinoTheme.ink)
+            .lineLimit(2...4)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(LinoTheme.line, lineWidth: 1)
+            }
+            .disabled(inspiration.isLoading || editor.currentChapter == nil)
+            .accessibilityHint("这句话只约束本次灵感的剧情推进上限，不会写入 Bible")
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Label("灵感创造师", systemImage: "sparkles")
                     .font(LinoType.ui(16, .semibold))
                     .foregroundStyle(LinoTheme.ink)
-                Text(inspiration.isLoading ? "正在寻找不同方向" : "只提供建议，不会自动保存")
+                Text(inspiration.isLoading ? "正在寻找不同方向" : "点击按钮后才开始")
                     .font(LinoType.caption)
                     .foregroundStyle(LinoTheme.muted)
             }
@@ -1567,25 +1591,47 @@ private struct LinoIInspirationSheet: View {
 
     @ViewBuilder
     private var snapshotHints: some View {
-        if inspiration.snapshot?.bible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
-            || inspiration.snapshot?.selectedCharacterIDs.isEmpty == true {
-            let emptyBible = inspiration.snapshot?.bible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
-            let noCharacters = inspiration.snapshot?.selectedCharacterIDs.isEmpty == true
-            notice(
-                icon: "lightbulb.min",
-                text: emptyBible && noCharacters
-                    ? "可以从空白 Bible 开始；当前没有允许人物，建议不会擅自使用书中角色。"
-                    : (emptyBible
-                        ? "可以从空白 Bible 开始发想。"
-                        : "当前没有允许人物，建议不会擅自使用书中角色。"),
-                color: LinoTheme.accent
-            )
+        if let snapshot = hintSnapshot {
+            let emptyBible = snapshot.bible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let noCharacters = snapshot.selectedCharacterIDs.isEmpty
+            if emptyBible || noCharacters {
+                notice(
+                    icon: "lightbulb.min",
+                    text: emptyBible && noCharacters
+                        ? "可以从空白 Bible 开始；当前没有允许人物，建议不会擅自使用书中角色。"
+                        : (emptyBible
+                            ? "可以从空白 Bible 开始发想。"
+                            : "当前没有允许人物，建议不会擅自使用书中角色。"),
+                    color: LinoTheme.accent
+                )
+            }
         }
+    }
+
+    private var hintSnapshot: InspirationSnapshot? {
+        if let snapshot = inspiration.snapshot { return snapshot }
+        guard let chapter = editor.currentChapter else { return nil }
+        return InspirationSnapshot(chapter)
     }
 
     @ViewBuilder
     private var content: some View {
-        if inspiration.isLoading {
+        if editor.currentChapter == nil {
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(LinoTheme.accent)
+                Text("章节正在准备")
+                    .font(LinoType.ui(15, .semibold))
+                    .foregroundStyle(LinoTheme.ink)
+                Text("准备完成后，这里会出现“开始找灵感”按钮。")
+                    .font(LinoType.caption)
+                    .foregroundStyle(LinoTheme.muted)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 42)
+        } else if inspiration.isLoading {
             VStack(spacing: 14) {
                 ProgressView()
                     .controlSize(.large)
@@ -1604,7 +1650,7 @@ private struct LinoIInspirationSheet: View {
             .padding(.vertical, 42)
         } else if let error = inspiration.errorMessage {
             VStack(alignment: .leading, spacing: 12) {
-                Label("这次没有找到可用灵感", systemImage: "exclamationmark.bubble")
+                Label("生成失败", systemImage: "exclamationmark.bubble")
                     .font(LinoType.ui(15, .semibold))
                     .foregroundStyle(LinoTheme.ink)
                 Text(error)
@@ -1620,7 +1666,7 @@ private struct LinoIInspirationSheet: View {
                 Text("需要时，让灵感创造师给你几条不同方向。")
                     .font(LinoType.serif(16, .semibold))
                     .foregroundStyle(LinoTheme.ink)
-                Text("每次 3–5 条，只进入本地草稿，是否采用完全由你决定。")
+                Text("点击后才读取当前内容与有效历史；每次 3–5 条，只进入本地草稿。")
                     .font(LinoType.ui(13))
                     .foregroundStyle(LinoTheme.muted)
                 Button("开始找灵感") { regenerate() }

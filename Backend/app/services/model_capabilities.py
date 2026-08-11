@@ -56,6 +56,12 @@ GEMINI_3_5_FLASH_CAPABILITIES = ModelCapabilities(
     temperature_effective_when_thinking=False,
 )
 
+BOUNDED_NON_THINKING_AGENT_ROLES = frozenset({"extractor", "inspiration_creator"})
+
+
+def requires_bounded_non_thinking(agent_role: str) -> bool:
+    return agent_role in BOUNDED_NON_THINKING_AGENT_ROLES
+
 
 def _normalized_model_name(model_name: str | None) -> str:
     return (model_name or "").strip().lower().replace("_", "-").replace(" ", "-")

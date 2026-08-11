@@ -8,6 +8,7 @@ struct MacInspirationTab: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             if let chapter = editor.currentChapter {
+                pacingBoundaryInput
                 snapshotHints
                 if isStale {
                     notice(
@@ -38,16 +39,34 @@ struct MacInspirationTab: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear {
-            if let chapter = editor.currentChapter {
-                inspiration.activate(chapter)
-            }
-        }
         .onChange(of: editor.currentChapter?.id) { _, id in
             inspiration.clearIfChapterChanged(to: id)
-            if let chapter = editor.currentChapter {
-                inspiration.activate(chapter)
+        }
+    }
+
+    private var pacingBoundaryInput: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("这一章最多推进到哪里（可选）")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(LinoTheme.ink2)
+            TextField(
+                "例如：两人只推进到开始熟络，不表白、不确认关系。",
+                text: $inspiration.pacingBoundary,
+                axis: .vertical
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 12.5))
+            .foregroundStyle(LinoTheme.ink)
+            .lineLimit(2...4)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(LinoTheme.surface2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(LinoTheme.line, lineWidth: 1)
             }
+            .disabled(inspiration.isLoading)
+            .accessibilityHint("这句话只约束本次灵感的剧情推进上限，不会写入 Bible")
         }
     }
 
@@ -62,7 +81,7 @@ struct MacInspirationTab: View {
                 Text("灵感创造师")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(LinoTheme.ink)
-                Text("只提供建议，不会自动保存")
+                Text("点击按钮后才开始")
                     .font(.system(size: 11))
                     .foregroundStyle(LinoTheme.muted)
             }
@@ -83,18 +102,25 @@ struct MacInspirationTab: View {
 
     @ViewBuilder
     private var snapshotHints: some View {
-        if inspiration.snapshot?.bible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
-            || inspiration.snapshot?.selectedCharacterIDs.isEmpty == true {
-            let emptyBible = inspiration.snapshot?.bible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
-            let noCharacters = inspiration.snapshot?.selectedCharacterIDs.isEmpty == true
-            notice(
-                icon: "lightbulb.min",
-                text: emptyBible && noCharacters
-                    ? "可从空白 Bible 开始；当前无人，建议不会擅用书中角色。"
-                    : (emptyBible ? "可以从空白 Bible 开始发想。" : "当前无人，建议不会擅用书中角色。"),
-                color: LinoTheme.accent
-            )
+        if let snapshot = hintSnapshot {
+            let emptyBible = snapshot.bible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let noCharacters = snapshot.selectedCharacterIDs.isEmpty
+            if emptyBible || noCharacters {
+                notice(
+                    icon: "lightbulb.min",
+                    text: emptyBible && noCharacters
+                        ? "可从空白 Bible 开始；当前无人，建议不会擅用书中角色。"
+                        : (emptyBible ? "可以从空白 Bible 开始发想。" : "当前无人，建议不会擅用书中角色。"),
+                    color: LinoTheme.accent
+                )
+            }
         }
+    }
+
+    private var hintSnapshot: InspirationSnapshot? {
+        if let snapshot = inspiration.snapshot { return snapshot }
+        guard let chapter = editor.currentChapter else { return nil }
+        return InspirationSnapshot(chapter)
     }
 
     @ViewBuilder
@@ -115,7 +141,7 @@ struct MacInspirationTab: View {
             .padding(.vertical, 26)
         } else if let error = inspiration.errorMessage {
             VStack(alignment: .leading, spacing: 10) {
-                Label("这次没有找到可用灵感", systemImage: "exclamationmark.bubble")
+                Label("生成失败", systemImage: "exclamationmark.bubble")
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(LinoTheme.ink)
                 Text(error)
@@ -130,7 +156,7 @@ struct MacInspirationTab: View {
             emptyState(
                 icon: "sparkles",
                 title: "寻找几条不同方向",
-                message: "每次 3–5 条；采用后只追加到本地 Bible。",
+                message: "点击后才读取当前内容与有效历史；每次 3–5 条。",
                 action: { inspiration.generate(for: chapter) }
             )
         } else {

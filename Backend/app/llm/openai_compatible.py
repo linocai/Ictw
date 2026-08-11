@@ -256,11 +256,19 @@ def _extract_content(data: dict[str, Any]) -> str:
             raise KeyError("empty content")
         return content
     except (KeyError, IndexError, TypeError) as exc:
+        finish_reason = _extract_finish_reason(data)
+        if _is_length_finish_reason(finish_reason):
+            raise LLMError(
+                "LLM response was truncated before message content",
+                code="llm_output_truncated",
+                retryable=True,
+                finish_reason=finish_reason,
+            ) from exc
         raise LLMError(
             "LLM response did not contain message content",
             code="llm_empty_candidate",
             retryable=False,
-            finish_reason=_extract_finish_reason(data),
+            finish_reason=finish_reason,
         ) from exc
 
 

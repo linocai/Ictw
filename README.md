@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前源码与宁波 Backend 生产均为 `1.9.0(35)`，Alembic head 为 `20260809_0011`；本机 macOS 已换装 Build 35，iOS 由用户自行处理，当前公开发布的双端客户端仍为 [`1.8.1(32)`](https://github.com/linocai/Ictw/releases/tag/v1.8.1)。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前源码、宁波 Backend 生产与本机 macOS 已安装版均为 `1.9.2(39)`，Alembic head 为 `20260809_0011`；iOS 由用户自行处理，当前公开发布的双端客户端仍为 [`1.8.1(32)`](https://github.com/linocai/Ictw/releases/tag/v1.8.1)。写作流程为：
 
 ```text
 Memory Selector → Writer → Checker → 用户接受 → Extractor
@@ -29,8 +29,8 @@ Memory Selector → Writer → Checker → 用户接受 → Extractor
 - 用户接受正文后章节立即 finalized，Extractor 独立生成 v2 `summary + canonical facts + end_state_delta`；只有整体通过确定性校验的 revision 才能原子激活，失败不会撤销正文接受。
 - Selector 与人物状态按历史章节只消费一个事实来源：活跃 v2 优先，否则使用仍具资格的 legacy adapter，避免新旧归档叠加。
 - 每次 LLM 调用写入 `llm_call_audits`（role/model/耗时/usage/finish_reason/error_code），绝不记录 API Key、prompt 或正文。
-- 五个现役 Agent 可独立绑定模型、可编辑人格、思考开关与思考强度；不可编辑程序协议始终生效。
-- 独立的“灵感创造师”可读取当前 Bible、所选人物和有效历史，一次返回 3–5 张不超过 300 个去空白字符的灵感卡；采用只写入本地 Bible 草稿，不进入 Writer／Checker／Extractor 流程，也不会自动保存。
+- 五个现役 Agent 可独立绑定模型并编辑人格；不可编辑程序协议始终生效。Extractor 与灵感创造师为保证结构化输出和同步时延，由程序固定关闭思考模式。
+- 独立的“灵感创造师”可读取当前章节标题、Bible、所选人物和有效历史，一次返回 3–5 张正文为 200–300 个去空白字符的灵感卡；已定标题只作构思锚点，卡片统一显示固定方向标签。用户可选写一句“这一章最多推进到哪里”，约束关系、主线和整体节奏；未填写时默认只推进最小但有意义的一步。Agent 可通过若干自然衔接的互动、动作、内心、回忆、环境或意象场景来构思连贯章节进程，也可只用一个文学性持续场景；不输出场景编号或固定剧情栏目。有效历史足够时承接真实来源，不足时自动自由发想。打开界面不会读取或请求，只有点击明确按钮才开始；采用只写入本地 Bible 草稿，不进入 Writer／Checker／Extractor 流程，也不会自动保存。
 - 支持 DeepSeek V4 Pro/Flash、GLM 5/5.1/5.2、Gemini 3.5 Flash 的显式推理能力。
 - 双端主层展示 Writer 实际记忆简报、上一章尾段、冲突提示和 Checker 双侧证据；原始审计来源默认折叠，长候选全文不进入 SwiftUI 视图树。
 - 支持章节删除、人物事件级联和章节序号收拢。

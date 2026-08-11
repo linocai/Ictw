@@ -299,7 +299,11 @@ private struct LinoIAgentBindingCard: View {
     private var capabilities: ModelCapabilities { binding?.capabilities ?? .unsupported }
     private var effectiveThinking: Bool { binding?.effectiveThinkingEnabled ?? binding?.thinkingEnabled ?? capabilities.thinkingRequired }
     private var canToggleThinking: Bool {
-        binding?.llmProfileId != nil && capabilities.thinkingToggleSupported && capabilities.thinkingCanDisable && !capabilities.thinkingRequired
+        binding?.llmProfileId != nil &&
+        !isBoundedNonThinkingRole &&
+        capabilities.thinkingToggleSupported &&
+        capabilities.thinkingCanDisable &&
+        !capabilities.thinkingRequired
     }
     private var canChooseEffort: Bool {
         binding?.llmProfileId != nil && effectiveThinking && !capabilities.reasoningEffortLevels.isEmpty
@@ -328,6 +332,11 @@ private struct LinoIAgentBindingCard: View {
     }
     private var capabilityDescription: String {
         guard binding?.llmProfileId != nil else { return "绑定模型后可查看推理能力。" }
+        if isBoundedNonThinkingRole {
+            return role == "extractor"
+                ? "Extractor 为保证归档时限，程序固定关闭思考。"
+                : "灵感创造师为保证一次点击能及时返回，程序固定关闭思考。"
+        }
         if capabilities.thinkingRequired { return "此模型锁定开启思考；当前实际生效：开启\(effectiveEffortText)。" }
         if !capabilities.thinkingToggleSupported && capabilities.reasoningEffortLevels.isEmpty {
             return "此模型未声明可调思考参数，后端不会发送额外参数。"
@@ -342,6 +351,10 @@ private struct LinoIAgentBindingCard: View {
     private var effectiveEffortText: String {
         guard let effort = binding?.effectiveReasoningEffort, !effort.isEmpty else { return "" }
         return " / \(effortName(effort))"
+    }
+
+    private var isBoundedNonThinkingRole: Bool {
+        role == "extractor" || role == "inspiration_creator"
     }
 }
 

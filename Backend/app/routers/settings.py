@@ -20,6 +20,7 @@ from app.schemas.settings import (
 from app.services.crypto import decrypt_secret, encrypt_secret
 from app.services.model_capabilities import (
     effective_binding_settings,
+    requires_bounded_non_thinking,
     resolve_capabilities,
     sanitized_settings,
     sanitized_temperature,
@@ -38,10 +39,13 @@ def _binding_response(binding: AgentModelBinding, db: Session) -> dict[str, obje
     )
     effective_thinking, effective_effort = effective_binding_settings(binding, profile)
     configured_thinking, configured_effort = binding.thinking_enabled, binding.reasoning_effort
-    if binding.agent_role == "extractor" and profile is not None and capabilities.thinking_can_disable:
-        # v1.7.2 bounds Extractor latency by making non-thinking mode a
-        # program-owned runtime policy.  Report the policy the request will
-        # actually use instead of a stale pre-upgrade user preference.
+    if (
+        requires_bounded_non_thinking(binding.agent_role)
+        and profile is not None
+        and capabilities.thinking_can_disable
+    ):
+        # Report the bounded runtime policy the request will actually use
+        # instead of a stale pre-upgrade user preference.
         configured_thinking, configured_effort = False, None
         effective_thinking, effective_effort = False, None
     adjustable = profile is not None and temperature_sendable(effective_thinking, capabilities)
@@ -235,11 +239,12 @@ def patch_binding(agent_role: str, payload: AgentModelBindingPatch, db: Session 
     if "temperature" in fields:
         temperature = payload.temperature
 
-    if agent_role == "extractor":
+    if requires_bounded_non_thinking(agent_role):
+        role_label = "Extractor" if agent_role == "extractor" else "灵感创造师"
         if profile is not None and not capabilities.thinking_can_disable:
-            raise HTTPException(status_code=422, detail="Extractor 需要绑定支持关闭思考的模型")
+            raise HTTPException(status_code=422, detail=f"{role_label} 需要绑定支持关闭思考的模型")
         if payload.thinking_enabled is True or payload.reasoning_effort is not None:
-            raise HTTPException(status_code=422, detail="Extractor 在 v1.7.2 中固定关闭思考")
+            raise HTTPException(status_code=422, detail=f"{role_label} 固定关闭思考")
         thinking, effort = (False, None) if profile is not None else (None, None)
 
     if capabilities.family == "unknown" and (thinking is not None or effort is not None):

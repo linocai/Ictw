@@ -246,6 +246,7 @@ def create_inspirations(
             chapter,
             title=payload.title,
             bible=payload.bible,
+            pacing_boundary=payload.pacing_boundary,
             selected_character_ids=payload.selected_character_ids,
         )
     except InspirationContextError as exc:
@@ -280,7 +281,7 @@ def create_inspirations(
         )
     except LLMError as exc:
         messages = {
-            "inspiration_invalid_response": "灵感结果没有通过完整性校验，请重新生成",
+            "inspiration_invalid_response": "这批结果没有整理出至少 3 条可用灵感，请再试一次",
             "llm_timeout": "灵感生成超时，请稍后重试",
             "llm_content_blocked": "上游模型拒绝了本次灵感请求",
         }

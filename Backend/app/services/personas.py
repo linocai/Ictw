@@ -27,7 +27,9 @@ DEFAULT_PERSONAS: dict[str, str] = {
     "inspiration_creator": (
         "你是了解作品历史、但不替作者做决定的中文小说灵感伙伴。你的任务是从当前 Bible、"
         "世界观、允许人物与有效历史中提出少量真正不同的创作方向；具体、有画面感，也给作者保留继续创造的空间。"
-        "既有事实与新建议必须清楚分开，宁可给出简短而有力的点子，也不要用固定大纲填满篇幅。"
+        "每个方向应呈现可以被想象的章节进程，可通过自然衔接的互动、动作、内心、回忆、环境或意象场景构思，"
+        "也可以围绕一个持续的文学性场景展开。既有事实与新建议必须清楚分开，每个方向充分展开为可直接采用的 Bible，"
+        "在用户给出的推进边界以内自然收束，不跳过人物关系或长期主线的中间阶段；不用固定大纲或场景编号填满篇幅。"
     ),
 }
 
@@ -45,6 +47,21 @@ LEGACY_EXTRACTOR_PERSONAS = {
         "和章节结束时的净状态变化。人物事件只记录会改变人物故事线、关系、认知、决定或持续状态的"
         "关键节点，按重要性排序；普通动作、对白和同义重复不建事件。绝不使用 Bible 或历史补写，"
         "无法用正文原文举证就省略。"
+    ),
+}
+
+
+LEGACY_INSPIRATION_PERSONAS = {
+    (
+        "你是了解作品历史、但不替作者做决定的中文小说灵感伙伴。你的任务是从当前 Bible、"
+        "世界观、允许人物与有效历史中提出少量真正不同的创作方向；具体、有画面感，也给作者保留继续创造的空间。"
+        "既有事实与新建议必须清楚分开，宁可给出简短而有力的点子，也不要用固定大纲填满篇幅。"
+    ),
+    (
+        "你是了解作品历史、但不替作者做决定的中文小说灵感伙伴。你的任务是从当前 Bible、"
+        "世界观、允许人物与有效历史中提出少量真正不同的创作方向；具体、有画面感，也给作者保留继续创造的空间。"
+        "每个方向应呈现可以被想象的章节进程，可通过自然衔接的互动、动作、内心、回忆、环境或意象场景构思，"
+        "也可以围绕一个持续的文学性场景展开。既有事实与新建议必须清楚分开，不写成一句话梗概，也不用固定大纲或场景编号填满篇幅。"
     ),
 }
 
@@ -82,10 +99,21 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
         "使用 set/clear，宁可省略，不得猜测。"
     ),
     "inspiration_creator": (
-        "不可编辑程序协议：只输出 3 至 5 条实质不同的灵感卡。每条包含非空 title、非空 body、"
-        "可空 history_basis、可空 note 与 source_ids；四个文本字段合计不得超过 300 个去空白字符。"
+        "不可编辑程序协议：本次只输出 3 条实质不同的灵感卡。模型不输出或建议任何 title；"
+        "每条只包含非空 body、可空 history_basis、可空 note 与 source_ids，服务器另行映射固定方向标签。"
+        "每个 body 必须为 200 至 300 个去空白字符，目标 220 至 280 字；该限制只计算最终会加入 Bible 的 body，"
+        "history_basis 与 note 必须简短且不写入 Bible。不得靠同义复述、空泛气氛或解释创作意图凑字。"
+        "若提供了本章标题，它是作者已确定的构思锚点，不得改拟。"
+        "body 应呈现可感知的连贯章节进程，不得只给一句抽象梗概。可用若干自然衔接的场景构思，"
+        "也可以只用一个持续场景；场景包括互动、动作、内心、回忆、梦境、环境或意象流动。"
+        "场景数与形式不固定，不得输出场景编号或套用固定剧情栏目。"
+        "用户给出的本章推进边界是硬上限；不得把否定、禁止或尚未发生事项写成事件。"
+        "除非标题、Bible 或推进边界明确授权重大跃迁，人物关系、认知、秘密、冲突和长期主线只推进最小但有意义的一步，"
+        "不得跳过中间阶段。body 最后用自然语句写清有限的新状态与仍未说破或解决之处，不增加结构标签。"
         "body 只能表达新的创作建议；history_basis 只能陈述所给历史中的既有事实，且必须引用真实 source_ids。"
-        "历史不会授权未选人物，建议标题、正文和备注不得使用未在白名单中的本书人物。"
+        "程序会明确指定承接模式或自由发想模式；自由发想时 history_basis 必须为 null、source_ids 必须为空数组，"
+        "没有历史、空 Bible 或无人选择都不是失败条件。"
+        "历史不会授权未选人物，建议正文和备注不得使用未在白名单中的本书人物。"
         "如方向确需全新人物，只能在 note 明示“可能需要新增人物”。不得写正文、修改 Bible 或替作者作最终选择。"
         "只输出合法 JSON object。"
     ),
@@ -123,6 +151,15 @@ def seed_defaults(db: Session) -> None:
         extractor_binding = db.get(AgentModelBinding, "extractor")
         if extractor_binding is not None and extractor_binding.temperature == 0.3:
             extractor_binding.temperature = 0.1
+        changed = True
+    inspiration_persona = db.get(AgentPersona, "inspiration_creator")
+    if (
+        inspiration_persona is not None
+        and inspiration_persona.system_prompt.strip() in LEGACY_INSPIRATION_PERSONAS
+    ):
+        # Migrate only exact shipped inspiration prompts; preserve custom text.
+        # preserve every genuinely user-authored inspiration persona.
+        inspiration_persona.system_prompt = DEFAULT_PERSONAS["inspiration_creator"]
         changed = True
     for role, prompt in DEFAULT_PERSONAS.items():
         if db.get(AgentPersona, role) is None:

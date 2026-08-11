@@ -168,6 +168,12 @@ def test_gemini_200_block_and_empty_candidate_are_classified():
         _extract_content({"choices": [], "candidates": []})
     assert empty.value.code == "llm_empty_candidate"
 
+    with pytest.raises(LLMError) as truncated_empty:
+        _extract_content({"choices": [{"finish_reason": "length", "message": {"content": ""}}]})
+    assert truncated_empty.value.code == "llm_output_truncated"
+    assert truncated_empty.value.retryable is True
+    assert truncated_empty.value.finish_reason == "length"
+
 
 def test_rate_limit_preserves_retry_after():
     error = _http_error(429, {"Retry-After": "17"})

@@ -66,7 +66,8 @@ def test_llm_configuration_errors_have_fixed_safe_codes(tmp_path, agent_role, pr
     assert "missing-profile" not in caught.value.message
 
 
-def test_extractor_incompatible_capability_is_safe_configuration_error(tmp_path) -> None:
+@pytest.mark.parametrize("agent_role", ["extractor", "inspiration_creator"])
+def test_bounded_agent_incompatible_capability_is_safe_configuration_error(tmp_path, agent_role) -> None:
     engine = make_engine(f"sqlite:///{tmp_path / 'extractor-config-error.db'}")
     Base.metadata.create_all(engine)
     with Session(engine) as db:
@@ -80,12 +81,12 @@ def test_extractor_incompatible_capability_is_safe_configuration_error(tmp_path)
         )
         db.add(profile)
         db.commit()
-        db.add(AgentModelBinding(agent_role="extractor", llm_profile_id=profile.id))
+        db.add(AgentModelBinding(agent_role=agent_role, llm_profile_id=profile.id))
         db.commit()
         with pytest.raises(LLMConfigurationError) as caught:
-            build_llm_client(db, "extractor")
-    assert caught.value.code == "extractor_thinking_not_disableable"
-    assert caught.value.agent_role == "extractor"
+            build_llm_client(db, agent_role)
+    assert caught.value.code == f"{agent_role}_thinking_not_disableable"
+    assert caught.value.agent_role == agent_role
 
 
 def test_binding_patch_distinguishes_omitted_and_null_and_clears_effort(tmp_path) -> None:
@@ -141,7 +142,8 @@ def test_unknown_model_rejects_non_null_thinking_configuration(tmp_path) -> None
         assert exc.value.status_code == 422
 
 
-def test_extractor_binding_reports_and_persists_forced_thinking_off(tmp_path) -> None:
+@pytest.mark.parametrize("agent_role", ["extractor", "inspiration_creator"])
+def test_bounded_agent_binding_reports_and_persists_forced_thinking_off(tmp_path, agent_role) -> None:
     engine = make_engine(f"sqlite:///{tmp_path / 'extractor-policy.db'}")
     Base.metadata.create_all(engine)
     with Session(engine) as db:
@@ -157,7 +159,7 @@ def test_extractor_binding_reports_and_persists_forced_thinking_off(tmp_path) ->
         db.commit()
         db.add(
             AgentModelBinding(
-                agent_role="extractor",
+                agent_role=agent_role,
                 llm_profile_id=profile.id,
                 thinking_enabled=True,
                 reasoning_effort="high",
@@ -165,16 +167,16 @@ def test_extractor_binding_reports_and_persists_forced_thinking_off(tmp_path) ->
         )
         db.commit()
 
-        response = patch_binding("extractor", AgentModelBindingPatch(), db)
+        response = patch_binding(agent_role, AgentModelBindingPatch(), db)
         assert response["thinking_enabled"] is False
         assert response["reasoning_effort"] is None
         assert response["effective_thinking_enabled"] is False
-        binding = db.get(AgentModelBinding, "extractor")
+        binding = db.get(AgentModelBinding, agent_role)
         assert binding.thinking_enabled is False
         assert binding.reasoning_effort is None
 
         with pytest.raises(HTTPException) as blocked:
-            patch_binding("extractor", AgentModelBindingPatch(thinking_enabled=True), db)
+            patch_binding(agent_role, AgentModelBindingPatch(thinking_enabled=True), db)
         assert blocked.value.status_code == 422
 
 

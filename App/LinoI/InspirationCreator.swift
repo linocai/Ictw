@@ -23,10 +23,12 @@ struct InspirationRequestPayload: Encodable, Sendable {
     let title: String
     let bible: String
     let selectedCharacterIds: [String]
+    let pacingBoundary: String
 
     enum CodingKeys: String, CodingKey {
         case title, bible
         case selectedCharacterIds = "selected_character_ids"
+        case pacingBoundary = "pacing_boundary"
     }
 }
 
@@ -35,20 +37,29 @@ struct InspirationSnapshot: Equatable, Sendable {
     let title: String
     let bible: String
     let selectedCharacterIDs: [String]
+    let pacingBoundary: String
 
-    init(chapterID: String, title: String, bible: String, selectedCharacterIDs: [String]) {
+    init(
+        chapterID: String,
+        title: String,
+        bible: String,
+        selectedCharacterIDs: [String],
+        pacingBoundary: String = ""
+    ) {
         self.chapterID = chapterID
         self.title = title
         self.bible = bible
         self.selectedCharacterIDs = Array(Set(selectedCharacterIDs)).sorted()
+        self.pacingBoundary = InspirationDraftPolicy.normalizedPacingBoundary(pacingBoundary)
     }
 
-    init(_ chapter: Chapter) {
+    init(_ chapter: Chapter, pacingBoundary: String = "") {
         self.init(
             chapterID: chapter.id,
             title: chapter.title,
             bible: chapter.userPrompt,
-            selectedCharacterIDs: chapter.characterLinks.map(\.characterId)
+            selectedCharacterIDs: chapter.characterLinks.map(\.characterId),
+            pacingBoundary: pacingBoundary
         )
     }
 }
@@ -64,9 +75,20 @@ struct InspirationUndo: Equatable, Sendable {
 }
 
 enum InspirationDraftPolicy {
-    static func isStale(snapshot: InspirationSnapshot?, current: Chapter?) -> Bool {
+    static let maxPacingBoundaryCharacters = 500
+
+    static func normalizedPacingBoundary(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.prefix(maxPacingBoundaryCharacters))
+    }
+
+    static func isStale(
+        snapshot: InspirationSnapshot?,
+        current: Chapter?,
+        pacingBoundary: String = ""
+    ) -> Bool {
         guard let snapshot, let current else { return false }
-        return snapshot != InspirationSnapshot(current)
+        return snapshot != InspirationSnapshot(current, pacingBoundary: pacingBoundary)
     }
 
     static func appending(body: String, to bible: String) -> String {
@@ -98,7 +120,7 @@ enum InspirationErrorCopy {
             case "llm_profile_not_configured":
                 return "灵感创造师还没有可用模型。请先到“设置 → Agent”为它绑定一个 Profile。"
             case "inspiration_invalid_response", "llm_invalid_response", "llm_output_truncated":
-                return "这批灵感没有通过完整性检查，请重新生成。"
+                return "这批结果没有整理出至少 3 条可用灵感，请再试一次。"
             case "inspiration_character_invalid":
                 return "当前人物选择已发生变化，请刷新章节后重试。"
             case "llm_timeout":
