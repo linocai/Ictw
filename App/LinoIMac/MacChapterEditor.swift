@@ -16,6 +16,7 @@ struct MacChapterEditor: View {
     /// 打开阅读 overlay 的回调，由 `MacWorkspaceView` 注入（阅读页挂在它那一
     /// 层，本视图不持有阅读状态）。
     let onOpenReader: () -> Void
+    let onFindInspiration: () -> Void
 
     @State private var draftMode: DraftMode = .preview
     @State private var showingImport = false
@@ -177,16 +178,46 @@ struct MacChapterEditor: View {
         VStack(alignment: .leading, spacing: 14) {
             stageHeader(index: "1", title: "本章输入", subtitle: "这些内容会进入 Writer 的本章任务区。")
             LinoITextField("章节标题", text: chapterBinding(\.title))
-            LinoIEditor(
-                title: "本章剧情 Bible",
-                text: chapterBinding(\.userPrompt),
-                minHeight: 200,
-                placeholder: "本章节 Bible，情节最高权威。"
-            )
+                .disabled(editor.writingPhase.isActive)
+            bibleEditor
         }
         .padding(16)
         .linoPanelGlass(cornerRadius: LinoMacMetrics.cardRadius)
-        .disabled(editor.writingPhase.isActive)
+    }
+
+    private var bibleEditor: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                LinoISectionLabel("本章剧情 Bible")
+                Spacer()
+                Button(action: onFindInspiration) {
+                    Label("找灵感", systemImage: "sparkles")
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .buttonStyle(LinoITintButtonStyle(compact: true))
+                .help("打开灵感创造师；不会自动保存或修改 Bible")
+            }
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: chapterBinding(\.userPrompt))
+                    .frame(minHeight: 200)
+                    .scrollContentBackground(.hidden)
+                    .font(LinoType.serif(14.5))
+                    .lineSpacing(12)
+                    .foregroundStyle(LinoTheme.ink2)
+                    .padding(10)
+                    .disabled(editor.writingPhase.isActive)
+                if editor.currentChapter?.userPrompt.isEmpty != false {
+                    Text("本章节 Bible，情节最高权威。")
+                        .font(LinoType.serif(14.5))
+                        .foregroundStyle(LinoTheme.faint)
+                        .padding(.horizontal, 15)
+                        .padding(.top, 17)
+                        .allowsHitTesting(false)
+                }
+            }
+            .background(LinoTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(LinoTheme.line, lineWidth: 1))
+        }
     }
 
     // MARK: - ② 允许人物

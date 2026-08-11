@@ -10,12 +10,15 @@ from sqlalchemy.orm import Session, object_session
 
 from app.agents.extractor import ExtractorAgent
 from app.agents.checker import CheckerAgent
+from app.agents.inspiration_creator import InspirationCreatorAgent
 from app.agents.memory_selector import MemorySelectorAgent
 from app.agents.writer import WriterAgent
 from app.db import SessionLocal, get_db
+from app.llm.base import LLMError
 from app.llm.factory import (
     get_extractor_client,
     get_checker_client,
+    get_inspiration_creator_client,
     get_memory_selector_client,
     get_writer_client,
 )
@@ -30,6 +33,8 @@ from app.schemas.chapter import (
     ArchiveRetryRequest,
     CheckerAcceptRequest,
     CheckerRunRead,
+    InspirationRequest,
+    InspirationResponse,
     WriteJobStatus,
     WriteRequest,
 )
@@ -45,7 +50,9 @@ from app.services.context import (
     validate_character_preflight,
 )
 from app.services.personas import get_persona
+from app.services.audit import record_llm_call
 from app.services.character_state_projection import projected_fields_before_chapter, rebuild_book_projection
+from app.services.inspiration_context import InspirationContextError, build_inspiration_context
 from app.services.write_jobs import WriteJob, WriteJobConflict, record_job_phase, write_registry
 from app.services.write_ownership import cancel_local_writer_jobs, invalidate_writer_inputs
 from app.services.archive_v2 import (
@@ -221,6 +228,82 @@ def get_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     return _chapter_read(chapter)
+
+
+@router.post("/chapters/{chapter_id}/inspirations", response_model=InspirationResponse)
+def create_inspirations(
+    chapter_id: str,
+    payload: InspirationRequest,
+    db: Session = Depends(get_db),
+    inspiration_client=Depends(get_inspiration_creator_client),
+) -> InspirationResponse:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    try:
+        context = build_inspiration_context(
+            db,
+            chapter,
+            title=payload.title,
+            bible=payload.bible,
+            selected_character_ids=payload.selected_character_ids,
+        )
+    except InspirationContextError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "inspiration_character_invalid",
+                "message": "灵感请求包含无效人物选择",
+                "details": {},
+            },
+        ) from exc
+
+    def audit_attempt(duration_ms: int, error_code: str | None, upstream_reason: str | None) -> None:
+        record_llm_call(
+            SessionLocal,
+            agent_role="inspiration_creator",
+            client=inspiration_client,
+            duration_ms=duration_ms,
+            error_code=error_code,
+            chapter_id=chapter.id,
+            upstream_reason=upstream_reason,
+        )
+
+    agent = InspirationCreatorAgent(inspiration_client, get_persona(db, "inspiration_creator"))
+    try:
+        cards = agent.generate(
+            context.user_message,
+            source_chapter_indexes=context.source_chapter_indexes,
+            known_characters=context.known_characters,
+            selected_character_ids=set(context.selected_character_ids),
+            audit_attempt=audit_attempt,
+        )
+    except LLMError as exc:
+        messages = {
+            "inspiration_invalid_response": "灵感结果没有通过完整性校验，请重新生成",
+            "llm_timeout": "灵感生成超时，请稍后重试",
+            "llm_content_blocked": "上游模型拒绝了本次灵感请求",
+        }
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": exc.code,
+                "message": messages.get(exc.code, "灵感生成暂时失败，请稍后重试"),
+                "details": exc.safe_details(),
+            },
+        ) from exc
+    return InspirationResponse(
+        cards=[
+            {
+                "title": card.title,
+                "body": card.body,
+                "history_basis": card.history_basis,
+                "note": card.note,
+                "history_chapter_indexes": list(card.history_chapter_indexes),
+            }
+            for card in cards
+        ]
+    )
 
 
 @router.patch("/chapters/{chapter_id}", response_model=ChapterRead)

@@ -24,6 +24,11 @@ DEFAULT_PERSONAS: dict[str, str] = {
         "事实要少而关键，不把同一件事拆成摘要、事件和多个记忆重复表达。"
         "绝不使用 Bible 或历史补写；无法可靠归属人物时保留为章节事实，不得猜测。"
     ),
+    "inspiration_creator": (
+        "你是了解作品历史、但不替作者做决定的中文小说灵感伙伴。你的任务是从当前 Bible、"
+        "世界观、允许人物与有效历史中提出少量真正不同的创作方向；具体、有画面感，也给作者保留继续创造的空间。"
+        "既有事实与新建议必须清楚分开，宁可给出简短而有力的点子，也不要用固定大纲填满篇幅。"
+    ),
 }
 
 
@@ -76,6 +81,14 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
         "只输出实际变化的受控状态槽，位置／行动／情绪不必凑齐；后端按 slot 机械归类。"
         "使用 set/clear，宁可省略，不得猜测。"
     ),
+    "inspiration_creator": (
+        "不可编辑程序协议：只输出 3 至 5 条实质不同的灵感卡。每条包含非空 title、非空 body、"
+        "可空 history_basis、可空 note 与 source_ids；四个文本字段合计不得超过 300 个去空白字符。"
+        "body 只能表达新的创作建议；history_basis 只能陈述所给历史中的既有事实，且必须引用真实 source_ids。"
+        "历史不会授权未选人物，建议标题、正文和备注不得使用未在白名单中的本书人物。"
+        "如方向确需全新人物，只能在 note 明示“可能需要新增人物”。不得写正文、修改 Bible 或替作者作最终选择。"
+        "只输出合法 JSON object。"
+    ),
 }
 
 def compose_system_prompt(role: str, editable_persona: str) -> str:
@@ -123,6 +136,7 @@ def seed_defaults(db: Session) -> None:
                     llm_profile_id=writer_binding.llm_profile_id if writer_binding else None,
                     thinking_enabled=None,
                     reasoning_effort=None,
+                    temperature=0.8 if role == "inspiration_creator" else None,
                 )
             )
             changed = True

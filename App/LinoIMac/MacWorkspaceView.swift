@@ -19,6 +19,7 @@ struct MacWorkspaceView: View {
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @EnvironmentObject private var commandBus: MacCommandBus
 
     @State private var selectedChapterId: String?
@@ -155,7 +156,8 @@ struct MacWorkspaceView: View {
                 MacChapterEditor(
                     selectedChapterId: $selectedChapterId,
                     scrollPosition: $editorScrollPosition,
-                    onOpenReader: { isReaderOpen = true }
+                    onOpenReader: { isReaderOpen = true },
+                    onFindInspiration: openInspiration
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -269,9 +271,18 @@ struct MacWorkspaceView: View {
     }
 
     private func loadSelected(_ id: String?) {
+        inspiration.clearIfChapterChanged(to: id)
         guard let id, let summary = workspace.chapters.first(where: { $0.id == id }) else { return }
         editorScrollPosition.scrollTo(edge: .top)
         Task { await editor.load(summary) }
+    }
+
+    private func openInspiration() {
+        guard let chapter = editor.currentChapter else { return }
+        rightTab = .inspiration
+        rightPanelOpen = true
+        sidebarOpen = false
+        inspiration.activate(chapter)
     }
 
     /// ⌘⇧N 落地处：与 `MacChapterSidebar` 的「+」按钮调用同一个

@@ -1240,6 +1240,7 @@ extension String {
         case "writer": return "Writer"
         case "checker": return "Checker"
         case "extractor": return "Extractor"
+        case "inspiration_creator": return "灵感创造师"
         default: return capitalized
         }
     }

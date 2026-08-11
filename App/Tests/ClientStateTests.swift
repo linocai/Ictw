@@ -85,6 +85,86 @@ private func testAPIEndpointBearerAndStructuredConfigurationError() throws {
     try expect(structured?.message == "该 Agent 尚未完成可用模型配置", "configuration message must remain user-displayable")
 }
 
+private func testInspirationResponseAndEmptySnapshotRequestDecode() throws {
+    let data = try JSONSerialization.data(withJSONObject: [
+        "cards": [
+            [
+                "title": "潮水之前",
+                "body": "让人物在道路消失前做出选择。",
+                "history_basis": "上一章留下了未关闭的闸门。",
+                "note": "可以保持结尾开放。",
+                "history_chapter_indexes": [2, 3],
+            ],
+            [
+                "title": "空房间",
+                "body": "从一个本应有人却空着的房间开始。",
+                "history_basis": NSNull(),
+                "note": NSNull(),
+                "history_chapter_indexes": [],
+            ],
+            [
+                "title": "错误答案",
+                "body": "先让最合理的答案被相信，再展示它的代价。",
+                "history_basis": NSNull(),
+                "note": NSNull(),
+                "history_chapter_indexes": [],
+            ],
+        ],
+    ])
+    let response = try JSONDecoder().decode(InspirationResponse.self, from: data)
+    try expect(response.cards.count == 3, "inspiration response must decode all cards")
+    try expect(response.cards[0].historyChapterIndexes == [2, 3], "history chapter indexes must remain visible")
+    try expect(response.cards[1].historyBasis == nil, "optional history basis must decode")
+
+    let api = APIClient(baseURL: "https://ictw.linotsai.top", token: "test-token")
+    let request = try api.preparedRequest(
+        "/chapters/chapter-1/inspirations",
+        method: "POST",
+        body: InspirationRequestPayload(title: "", bible: "", selectedCharacterIds: [])
+    )
+    let payload = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+    try expect(payload?["title"] as? String == "", "empty title must remain a valid inspiration snapshot")
+    try expect(payload?["bible"] as? String == "", "empty Bible must remain a valid inspiration snapshot")
+    try expect((payload?["selected_character_ids"] as? [String]) == [], "empty character selection must remain valid")
+}
+
+private func testInspirationSnapshotStalenessAppendAndUndo() throws {
+    let chapter = try makeChapter()
+    let snapshot = InspirationSnapshot(chapter)
+    try expect(!InspirationDraftPolicy.isStale(snapshot: snapshot, current: chapter), "unchanged inspiration snapshot must stay current")
+
+    var edited = chapter
+    edited.userPrompt = "新的 Bible"
+    try expect(InspirationDraftPolicy.isStale(snapshot: snapshot, current: edited), "Bible edits during generation must mark results stale")
+    edited = chapter
+    edited.characterLinks = [ChapterLink(characterId: "character-2")]
+    try expect(InspirationDraftPolicy.isStale(snapshot: snapshot, current: edited), "character changes during generation must mark results stale")
+
+    let emptyInsertion = InspirationDraftPolicy.appending(body: "新的灵感", to: "  \n")
+    try expect(emptyInsertion == "新的灵感", "an empty Bible must receive only the idea body")
+    let appended = InspirationDraftPolicy.appending(body: "新的灵感", to: "已有内容")
+    try expect(appended == "已有内容\n\n新的灵感", "a non-empty Bible must append without overwriting")
+    let undo = InspirationUndo(chapterID: chapter.id, before: "已有内容", after: appended)
+    try expect(undo.canApply(chapterID: chapter.id, currentBible: appended), "unchanged insertion must offer one undo")
+    try expect(!undo.canApply(chapterID: chapter.id, currentBible: appended + "手改"), "manual edits must invalidate inspiration undo")
+}
+
+private func testInspirationErrorsUseAuthorFacingCopy() throws {
+    let configuration = InspirationErrorCopy.message(
+        for: APIError.validation(
+            code: "llm_profile_not_configured",
+            message: "该 Agent 尚未完成可用模型配置",
+            names: []
+        )
+    )
+    try expect(configuration.contains("设置 → Agent"), "configuration copy must tell the author where to act")
+    try expect(!configuration.contains("llm_profile"), "configuration copy must hide internal error codes")
+
+    let oldBackend = InspirationErrorCopy.message(for: APIError.http(404, "Not Found"))
+    try expect(oldBackend.contains("更新后端"), "old backend copy must explain the required action")
+    try expect(!oldBackend.contains("Not Found"), "old backend copy must not expose raw transport wording")
+}
+
 private func makeStatus(
     phase: String,
     outcomeCurrent: Bool?
@@ -481,6 +561,9 @@ private struct ClientStateTestRunner {
         try testLegacySynopsisDecodesAsCanonicalSummary()
         try testConnectionDefaultMigrationPreservesCustomEndpoint()
         try testAPIEndpointBearerAndStructuredConfigurationError()
+        try testInspirationResponseAndEmptySnapshotRequestDecode()
+        try testInspirationSnapshotStalenessAppendAndUndo()
+        try testInspirationErrorsUseAuthorFacingCopy()
         try testCurrentServerFailureIsApplied()
         try testOldOrFinalizedServerFailureIsDiscarded()
         try testOldServerFailureRemainsLocalOnly()

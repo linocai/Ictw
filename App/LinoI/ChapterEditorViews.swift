@@ -285,7 +285,9 @@ private struct LinoIChapterEditor: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @State private var showingImport = false
+    @State private var showingInspiration = false
     @State private var confirmingCheckerOverride = false
     @State private var draftMode: DraftMode = .preview
     @State private var contextExpanded = false
@@ -310,6 +312,11 @@ private struct LinoIChapterEditor: View {
                 LinoIImportDraftSheet()
                     .presentationDetents([.large])
             }
+            .sheet(isPresented: $showingInspiration) {
+                LinoIInspirationSheet()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
             .confirmationDialog("强制接受当前正文？", isPresented: $confirmingCheckerOverride, titleVisibility: .visible) {
                 Button("确认强制接受", role: .destructive) { acceptTapped(overrideChecker: true) }
                 Button("取消", role: .cancel) {}
@@ -322,6 +329,8 @@ private struct LinoIChapterEditor: View {
                 }
             }
             .onChange(of: editor.currentChapter?.id) { _, _ in
+                inspiration.clearIfChapterChanged(to: editor.currentChapter?.id)
+                showingInspiration = false
                 hidesRestoredBanner = false
                 contextExpanded = false
                 checkerExpanded = false
@@ -338,7 +347,22 @@ private struct LinoIChapterEditor: View {
                 }
 
                 titleBlock
-                sectionHeader("本章剧情 BIBLE")
+                sectionHeader("本章剧情 BIBLE") {
+                    Button {
+                        guard let chapter = editor.currentChapter else { return }
+                        inspiration.activate(chapter)
+                        showingInspiration = true
+                    } label: {
+                        Label("找灵感", systemImage: "sparkles")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(LinoTheme.accent)
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: 30)
+                            .background(LinoTheme.accentSoft, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("打开灵感创造师，不会自动保存或修改 Bible")
+                }
                     .padding(.top, 22)
                 bibleCard
                     .padding(.top, 11)
@@ -1458,6 +1482,291 @@ private struct LinoIChapterEditor: View {
         case .failed: return LinoTheme.danger
         case .cancelled: return LinoTheme.muted
         }
+    }
+}
+
+private struct LinoIInspirationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider().overlay(LinoTheme.line)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    snapshotHints
+                    if isStale {
+                        notice(
+                            icon: "clock.arrow.circlepath",
+                            text: "这些灵感基于先前草稿。你可以按最新内容重想，也可以仍然采用。",
+                            color: LinoTheme.warning
+                        )
+                        Button("按最新内容重想") { regenerate() }
+                            .buttonStyle(LinoIPrimaryButtonStyle())
+                            .accessibilityHint("使用当前标题、Bible 和人物选择重新生成")
+                    }
+                    if isAdoptionLocked {
+                        notice(
+                            icon: "lock",
+                            text: "本章任务正在运行。灵感仍可浏览，任务结束后即可采用。",
+                            color: LinoTheme.muted
+                        )
+                    }
+                    content
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 32)
+            }
+        }
+        .background(LinoTheme.background.ignoresSafeArea())
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if canUndo {
+                undoBar
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Label("灵感创造师", systemImage: "sparkles")
+                    .font(LinoType.ui(16, .semibold))
+                    .foregroundStyle(LinoTheme.ink)
+                Text(inspiration.isLoading ? "正在寻找不同方向" : "只提供建议，不会自动保存")
+                    .font(LinoType.caption)
+                    .foregroundStyle(LinoTheme.muted)
+            }
+            Spacer()
+            if inspiration.isLoading {
+                Button("停止") { inspiration.stop() }
+                    .font(LinoType.ui(12, .medium))
+                    .foregroundStyle(LinoTheme.muted)
+                    .buttonStyle(.plain)
+            } else if !inspiration.cards.isEmpty {
+                Button("换一批") { regenerate() }
+                    .font(LinoType.ui(12, .semibold))
+                    .foregroundStyle(LinoTheme.accent)
+                    .buttonStyle(.plain)
+            }
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .background(LinoTheme.surface2, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LinoTheme.ink2)
+            .accessibilityLabel("关闭灵感面板")
+        }
+        .padding(.horizontal, 18)
+        .frame(minHeight: 62)
+    }
+
+    @ViewBuilder
+    private var snapshotHints: some View {
+        if inspiration.snapshot?.bible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+            || inspiration.snapshot?.selectedCharacterIDs.isEmpty == true {
+            let emptyBible = inspiration.snapshot?.bible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+            let noCharacters = inspiration.snapshot?.selectedCharacterIDs.isEmpty == true
+            notice(
+                icon: "lightbulb.min",
+                text: emptyBible && noCharacters
+                    ? "可以从空白 Bible 开始；当前没有允许人物，建议不会擅自使用书中角色。"
+                    : (emptyBible
+                        ? "可以从空白 Bible 开始发想。"
+                        : "当前没有允许人物，建议不会擅自使用书中角色。"),
+                color: LinoTheme.accent
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if inspiration.isLoading {
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(LinoTheme.accent)
+                Text("正在阅读当前快照与有效历史…")
+                    .font(LinoType.ui(14, .medium))
+                    .foregroundStyle(LinoTheme.ink2)
+                Text("可以收起面板继续编辑；收起不会停止本次生成。")
+                    .font(LinoType.caption)
+                    .foregroundStyle(LinoTheme.muted)
+                    .multilineTextAlignment(.center)
+                Button("停止本次") { inspiration.stop() }
+                    .buttonStyle(LinoITintButtonStyle(compact: true))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 42)
+        } else if let error = inspiration.errorMessage {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("这次没有找到可用灵感", systemImage: "exclamationmark.bubble")
+                    .font(LinoType.ui(15, .semibold))
+                    .foregroundStyle(LinoTheme.ink)
+                Text(error)
+                    .font(LinoType.ui(13))
+                    .foregroundStyle(LinoTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("重新生成") { regenerate() }
+                    .buttonStyle(LinoIPrimaryButtonStyle())
+            }
+            .padding(.vertical, 20)
+        } else if inspiration.cards.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("需要时，让灵感创造师给你几条不同方向。")
+                    .font(LinoType.serif(16, .semibold))
+                    .foregroundStyle(LinoTheme.ink)
+                Text("每次 3–5 条，只进入本地草稿，是否采用完全由你决定。")
+                    .font(LinoType.ui(13))
+                    .foregroundStyle(LinoTheme.muted)
+                Button("开始找灵感") { regenerate() }
+                    .buttonStyle(LinoIPrimaryButtonStyle())
+            }
+            .padding(.vertical, 20)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(inspiration.cards.enumerated()), id: \.element.id) { index, card in
+                    if index > 0 {
+                        Divider().overlay(LinoTheme.line).padding(.vertical, 18)
+                    }
+                    ideaRow(card, number: index + 1)
+                }
+            }
+        }
+    }
+
+    private func ideaRow(_ card: InspirationCard, number: Int) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Text(String(format: "%02d", number))
+                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(LinoTheme.faint)
+                Text(card.title)
+                    .font(LinoType.serif(17, .semibold))
+                    .foregroundStyle(LinoTheme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !card.historyChapterIndexes.isEmpty {
+                Label(historyLabel(card.historyChapterIndexes), systemImage: "clock.arrow.circlepath")
+                    .font(LinoType.ui(10.5, .semibold))
+                    .foregroundStyle(LinoTheme.success)
+            }
+            Text(card.body)
+                .font(LinoType.serif(15))
+                .lineSpacing(7)
+                .foregroundStyle(LinoTheme.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if let basis = card.historyBasis, !basis.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("承接既有记录")
+                        .font(LinoType.ui(10.5, .semibold))
+                        .foregroundStyle(LinoTheme.success)
+                    Text(basis)
+                        .font(LinoType.ui(12.5))
+                        .foregroundStyle(LinoTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(LinoTheme.success.opacity(0.45)).frame(width: 2)
+                }
+            }
+            if let note = card.note, !note.isEmpty {
+                Label(note, systemImage: "note.text")
+                    .font(LinoType.ui(12.5))
+                    .foregroundStyle(LinoTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button(adoptionTitle(card)) { adopt(card) }
+                    .buttonStyle(LinoITintButtonStyle(compact: true))
+                    .disabled(isAdoptionLocked || inspiration.adoptedCardIDs.contains(card.id))
+                    .accessibilityLabel("\(adoptionTitle(card))：\(card.title)")
+                    .accessibilityHint(isAdoptionLocked ? "等待本章任务结束后采用" : "追加到本地 Bible，不会自动保存")
+            }
+        }
+    }
+
+    private func notice(icon: String, text: String, color: Color) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 18)
+            Text(text)
+                .font(LinoType.ui(12.5))
+                .foregroundStyle(LinoTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var undoBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(LinoTheme.success)
+            Text("已加入本地 Bible")
+                .font(LinoType.ui(12.5, .medium))
+                .foregroundStyle(LinoTheme.ink2)
+            Spacer()
+            Button("撤销") { undoAdoption() }
+                .font(LinoType.ui(12.5, .semibold))
+                .foregroundStyle(LinoTheme.accent)
+                .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 18)
+        .frame(minHeight: 50)
+        .background(LinoTheme.surface)
+        .overlay(alignment: .top) { Divider().overlay(LinoTheme.line) }
+    }
+
+    private var isStale: Bool {
+        !inspiration.cards.isEmpty && inspiration.isStale(comparedTo: editor.currentChapter)
+    }
+
+    private var isAdoptionLocked: Bool {
+        editor.writingPhase.isActive
+    }
+
+    private var canUndo: Bool {
+        guard let chapter = editor.currentChapter else { return false }
+        return inspiration.canUndo(chapterID: chapter.id, currentBible: chapter.userPrompt)
+    }
+
+    private func regenerate() {
+        guard let chapter = editor.currentChapter else { return }
+        inspiration.generate(for: chapter)
+    }
+
+    private func adopt(_ card: InspirationCard) {
+        guard !isAdoptionLocked, let chapter = editor.currentChapter else { return }
+        let before = chapter.userPrompt
+        let after = InspirationDraftPolicy.appending(body: card.body, to: before)
+        editor.editString(\.userPrompt, value: after)
+        inspiration.recordAdoption(card: card, chapterID: chapter.id, before: before, after: after)
+    }
+
+    private func undoAdoption() {
+        guard let chapter = editor.currentChapter,
+              let before = inspiration.consumeUndo(chapterID: chapter.id, currentBible: chapter.userPrompt) else { return }
+        editor.editString(\.userPrompt, value: before)
+    }
+
+    private func adoptionTitle(_ card: InspirationCard) -> String {
+        if inspiration.adoptedCardIDs.contains(card.id) { return "已采用" }
+        return isStale ? "仍采用" : "采用"
+    }
+
+    private func historyLabel(_ indexes: [Int]) -> String {
+        "承接第 " + indexes.map(String.init).joined(separator: "、") + " 章"
     }
 }
 

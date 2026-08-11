@@ -36,7 +36,7 @@
 
 ## 当前生产门禁
 
-- 当前源码候选为 `v1.8.3(34)`；宁波 Backend 生产版本为 `v1.8.3`，Alembic head 为 `20260809_0011`；本机 macOS 已换装 Build 34，iOS 由用户自行处理，公开发布的双端客户端仍为 `v1.8.1(32)`。
+- 当前源码与宁波 Backend 生产均为 `v1.9.0(35)`，Alembic head 为 `20260809_0011`；本机 macOS 已换装 Build 35，iOS 由用户自行处理，公开发布的双端客户端仍为 `v1.8.1(32)`。
 - 生产入口为 `https://ictw.linotsai.top`，Backend 位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787` 并由 Nginx Proxy Manager 反代。
 - 香港旧服务已 stopped + disabled；除非先停宁波服务并执行明确回退，否则禁止启动。
 - 当前归档概况、历史重提限制和下一目标以 `PROJECT_PLAN.md` 为准。

@@ -16,6 +16,7 @@ from app.db import Base, get_db, make_engine
 from app.llm.factory import (
     get_checker_client,
     get_extractor_client,
+    get_inspiration_creator_client,
     get_memory_selector_client,
     get_writer_client,
 )
@@ -51,6 +52,39 @@ class FakeSelector:
 class FakeChecker:
     def complete_json(self, **kwargs):
         return {"verdict": "passed", "issues": []}
+
+
+class FakeInspirationCreator:
+    model_name = "test-inspiration"
+    last_finish_reason = "stop"
+    last_usage = {"prompt_tokens": 5, "completion_tokens": 8, "total_tokens": 13}
+
+    def complete_json(self, **kwargs):
+        return {
+            "cards": [
+                {
+                    "title": "门外的雨",
+                    "body": "让一场迟迟不停的雨打断原计划，迫使人物在门内先作出选择。",
+                    "history_basis": None,
+                    "note": None,
+                    "source_ids": [],
+                },
+                {
+                    "title": "错误的判断",
+                    "body": "从一个看似合理却错误的判断出发，让后续行动自然偏离预期。",
+                    "history_basis": None,
+                    "note": "重点放在选择，而不是突发巧合。",
+                    "source_ids": [],
+                },
+                {
+                    "title": "留下空位",
+                    "body": "本章不急着解释核心疑问，只让一个缺席留下可感知的痕迹。",
+                    "history_basis": None,
+                    "note": None,
+                    "source_ids": [],
+                },
+            ]
+        }
 
 
 class FakeExtractor:
@@ -151,6 +185,7 @@ def client() -> Iterator[TestClient]:
     app.dependency_overrides[get_memory_selector_client] = lambda: FakeSelector()
     app.dependency_overrides[get_checker_client] = lambda: FakeChecker()
     app.dependency_overrides[get_extractor_client] = lambda: FakeExtractor()
+    app.dependency_overrides[get_inspiration_creator_client] = lambda: FakeInspirationCreator()
     with TestClient(app) as test_client:
         yield test_client
     os.remove(path)

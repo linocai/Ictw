@@ -1,90 +1,106 @@
 # ICTW PROJECT_PLAN
 
-> 本文件是唯一现行控制面：只保留当前状态、已定决策与可施工计划。已完成版本的过程记录在 `archive/plans/`；历史运维与设计资料仅供查阅，不是现行指令。
+> 唯一现行控制面。仅保留当前状态、已定决策与可施工计划；`archive/` 只保存已完成版本和历史资料，不能作为当前 Builder 指令。
 
 ## 当前状态
 
-- 当前源码候选为 `v1.8.3(34)`；宁波 Backend 已部署 `v1.8.3`，Alembic head `20260809_0011`。本机 macOS 已换装 Build 34，签名 Archive 与通用 ZIP 已生成；iOS 由用户自行打包。公开发布的双端客户端仍为 `v1.8.1(32)`。
-- 生产入口为 `https://ictw.linotsai.top`；宁波 Backend 在 `/opt/linoi/backend`，仅监听 `172.18.0.1:8787`，由同机 Nginx Proxy Manager 反代。香港旧服务保持 stopped + disabled。
-- v1.8 Extractor 关系 delta 快修已随 Backend `v1.8.3` 上线：relationship 由双参与者 Fact 推导，revision 仍只调用一次、完整结果才可原子激活。
-- 最终复审的三项上线阻断整改已完成：reopen／重启不会让已撤销的 Extractor 激活；Writer generation 覆盖实际读取的 Book／选中 Character 输入；Writer 失败恢复与 JobRun 终态同事务提交。独立 Reviewer 复验 P0/P1/P2/P3 均无 finding，宁波 Backend 生产部署与门禁验收已完成。
-- 工作树已有用户与前序施工的未提交改动；只按本计划增量施工，绝不回退、覆盖或擅自暂存。受保护的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 不在范围内。
+- 当前源码与宁波 Backend 生产均为 `v1.9.0(35)`，Alembic head `20260809_0011`；本机 macOS 已换装 Build 35，iOS 打包由用户处理；公开客户端仍为 `v1.8.1(32)`。
+- v1.8.3 的 Writer／Extractor 生命周期整改、独立 Review 和宁波生产门禁均已完成。历史结论与回滚记录：`archive/plans/PROJECT_PLAN-v1.8.3-completed.md`；生产真相与运维命令仅见仓库外 `/Users/linotsai/Lino/NB_info.md`。
+- **v1.9.0（35）灵感创造师**已完成源码施工、本地与生产门禁：后端 158 collected，146 passed／12 skipped；客户端纯逻辑、双 target Build 35 与隔离环境双端视觉验收均通过。无 migration；宁波生产已部署并显式绑定独立 Profile，本机 macOS 已换装。
+- 生产验收：内外网鉴权 health `1.9.0`、未鉴权 401、docs 200、SQLite integrity 正常／foreign keys 为空、Alembic `20260809_0011 (head)`、单实例、零重启／warning；数据仍为 3 books／68 chapters／26 characters，非终态任务、未完成 revision 与 writing chapter 均为 0。
+- 隔离验收已覆盖空 Bible／无人物、未配置、3／5 条长文、采用、陈旧提示、一次撤销，macOS 1080 抽屉与 1200 并列形态；采用后复查隔离后端，持久化 Bible 仍为空。
+- 保留全部既有未提交改动，绝不覆盖、回退或擅自暂存；不触碰未跟踪 `archive/ICTW-Local-Archive/`。受保护的 `App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme` 一律不在范围。
 
-## 架构与不可破坏规则
+## 不可破坏规则
 
-- 写作链固定为 Memory Selector → Writer → Checker → 用户接受 → Extractor；候选正文只留后端，公开 API 与双端不得暴露候选列表或全文。
-- 正文接受与归档独立；Extractor 失败不得撤销接受或重跑 Checker。v2 每 revision 只调用一次，`partial`、`failed`、`stale` 一律不进入 Selector、人物故事线或状态投影。
-- 人物选择是本章允许出现人物的上限；所有可程序校验的约束必须复检。`chapter_style`、工程/target/Bundle ID、Keychain/UserDefaults 键和本地草稿目录保持兼容。
-- 生产表结构只经 Alembic；启动不得 `create_all`。迁移/部署前先停服和备份，再验证 SQLite integrity、foreign keys、head、单实例和公网鉴权。
-- `thinking` / `effort` 继续由 capability registry 决定；非思考请求发送 `top_p=0.95`，思考请求不发送它。日志、审计、API 返回不得含 API Key、Prompt、正文或候选全文。
-- 历史重提必须以只读报告、正文哈希和用户精确章节 ID 确认；本轮绝不自动重提、重跑 Extractor 或重新生成历史章节。
+- 写作链固定为 Memory Selector → Writer → Checker → 用户接受 → Extractor。灵感创造师是只读、手动的侧挂能力，不得进入流程、JobRun、正文候选或 Extractor 生命周期。
+- 正文接受与归档独立；Extractor 每 revision 只调用一次，只有完整 v2 结果可激活；partial／failed／stale 不进 Selector、人物故事线或状态投影。
+- 人物选择是本章允许出现人物的上限。有效历史不自动授权人物；程序能校验的约束必须程序复检。
+- 历史每章只用一个有效来源：active v2 优先，否则仅 legacy eligible；不得自动历史重提、重跑 Extractor 或修改生产历史。
+- 生产表结构只经 Alembic，启动不 `create_all`；部署前停服备份并验证 SQLite integrity、foreign keys、head、单实例及公网鉴权健康。
+- `thinking`／`effort` 由 capability registry 决定；非思考统一 `top_p=0.95`。日志、审计与 API 不含 API key、persona、prompt、Bible／正文、历史片段、候选或 provider 原文。
+- 保持 target／Bundle ID／Keychain／UserDefaults／本地草稿路径及 `chapter_style` 兼容窗口；不暴露 Writer 候选正文或选择接口。
 
-## 本轮目标与非目标
+## v1.9.0（35）目标与边界
 
-**目标**：Writer 的终态提升和所有失败恢复均以数据库章节版本作最终授权，并覆盖所有实际 Writer 输入；reopen、Extractor 激活与重启恢复维持同一生命周期门禁；配置错误可预测且可被客户端展示；上游诊断仅存安全分类；新装与仍保留旧默认地址的客户端连到宁波入口；并发章节创建不再泄露 `IntegrityError/500`；删除 v1 Extractor 纠偏遗留路径并补齐可在本地运行的回归测试。
+**目标**：新增内部角色 `inspiration_creator`（“灵感创造师”）。用户手动对当前章节 Bible 求取 3–5 张实质不同的灵感卡；每张总计不超过 300 个去空白字符，结构放松为标题、自由正文、可选历史依据／备注。选择后只加入本地 Bible 草稿，默认不保存、不覆盖。
 
-**非目标**：不改公开候选策略、人物/Archive v2 的单次调用语义、生产数据、Keychain/Token、真实 Profile 内容或香港服务；不把进程内锁升级成分布式任务系统；不做自动历史修复或自动重提；不在本轮改变用户自定义后端地址；不新增 schema／Alembic（现有 generation 字段足够）。
+**读取边界**：客户端当前内存的章节标题、Bible（可以为空）、人物选择（可以为空）；服务端的世界观、已选人物固定卡／章节前投影状态，以及同书此前章节的有效历史。当前临时 snapshot 绝不能被数据库旧字段替代。
 
-## 已定技术决策
+**不做**：不调用 Memory Selector、不生成正文、不运行 Checker／Extractor、不创建 JobRun／候选／revision、不写 Chapter／Book／Character／Archive、不保留建议全文、不自动选人物或保存 Bible、不新增 UI 框架。
 
-### 1. P1 Writer 章节所有权：generation + CAS（`20260809_0011` 已存在）
+## 已定后端决策
 
-- 根因：`WriteJobRegistry` 只在当前进程判定任务是否 current；`_run_job` 提交 `draft_text/status`、拒绝分支和 `_restore_baseline` 都没有数据库条件。另一客户端在任务期间 PATCH/IMPORT 后，旧任务仍可能提升候选或把旧 baseline 写回。
-- `chapters.write_generation` 与 `job_runs.chapter_write_generation` 已由 `20260809_0011` 建立；本整改不再创建 migration、不改 head。新 Writer Job 在 JobRun 与 `WriteJob` 记录当前 generation，旧 JobRun 的 `NULL` 继续使用时间戳兼容逻辑。
-- 建立共享的 Writer-input invalidation service，供 chapters、books、characters router 调用，禁止复制章节 router 私有逻辑。它在调用方事务内递增**受影响章节**的 generation、将 `writing` 恢复为与当前正文一致的 `draft/draft_ready`，并条件化终止这些章节的非终态 `kind=write` JobRun 为 `cancelled/chapter_changed`；commit 后仅作 best-effort 本进程 registry cancel，正确性不依赖它。
-- 精确影响范围：Chapter PATCH／IMPORT／人物链接替换等既有 chapter 输入变更仍作用于本章；`Book.world_setting` 变更作用于该书所有章节；`Character.name`、`role`、`fixed_profile`、`dynamic_fields` 的变更和删除只作用于仍链接该人物的章节。Book 标题、未被链接人物的创建/导入、人物事件和 Archive-only 状态不取消 Writer。服务只终止受影响的非终态 Writer，不终止 Extractor；Extractor 有独立的章节生命周期门禁。
-- worker 在构造 Writer prompt 前及每个可见终态前复核 generation；Writer 成功提升、Checker 拒绝、确定性失败、LLM/异常失败和 baseline 恢复均以 `UPDATE chapters ... WHERE id=:id AND write_generation=:expected` 或等价 CAS 为最终授权。CAS 未命中时绝不改章节文本/状态、绝不回写 baseline，只保留 `chapter_changed` 终态并结束本地线程。
-- baseline CAS 与对应 JobRun terminal（`failed`/`cancelled`、error code/context、finished_at）必须在**同一 Session transaction**提交。删除“`_restore_baseline()` 先 commit、再 `record_job_phase()`”的窗口；若 JobRun 更新不能写入则连同 baseline 回滚，不能留下无终态的可见恢复。
-- `/job` 对带 generation 的 write 终态以 `job_runs.chapter_write_generation == chapters.write_generation` 计算 `outcome_current`；旧历史 JobRun 继续兼容原有时间戳规则。API 不暴露 generation，旧客户端 wire 不变。
-- `cancel_write`、replace、重开、接受与 Archive 路径须复核：用户编辑不能遗留 `writing`，但 Archive 接受后的 `finalized` 和 v2 原子激活语义不变。
+### 1. 同步、无持久化接口
 
-### 2. P1 Extractor 生命周期：reopen、激活和重启同一门禁（无 migration）
+- 新增鉴权 `POST /chapters/{chapter_id}/inspirations`；请求为 `{title,bible,selected_character_ids}`，响应为 `{cards:[...]}`。它是单次同步、有界 LLM 请求，不入队、不轮询、不提供结果读取或服务端取消端点；格式不合格最多一次修复调用。
+- `title`、`bible` 允许为空字符串，`selected_character_ids` 允许空数组。服务端只校验请求类型、ID 去重及所选人物属于当前书；不以空 Bible／空人物、Writer 或 Extractor 活动阻断请求，也不触发、取消、失效任何 SOP job。
+- 业务数据只读；唯一允许副作用是现有 `LLMCallAudit` 记录 `inspiration_creator` 的 chapter ID、模型、耗时、token、安全 finish／error 分类及 `job_id=NULL`。不新增表、Chapter 字段、JobRun kind 或 Alembic migration。
+- 稳定错误：章／人物 ID 无效为 404／422，未配置 profile 复用 `LLMConfigurationError` 的 409（`details.agent_role=inspiration_creator`），上游／输出错误为安全 `detail={code,message,details}`。保留白名单 http status／finish／block／upstream 分类，不回传 provider 原文、建议或输入。
 
-- 根因：`reopen_chapter()` 仅使 active archive 失效，没有取消 live extract、终态化其 JobRun 或使 pending/extract revision 失效；`activate_archive_revision()` 只核对 fingerprint；启动恢复会把任意 interrupted extract 的章节改回 `finalized`。因此同 fingerprint 的旧 Extractor 可在 reopen 后写入 facts/deltas 并重新 active。
-- 增加 archive lifecycle helper（由 chapters router、worker 和恢复逻辑共享）：reopen 在同一事务条件化取消本章所有非终态 `kind=extract` JobRun，令其关联且仍为 `pending/extracting` 的 revision 为 `stale`（非 active、静态 `archive_reopened` 原因），清理 chapter archive head/status，再在 commit 后 best-effort cancel 本进程 extractor。任何旧 worker 释放后只能观察到 cancelled/stale，不得重写正文接受状态。
-- `activate_archive_revision()` 将 chapter 仍为 `finalized`、revision 仍为本 job 的 `extracting`、input fingerprint 仍匹配作为同一事务的条件化最终激活门禁。若任一条件不符，回滚待写 facts/deltas，revision 保持/转换为 `stale`，不激活、不重放投影；这不增加第二次模型调用，也不撤销已接受正文。
-- `recover_interrupted_chapters()` 按 job kind 分支：Writer 沿 generation 兼容的恢复路径处理；v2 extract 只在章节仍为 `finalized` 时将未完成 revision 标为 `failed/interrupted` 并保留 finalized 正文，章节已 reopen/非 finalized 时将 run/revision 标为 `cancelled`/`stale` 并保持当前用户状态。历史无 revision 的旧 `extracting` 记录按旧安全恢复到 draft 状态，绝不无条件“恢复 finalized”。
+### 2. 独立角色、上下文与安全日志
 
-### 3. P2 配置、上游错误与客户端入口
+- 在 `DEFAULT_PERSONAS`、`PROGRAM_PROTOCOLS`、`AGENT_ROLES`、LLM factory、测试依赖和设置页加入 `inspiration_creator`。seed 新增独立 persona／binding，默认不绑定 Writer profile；模型、thinking／effort／temperature 均由该 binding 独立配置，不套用 Extractor 的关闭 thinking 特例。
+- 新建确定性 `inspiration_context`，不调用 `MemorySelectorAgent`：只读取同书、此前、finalized 章节的有效 archive 记忆，active v2 优先，其他仅 legacy eligible。不得读取 failed／partial／stale revision、历史正文或再次调用 Extractor。
+- 上下文按已选人物命中、当前 title／Bible 关键词、章节临近度和稳定 ID 排序并设固定预算；Bible／人物均空时退化为章节临近度和稳定 ID，仍可生成。请求人物为空时只提供空白名单和无人物状态，不暗中扩大到全书人物。
+- Prompt 把世界观、人物卡／状态、历史都标为只读材料；历史不能授权人物。建议标题／正文／备注不得使用未选的已知人物；若方向需要新人物，只能在可选备注标明“可能需要新增人物”。
+- 成功和失败仅审计／日志 request 或 chapter 标识、尝试数、模型、耗时、卡片数及安全分类；不记录 persona、prompt、Bible、世界观、人物状态、历史片段、卡片文本或 provider message。审计写入失败不影响主结果。
 
-- `build_llm_client` 改抛带固定 `code`、`agent_role` 的 `LLMConfigurationError`，覆盖未绑定 profile、外键清空后的 profile 缺失、Extractor 不支持关闭 thinking 与 capability 不兼容。FastAPI 统一转换为 HTTP `409`：`detail={code,message,details:{agent_role}}`；不把 `RuntimeError` 或配置细节发给客户端。现有 `APIClient.structuredError` 可兼容该形状。
-- 上游响应正文一律不进入 `LLMError`、JobRun、`LLMCallAudit`、日志或 API 返回。删除对 provider `error.message` 的读取；`upstream_reason` 只允许固定映射出的机器分类，未知为 `None`。`http_status`、本地 `error_code`、可信的白名单 `finish_reason` / `block_reason` 继续保留，且同样先规范化为安全枚举。
-- `AppSession.bootstrap` 使用宁波 URL 作为新默认值；若 UserDefaults 缺失或值**精确等于**旧产品默认地址，迁移并持久化为宁波 URL。任何其他已保存地址、Token、Keychain 键和 DEBUG 环境变量优先级均不改。将端点迁移规则抽成 Foundation-only、可测试的纯逻辑，避免用 UI 测试验证持久化分支。
-- `CLAUDE.md` 收敛为兼容入口：明确以 `AGENTS.md`、`PROJECT_PLAN.md` 和仓库外 `/Users/linotsai/Lino/NB_info.md` 为准，不再指向香港资料或旧部署私钥路径，不复制密钥/运维命令。
+### 3. 卡片协议与程序复检
 
-### 4. P3 并发、死代码与测试缺口
+- 每张公开卡是 `title`、新建议 `body`、可选 `history_basis`、可选 `note`、服务器映射的 `history_chapter_indexes`。这是宽松表达，不增加标题硬上限、固定剧情栏、类别栏或字数配额；唯一内容上限是四个文本字段合计去空白字符 ≤300。
+- `body` 是默认可插入的新建议；`history_basis` 只在有本轮历史 source IDs 时存在，UI 显示“承接既有记录”；`note` 可给风险、新人物或自由提示。内部 source IDs 不返回客户端。
+- 后端复检：3–5 条、title／body 非空、总字符数 ≤300、history basis 与有效 source IDs 成对、source 仅来自本轮上下文、建议字段不含未选已知人物、归一化标题／正文无相同或高相似重复。两次不合格后稳定报 `inspiration_invalid_response`，不落任何卡片文本。
 
-- 章节编号不新增 schema：保留现有 `uq_chapters_book_index` 作为最终唯一性。创建路由对短事务中的唯一冲突/SQLite busy 做有界重试；每次 rollback 后重新计算 `max(index)+1` 和重建待插入对象。耗尽后返回安全的结构化 `409 chapter_index_busy`，不能泄露 `IntegrityError/500`，不影响已有章节。不得为此 batch rebuild 或删除唯一约束。
-- 删除 `write_jobs.py` 不可达的 `_run_extractor_with_correction`、三次 correction 常量/提示及其唯一调用的 legacy agent/service helper；保留 v2 单次 `extract_v2` 路径、Archive v2 验证和现有历史只读工具。删除前后用 `rg` 确认没有生产调用。
-- 轻量客户端测试扩展为可编译的 Foundation 级测试：端点默认/精确旧值迁移/自定义地址保留，API URL、Bearer 与结构化配置错误解码，以及从临时轮询失败恢复、终态停止和陈旧终态不覆盖本地编辑。必要时把 Store 的轮询决策提炼为无 SwiftUI 副作用的协作者，`LinoStores` 只调用该协作者。
+## 已定前端体验
+
+### 1. 共享状态、陈旧结果、采用与撤销
+
+- 新建共享 `InspirationCreatorStore`，与 `ChapterEditorStore` 和 `writingPhase` 分离。每次冻结 chapter／title／Bible／排序后人物选择快照和 request token；切章或显式“停止本次”仅取消本地等待、丢弃迟到响应，服务端不需要配合取消。
+- 用户可在请求中继续编辑。返回时快照变化就显示“基于先前草稿”，首要操作“按最新内容重想”；这两个用户主动操作以及“换一批”直接替换当前临时结果，不再弹确认。一次仅一个在途请求。
+- SOP 正在写作／提取时仍可生成和浏览；任何会改 Bible 的“采用”按钮改为不可用并说明“等待本章可编辑后采用”。不得为了采用停止、取消或修改 Writer／Extractor，也不得保存或远端 PATCH。
+- 采用只使用 `body`：空 Bible 直接填入，非空 Bible 以两个换行追加；经现有 `editString` 标记未保存并使 Checker 失效。记录仅内存的 before／after，当前 chapter 的 Bible 仍完全等于 after 时给一次“撤销插入”；后续手改、再采用、切章或重载即失效。
+- 结果不进入 ChapterDraftCache／UserDefaults／数据库；关闭应用后消失。无人物与空 Bible 是文案提示，绝不是按钮禁用或网络拦截条件。
+
+### 2. iOS：Bible 就近入口 + 可收起 sheet
+
+- 在“本章剧情 BIBLE” section header trailing 加轻量 `sparkles` “找灵感”。不放全局工具栏、不加入流程卡、不把结果常驻塞进 Bible 输入卡。
+- 点击打开可下拉的 large sheet 并以当前 snapshot 立即生成；loading 明示可收起后继续编辑，收起不取消，显式“停止本次”才取消本地等待。空 Bible／无人时显示“可从空白开始发想”的提示并照常生成。
+- 结果用单层纵向 ScrollView + divider rows：标题、新建议正文、可选“承接既有记录”／备注、采用状态和撤销。禁止横向轮播、卡片套卡片；300 字长文本必须完整换行，控件不能被挤掉。
+- 分别实现 loading、空 Bible、无人、模型未配置、上游／格式错误、陈旧结果、换一批、3／5 条、采用锁定、撤销、VoiceOver 与大字体状态。
+
+### 3. macOS：右侧辅助栏，不遮挡创作
+
+- `MacRightPanel` 新增第四个“灵感” tab。Bible 附近的小入口经 `MacWorkspaceView` 切 tab 并打开现有右栏／drawer；中央 Bible 保持可编辑，建议在旁对照，不用 modal。
+- 灵感 tab 复用同一 Store、语义和单层 divider rows；无章节、空 Bible、无人、loading、error、陈旧及 SOP 锁定采用均有可行动状态，不能留下空白死端。
+- 保持现有布局：≥1100 inline；当前 `minWidth=1080`，视觉验证 1080–1099 的 drawer 与 ≥1100 的 inline。保留 <800 抽屉互斥代码，不为本功能改最小窗口；四个分段标签不得溢出。
 
 ## 施工阶段、文件范围与验收
 
-1. **复审 P1：先封住 Extractor 生命周期（已完成本地验收）**
-   - 文件：`Backend/app/routers/chapters.py`、`Backend/app/services/archive_v2.py`、`Backend/app/services/write_jobs.py`、`Backend/app/main.py`、`Backend/tests/test_api.py`、`Backend/tests/test_v1_1_features.py`、`Backend/tests/test_v1_8_archive.py`。
-   - 实现 reopen 对 live/跨进程 extract 的条件化取消、revision stale、activation 的 finalized+extracting+fingerprint CAS，以及不改写用户状态的按-kind 启动恢复。不得修改 Extractor Prompt、次数或事实账本表。
-   - 测试：accept→阻塞 Extractor→reopen→释放后，chapter 仍 `draft_ready`、JobRun/revision 为 cancelled/stale、零 active facts/deltas；激活与 reopen 两种提交先后都不留下 active revision；模拟重启时 finalized 章保留 finalized 且 revision failed，reopen 章保持 draft_ready 且 revision stale；旧无 revision 的 extracting run 仍安全恢复。
+1. **后端纯读边界先行（已完成）**
+   - 新增 `Backend/app/agents/inspiration_creator.py` 与必要纯 context service；修改 `personas.py`、`llm/factory.py`、`schemas/chapter.py`、`routers/chapters.py`、必要审计接线、`main.py` 版本和测试 fixture。禁止修改 entities、write job、archive service、migration。
+   - 后端测试新增 `test_v1_9_inspiration.py`：空／非空 snapshot 均可用且优先于持久 Chapter；空人物可用；有效历史单源与空条件降级排序；人物 ID 所属关系；3–5／300／source／近重复；一次格式修复；配置／上游脱敏；成功和失败均零 JobRun／candidate／revision／业务写入。
 
-2. **复审 P1/P3：共享 Writer 输入失效与单事务失败终态（已完成本地验收）**
-   - 文件：新增 `Backend/app/services/write_ownership.py`，以及 `Backend/app/routers/chapters.py`、`Backend/app/routers/books.py`、`Backend/app/routers/characters.py`、`Backend/app/services/write_jobs.py`、`Backend/tests/test_api.py`、`Backend/tests/test_v1_pipeline.py`。`Backend/app/models/entities.py`、`Backend/alembic/versions/20260809_0011_writer_generation.py` 仅只读验证，禁止为本项重做 migration。
-   - 将现有 `_cancel_stale_write_jobs` 收口到 shared service，按本计划定义的 Book/Character 精确影响集合终止非终态 write；在 worker 的输入边界与最终提升均查 generation。将 `_restore_baseline` 改为内部 transaction helper，CAS baseline 和 `_apply_job_phase` 一次提交，涵盖确定性失败、`LLMError`、一般异常、cancel/generation mismatch。
-   - 测试：阻塞 Writer/Checker 时分别 PATCH `world_setting`、已选角色的 name/role/fixed_profile/dynamic_fields、删除已选角色；旧 job 必须 `chapter_changed`、`outcome_current=false`、不得提升，未关联章节 job 不受影响。注入 JobRun terminal 写入失败，断言 baseline 也回滚；所有失败类型若成功恢复，则必有同事务 terminal row。既有 Chapter PATCH/IMPORT/links/cancel 正常回归。
+2. **共享客户端状态与双端接入（已完成）**
+   - 修改 `App/LinoI/LinoModels.swift`、`LinoAPI.swift`、`LinoStores.swift`、`LinoIApp.swift`、`LinoIMacApp.swift`；新增双 target 编译的 `InspirationCreator.swift`。iOS 改 `ChapterEditorViews.swift`；macOS 改 `MacChapterEditor.swift`、`MacWorkspaceView.swift`、`MacRightPanel.swift` 并新增 `MacInspirationTab.swift`。
+   - 双端设置改 `SettingsViews.swift`、`MacAgentTab.swift` 和角色中文名，把“四个现役 Agent”更新为“五个”；新增源只更新 `App/LinoI.xcodeproj/project.pbxproj` 的 source membership，绝不改 scheme。
+   - Foundation client-state tests 覆盖 response/API、空 snapshot 可请求、快照陈旧、client-only cancel、append、一次撤销和手改失效；SwiftUI 共享改动默认双 target 构建。
 
-3. **既有完成项回归与版本一致性（已完成本地验收）**
-   - 重新验证已完成的配置脱敏、默认 URL 迁移、编号重试和 dead correction 删除；不扩大客户端/公开 API 范围。`v1.8.3(34)`、Alembic head `20260809_0011` 保持不变。
+3. **版本、视觉与发布（已完成）**
+   - 全目标／配置 `MARKETING_VERSION=1.9.0`、`CURRENT_PROJECT_VERSION=35`；Backend health/version `1.9.0`。无 migration，Alembic head 保持 `20260809_0011`。
+   - 自动门禁：`cd Backend && .venv/bin/python -m pytest -q`、`.venv/bin/python -m alembic heads`、`cd .. && App/Tests/run_client_state_tests.sh`、`git diff --check`、iOS/macOS 串行 Debug build。
+   - 视觉验收：iOS 浅／深色、大字体、空 Bible／无人、sheet 收起继续编辑、长文本、陈旧与采用锁定；macOS 四 tab、1080–1099 drawer、≥1100 inline、长文本、键鼠和辅助功能。
+   - 发布前已在测试／本地验证独立 binding；生产已把灵感创造师独立绑定到 `Deepseek / deepseek-v4-pro`，关闭思考、temperature `0.8`，首次点击不会落到未配置状态。
+   - 已按 `NB_info.md` 完成停服、备份、integrity／foreign keys／head、单实例重启和内外网鉴权 health `1.9.0`；生产包、备份哈希与验收事实已同步到仓库外运维记录。回滚只回退代码／客户端，不降 DB。
 
-4. **全量门禁与交付准备（本地验收与独立复验均已完成）**
-   - 依次运行 `cd Backend && .venv/bin/python -m pytest -q`、`.venv/bin/python -m alembic heads`、`App/Tests/run_client_state_tests.sh`、`git diff --check`，并对源码/测试/计划做密钥与旧域名定向扫描。
-   - 共享客户端改动后串行构建 iOS `LinoI` 与 macOS `LinoIMac` Debug（不同 DerivedData 或串行）；不得改受保护 scheme。记录实际通过数、head 与版本一致性。
+## 完成定义、风险与下一步
 
-## 生产部署、回滚与历史任务限制
+- 完成 = 灵感建议从业务链彻底隔离；空白 Bible／无人也能开始；仅有效历史进入；3–5 条、≤300、角色和来源边界可程序证明；编辑不会被结果覆盖；iOS/macOS 在各自容器清晰可用；自动、构建、视觉和生产门禁都有记录。
+- 最大风险是把“辅助灵感”做成隐形写作任务，或让异步结果覆盖新的 Bible；先用无业务写入后端测试、snapshot／append／undo 规则封边界，再施工 UI。
+- 下一动作：iOS 打包与安装由用户自行完成；项目暂无未完成施工项，下一版本目标由后续需求确定。
 
-- 2026-08-09 14:39–14:43 CST 已按 `NB_info.md` 完成宁波部署：部署前非终态 Writer/Extractor、pending/extracting revision 与 writing chapter 均为 0；停服备份位于 `/opt/linoi/backups/20260809-143950-v1.8.3-build34`，发布包位于 `/opt/linoi/releases/ictw-backend-v1.8.3-build34.tar.gz`，SHA-256 为 `9d132445aab87fc083ed78a8a9dade69ce9e0a8365a95bb08dc8e545040cee72`。单实例迁移到 `20260809_0011` 后，SQLite integrity 正常、foreign keys 为空、对象计数仍为 3 books／68 chapters／26 characters；内外网鉴权健康均返回 `1.8.3`，公网未鉴权为 401，TLS 验证通过，单 uvicorn 且 `NRestarts=0`、启动 warning 为空。
-- macOS `v1.8.3(34)` Apple Development 签名 Release Archive、Hardened Runtime 与 `x86_64 + arm64` 通用 ZIP 已验收；本机 `/Applications/ICTW.app` 已换装并真实启动。产物位于 `/Users/linotsai/Downloads/ICTW-v1.8.3-build34`，ZIP SHA-256 为 `2965c0992dd58dd7911f9a91dec09f7aa2741972765788a63e498d009a17d525`；旧 App 备份为 `/tmp/ictw-app-backup-v183-build34.MXBOA1/ICTW-v1.8.1-build32.app`。iOS 由用户自行处理，本轮未打包、安装或上传。
-- 本整改不新增 migration；既有 `0011` 是向后兼容加列。若应用回滚，优先回退代码并保留列；只有在无新写入且已验证备份时才讨论 DB 回滚/恢复，绝不让两台服务器同时写入。
-- 不自动重跑 production JobRun、重写正文、激活 partial/stale revision 或重提历史章节。部署时若发现旧 `writing`/非终态任务，先人工记录精确 ID 和状态并由用户决定，不将其视为可重试队列；reopen 后的 extract 一律只能保持取消/失效，不能由恢复逻辑重新接受正文。
+## 历史索引
 
-## 完成定义与历史索引
-
-- 完成 = reopen/重启/激活三方竞态不能让撤销的 Extractor active，且正文接受与归档独立；所有 Writer 实际输入变更与所有失败恢复均有 generation/CAS、同事务 JobRun terminal 证明；P2 配置/错误/默认地址保持固定、无敏感回显；P3 无 500 编号竞态、无不可达 correction 路径、客户端关键状态可在本地回归；全量后端、客户端脚本、双端构建、Alembic `0011`、diff 检查、独立复审、宁波 Backend 生产门禁和 macOS Build 34 换装／ZIP 均已通过。iOS Build 34 与公开发布由用户另行处理。
-- v1.8.1 完整施工、历史重提和生产验收：`archive/plans/PROJECT_PLAN-v1.8.1-completed.md`；清理前规范与发布流水：`archive/operations/AGENTS-through-2026-08-08.md`；其他历史计划、设计、运维与已解决 learning 位于 `archive/`。
+- v1.8.3 完成记录：`archive/plans/PROJECT_PLAN-v1.8.3-completed.md`。
+- v1.8.1 完整施工与生产验收：`archive/plans/PROJECT_PLAN-v1.8.1-completed.md`。
+- 清理前规范与发布流水：`archive/operations/AGENTS-through-2026-08-08.md`。

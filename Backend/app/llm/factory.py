@@ -64,3 +64,7 @@ def get_checker_client(db: Session = Depends(get_db)):
 
 def get_extractor_client(db: Session = Depends(get_db)):
     return build_llm_client(db, "extractor")
+
+
+def get_inspiration_creator_client(db: Session = Depends(get_db)):
+    return build_llm_client(db, "inspiration_creator")

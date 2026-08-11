@@ -9,13 +9,13 @@ struct MacAgentTab: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @State private var showingNewProfile = false
 
-    private let roles = ["memory_selector", "writer", "checker", "extractor"]
+    private let roles = ["memory_selector", "writer", "checker", "extractor", "inspiration_creator"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 LinoISectionLabel("Agent / 模型")
-                Text("四个现役 Agent 可分别绑定模型、可编辑人格与推理参数。")
+                Text("五个现役 Agent 可分别绑定模型、可编辑人格与推理参数。")
                     .font(.system(size: 12))
                     .foregroundStyle(LinoTheme.muted)
             }

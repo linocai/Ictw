@@ -60,7 +60,7 @@ def test_selector_and_writer_append_program_protocols_at_runtime() -> None:
     assert writer_llm.system == f"可编辑 Writer 人格\n\n{PROGRAM_PROTOCOLS['writer']}"
 
 
-def test_settings_exposes_four_active_roles_and_protects_protocol(client: TestClient, auth_headers: dict[str, str]) -> None:
+def test_settings_exposes_active_roles_and_protects_protocol(client: TestClient, auth_headers: dict[str, str]) -> None:
     response = client.get("/api/v1/agent-personas", headers=auth_headers)
     assert response.status_code == 200
     personas = response.json()

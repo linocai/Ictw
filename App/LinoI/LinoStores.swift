@@ -1174,6 +1174,115 @@ final class ChapterEditorStore: ObservableObject {
 }
 
 @MainActor
+final class InspirationCreatorStore: ObservableObject {
+    @Published private(set) var activeChapterID: String?
+    @Published private(set) var snapshot: InspirationSnapshot?
+    @Published private(set) var cards: [InspirationCard] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var errorMessage: String?
+    @Published private(set) var adoptedCardIDs: Set<String> = []
+
+    private let session: AppSession
+    private var requestTask: Task<Void, Never>?
+    private var requestToken = UUID()
+    private var undo: InspirationUndo?
+
+    init(session: AppSession) {
+        self.session = session
+    }
+
+    var hasVisibleState: Bool {
+        isLoading || !cards.isEmpty || errorMessage != nil
+    }
+
+    func activate(_ chapter: Chapter) {
+        clearIfChapterChanged(to: chapter.id)
+        guard !hasVisibleState else { return }
+        generate(for: chapter)
+    }
+
+    func generate(for chapter: Chapter) {
+        clearIfChapterChanged(to: chapter.id)
+        requestTask?.cancel()
+        let frozen = InspirationSnapshot(chapter)
+        let token = UUID()
+        requestToken = token
+        snapshot = frozen
+        cards = []
+        adoptedCardIDs = []
+        errorMessage = nil
+        isLoading = true
+        let payload = InspirationRequestPayload(
+            title: frozen.title,
+            bible: frozen.bible,
+            selectedCharacterIds: frozen.selectedCharacterIDs
+        )
+        requestTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let response: InspirationResponse = try await session.api.request(
+                    "/chapters/\(frozen.chapterID)/inspirations",
+                    method: "POST",
+                    body: payload
+                )
+                guard !Task.isCancelled, requestToken == token, activeChapterID == frozen.chapterID else { return }
+                cards = response.cards
+                isLoading = false
+            } catch {
+                guard !Task.isCancelled, requestToken == token, activeChapterID == frozen.chapterID else { return }
+                errorMessage = InspirationErrorCopy.message(for: error)
+                isLoading = false
+            }
+        }
+    }
+
+    func stop() {
+        requestToken = UUID()
+        requestTask?.cancel()
+        requestTask = nil
+        isLoading = false
+        cards = []
+        errorMessage = nil
+        snapshot = nil
+        adoptedCardIDs = []
+    }
+
+    func clearIfChapterChanged(to chapterID: String?) {
+        guard activeChapterID != chapterID else { return }
+        requestToken = UUID()
+        requestTask?.cancel()
+        requestTask = nil
+        activeChapterID = chapterID
+        snapshot = nil
+        cards = []
+        isLoading = false
+        errorMessage = nil
+        adoptedCardIDs = []
+        undo = nil
+    }
+
+    func isStale(comparedTo chapter: Chapter?) -> Bool {
+        InspirationDraftPolicy.isStale(snapshot: snapshot, current: chapter)
+    }
+
+    func recordAdoption(card: InspirationCard, chapterID: String, before: String, after: String) {
+        undo = InspirationUndo(chapterID: chapterID, before: before, after: after)
+        adoptedCardIDs.insert(card.id)
+    }
+
+    func canUndo(chapterID: String, currentBible: String) -> Bool {
+        undo?.canApply(chapterID: chapterID, currentBible: currentBible) == true
+    }
+
+    func consumeUndo(chapterID: String, currentBible: String) -> String? {
+        guard let undo, undo.canApply(chapterID: chapterID, currentBible: currentBible) else { return nil }
+        self.undo = nil
+        adoptedCardIDs.removeAll()
+        return undo.before
+    }
+}
+
+@MainActor
 final class AgentSettingsStore: ObservableObject {
     @Published private(set) var personas: [AgentPersona] = []
     @Published private(set) var profiles: [LLMProfile] = []

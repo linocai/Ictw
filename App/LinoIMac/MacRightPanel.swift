@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 右栏：`LinoMacSegmented` 三 tab = 角色 / 书设定 / Agent，内容在 `ScrollView`
+/// 右栏：`LinoMacSegmented` 四 tab = 角色 / 书设定 / 灵感 / Agent，内容在 `ScrollView`
 /// 内切换，`.linoSidebarGlass`。功能对等不靠 ⌘, 兜底——导出在书设定 tab、模型/
 /// 人格在 Agent tab 全部就位。
 struct MacRightPanel: View {
@@ -17,6 +17,7 @@ struct MacRightPanel: View {
                     switch tab {
                     case .characters: MacCharacterTab()
                     case .book: MacBookSettingsTab()
+                    case .inspiration: MacInspirationTab()
                     case .agent: MacAgentTab()
                     }
                 }
@@ -46,12 +47,13 @@ struct MacRightPanel: View {
 }
 
 enum MacRightTab: String, CaseIterable, Identifiable {
-    case characters, book, agent
+    case characters, book, inspiration, agent
     var id: String { rawValue }
     var label: String {
         switch self {
         case .characters: return "角色"
         case .book: return "书设定"
+        case .inspiration: return "灵感"
         case .agent: return "Agent"
         }
     }

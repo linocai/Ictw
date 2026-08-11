@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.common import ORMModel
 
@@ -122,6 +122,26 @@ class ChapterRead(ORMModel):
 
 class WriteRequest(BaseModel):
     replace_draft: bool = False
+
+
+class InspirationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = ""
+    bible: str = ""
+    selected_character_ids: list[str] = Field(default_factory=list)
+
+
+class InspirationCardRead(BaseModel):
+    title: str
+    body: str
+    history_basis: str | None = None
+    note: str | None = None
+    history_chapter_indexes: list[int] = Field(default_factory=list)
+
+
+class InspirationResponse(BaseModel):
+    cards: list[InspirationCardRead]
 
 
 class CheckerAcceptRequest(BaseModel):

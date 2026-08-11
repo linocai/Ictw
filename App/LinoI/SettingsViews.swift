@@ -5,7 +5,7 @@ struct LinoIAgentSettingsPane: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @State private var showingNewProfile = false
 
-    private let roles = ["memory_selector", "writer", "checker", "extractor"]
+    private let roles = ["memory_selector", "writer", "checker", "extractor", "inspiration_creator"]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,7 +13,7 @@ struct LinoIAgentSettingsPane: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    section("四个现役 AGENT") {
+                    section("五个现役 AGENT") {
                         VStack(spacing: 0) {
                             ForEach(Array(roles.enumerated()), id: \.element) { offset, role in
                                 NavigationLink {

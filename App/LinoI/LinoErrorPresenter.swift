@@ -187,6 +187,7 @@ enum LinoErrorPresenter {
         case "checker": return "Bible 检查"
         case "reviser": return "旧版任务记录"
         case "extractor": return "提取归档"
+        case "inspiration_creator": return "灵感创造师"
         default: return "App↔后端"
         }
     }

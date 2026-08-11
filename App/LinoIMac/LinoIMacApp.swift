@@ -22,6 +22,7 @@ struct LinoIMacApp: App {
     @StateObject private var workspaceStore: WorkspaceStore
     @StateObject private var charactersStore: CharactersStore
     @StateObject private var chapterEditorStore: ChapterEditorStore
+    @StateObject private var inspirationCreatorStore: InspirationCreatorStore
     @StateObject private var agentSettingsStore: AgentSettingsStore
     @StateObject private var commandBus = MacCommandBus()
 
@@ -34,6 +35,7 @@ struct LinoIMacApp: App {
         _workspaceStore = StateObject(wrappedValue: WorkspaceStore(session: session))
         _charactersStore = StateObject(wrappedValue: CharactersStore(session: session))
         _chapterEditorStore = StateObject(wrappedValue: ChapterEditorStore(session: session))
+        _inspirationCreatorStore = StateObject(wrappedValue: InspirationCreatorStore(session: session))
         _agentSettingsStore = StateObject(wrappedValue: AgentSettingsStore(session: session))
     }
 
@@ -46,6 +48,7 @@ struct LinoIMacApp: App {
                 .environmentObject(workspaceStore)
                 .environmentObject(charactersStore)
                 .environmentObject(chapterEditorStore)
+                .environmentObject(inspirationCreatorStore)
                 .environmentObject(agentSettingsStore)
                 .environmentObject(commandBus)
                 .frame(minWidth: 1080, minHeight: 720)

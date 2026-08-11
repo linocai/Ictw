@@ -8,6 +8,7 @@ struct LinoIApp: App {
     @StateObject private var workspaceStore: WorkspaceStore
     @StateObject private var charactersStore: CharactersStore
     @StateObject private var chapterEditorStore: ChapterEditorStore
+    @StateObject private var inspirationCreatorStore: InspirationCreatorStore
     @StateObject private var agentSettingsStore: AgentSettingsStore
 
     init() {
@@ -19,6 +20,7 @@ struct LinoIApp: App {
         _workspaceStore = StateObject(wrappedValue: WorkspaceStore(session: session))
         _charactersStore = StateObject(wrappedValue: CharactersStore(session: session))
         _chapterEditorStore = StateObject(wrappedValue: ChapterEditorStore(session: session))
+        _inspirationCreatorStore = StateObject(wrappedValue: InspirationCreatorStore(session: session))
         _agentSettingsStore = StateObject(wrappedValue: AgentSettingsStore(session: session))
     }
 
@@ -31,6 +33,7 @@ struct LinoIApp: App {
                 .environmentObject(workspaceStore)
                 .environmentObject(charactersStore)
                 .environmentObject(chapterEditorStore)
+                .environmentObject(inspirationCreatorStore)
                 .environmentObject(agentSettingsStore)
                 .tint(LinoTheme.accent)
                 .task {
