@@ -764,3 +764,39 @@ workspace gate exited 1 with no output; split diagnostics showed all secret patt
 
 - **Resolved**: 2026-08-11T00:00:00+08:00
 - **Notes**: 拆分验证确认三个密钥模式均为 0，后续门禁将无匹配视为成功。
+
+## [ERR-20260811-024] zsh-readonly-status-variable
+
+**Logged**: 2026-08-11T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+推送后的最终只读收口脚本把 `status` 用作 zsh 变量名，而该名称为只读特殊参数，导致脚本提前退出。
+
+### Error
+
+```
+zsh: read-only variable: status
+```
+
+### Context
+
+- 操作：核对本地／远端提交、工作区、macOS 包和生产健康。
+- 影响：临时构建目录已先移入废纸篓；脚本随后在本地变量赋值处停止，未执行任何新的生产修改。
+
+### Suggested Fix
+
+zsh 脚本避免 `status` 等特殊参数名，使用任务专属变量名如 `worktree_state`。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-11T00:00:00+08:00
+- **Notes**: 改用 `worktree_state` 后重跑最终只读核验。
