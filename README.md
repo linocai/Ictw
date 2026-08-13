@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前源码、宁波 Backend 生产与本机 macOS 已安装版均为 `1.9.2(39)`，Alembic head 为 `20260809_0011`；iOS 由用户自行处理，当前公开发布的双端客户端仍为 [`1.8.1(32)`](https://github.com/linocai/Ictw/releases/tag/v1.8.1)。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前源码、Backend 生产与本机 macOS 已安装版均为 `1.9.2(39)`，Alembic head 为 `20260809_0011`；iOS 由用户自行处理，当前公开发布的双端客户端仍为 `1.8.1(32)`。写作流程为：
 
 ```text
 Memory Selector → Writer → Checker → 用户接受 → Extractor
@@ -44,7 +44,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 cp .env.example .env
 .venv/bin/python -m alembic upgrade head
-.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8787 --reload
+.venv/bin/python -m uvicorn app.main:app --host localhost --port 8787 --reload
 ```
 
 必须在 `.env` 中设置高强度的 `APP_TOKEN` 与 `KEK_SECRET`。`.env`、SQLite 数据库和部署密钥均被 `.gitignore` 排除。
@@ -96,4 +96,4 @@ App/Tests/run_client_state_tests.sh
 5. 启动服务并检查 `/api/v1/health`。
 6. 完成 Memory Selector、Writer、Checker、Extractor 烟测。
 
-当前公网入口为 `https://ictw.linotsai.top`。生产服务器配置、`.env`、SQLite 数据、SSH 凭证和发布二进制不进入仓库；当前宁波生产环境的完整运维事实记录在仓库外的 `/Users/linotsai/Lino/NB_info.md`，`hk_info.md` 仅保留香港旧环境历史。
+生产入口、服务器位置、网络地址及完整运维拓扑不在公开文档中披露。生产服务器配置、`.env`、SQLite 数据、SSH 凭证和发布二进制均不进入仓库；完整运维事实只保存在仓库外的私有运维文档中。
