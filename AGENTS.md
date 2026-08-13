@@ -1,6 +1,6 @@
 # ICTW 项目操作规范
 
-`PROJECT_PLAN.md` 是唯一现行计划与状态来源；历史计划、设计和运维记录只查 `archive/`，不得把归档内容当成当前指令执行。
+`PROJECT_PLAN.md` 是唯一现行版本记录，只写各版本完成了什么、当前发布状态和后续升级项。禁止写入文件改动清单、接口字段、数据库方案、施工阶段、命令、逐项测试用例或临时排障过程；施工细节由代码、测试、Git 历史、`archive/plans/` 完成记录和仓库外 `NB_info.md` 承载。历史计划、设计和运维记录只查 `archive/`，不得把归档内容当成当前指令执行。
 
 ## 项目事实
 
@@ -19,6 +19,7 @@
 ## 工程铁律
 
 - 生产表结构只通过 `alembic upgrade head` 变更；应用启动不得 `create_all`。
+- Backend 部署、生产迁移和本机 App 换装必须由用户明确授权；本地验收通过不自动授予发布权限。
 - 部署或迁移前先停服并备份生产 `linoi.db`，再验证 SQLite integrity、foreign keys、Alembic head、单实例和公网鉴权健康。
 - macOS 打包 Linux Backend tar 必须禁用 Apple metadata/xattrs（`--no-mac-metadata --no-xattrs --format ustar`）；上传前检查无 `LIBARCHIVE.xattr`，远端解包后检查无 `._*`、无空字节并通过 Python compileall，再运行 Alembic。
 - systemd `active` 不等于应用 ready；启动后必须有界等待内部鉴权 health 成功，再做公网门禁。同机其他项目也使用 Uvicorn，ICTW 单实例应核对 `linoi-backend.service` MainPID 与 `172.18.0.1:8787` 监听 PID 一致，不得按全系统进程名计数。

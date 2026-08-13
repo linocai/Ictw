@@ -1,4 +1,5 @@
 .DS_Store
+/archive/ICTW-Local-Archive/
 
 # Secrets and deployment credentials
 .deploy/
