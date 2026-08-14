@@ -277,6 +277,8 @@ struct V2MacWorkspaceDesk: View {
     @State private var showReopenConfirmation = false
     @State private var showAcceptWarning = false
     @State private var showReader = false
+    @State private var chapterLoadID: String?
+    @State private var creatingChapter = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -294,9 +296,12 @@ struct V2MacWorkspaceDesk: View {
                 titleBar(usesInlineContext: usesInlineContext)
                 HStack(spacing: 0) {
                     V2MacChapterRail(
-                        selectedID: $selectedChapterID,
+                        selectedID: selectedChapterID,
                         collapsed: !usesFullRail,
                         onOpenSheet: { sheet = $0 },
+                        onSelect: { chapter in
+                            Task { await navigate(to: chapter) }
+                        },
                         onCreate: createChapter
                     )
                     .frame(width: usesFullRail ? V2DeskMetric.chapterRail : V2DeskMetric.collapsedRail)
@@ -304,6 +309,7 @@ struct V2MacWorkspaceDesk: View {
                         snapshot: snapshot,
                         onOpenContext: { contextOpen = true },
                         onOpenReader: { showReader = true },
+                        onStartNewChapter: createChapter,
                         performAction: runAction,
                         onPrimary: runPrimaryAction,
                         onReopen: { showReopenConfirmation = true }
@@ -327,7 +333,6 @@ struct V2MacWorkspaceDesk: View {
             .animation(V2DeskMotion.sheet(reduceMotion: reduceMotion), value: contextOpen)
         }
         .task(id: session.currentBook?.id) { await loadBook() }
-        .onChange(of: selectedChapterID) { _, value in loadChapter(value) }
         .onChange(of: editor.currentChapter?.status) { _, _ in
             if let chapter = editor.currentChapter { workspace.upsert(chapter) }
         }
@@ -367,7 +372,22 @@ struct V2MacWorkspaceDesk: View {
         } message: {
             Text("这一章会被记为完成；当前检查提出的问题将不再提醒你。")
         }
-        .sheet(isPresented: $showReader) { V2MacReaderSheet() }
+        .sheet(isPresented: $showReader) {
+            V2MacReaderSheet(
+                selectedChapterID: $selectedChapterID,
+                onReadChapter: { chapter in
+                    await navigate(to: chapter)
+                },
+                onOpenWriting: { chapter in
+                    showReader = false
+                    await navigate(to: chapter)
+                },
+                onStartNewChapter: {
+                    showReader = false
+                    createChapter()
+                }
+            )
+        }
     }
 
     private var snapshot: V2DeskSnapshot {
@@ -401,20 +421,45 @@ struct V2MacWorkspaceDesk: View {
         await characters.load(bookId: book.id)
         await agents.load()
         if selectedChapterID == nil || !workspace.chapters.contains(where: { $0.id == selectedChapterID }) {
-            selectedChapterID = workspace.chapters.first?.id
+            if let first = workspace.chapters.first {
+                await navigate(to: first)
+            }
         }
     }
 
-    private func loadChapter(_ id: String?) {
-        inspiration.clearIfChapterChanged(to: id)
-        guard let id, let summary = workspace.chapters.first(where: { $0.id == id }) else { return }
-        Task { await editor.load(summary) }
+    /// All rail and reader selection converges here.  Keeping one in-flight
+    /// load prevents repeated reader taps from racing the editor and leaving
+    /// the selected rail row out of sync with the visible manuscript.
+    private func navigate(to summary: ChapterSummary, allowsDuringCreation: Bool = false) async {
+        guard !creatingChapter || allowsDuringCreation else { return }
+        guard chapterLoadID == nil else { return }
+        guard selectedChapterID != summary.id || editor.currentChapter?.id != summary.id else { return }
+
+        let previousEditorChapterID = editor.currentChapter?.id
+        chapterLoadID = summary.id
+        defer { chapterLoadID = nil }
+        selectedChapterID = summary.id
+        inspiration.clearIfChapterChanged(to: summary.id)
+        await editor.load(summary)
+
+        // `editor.load` deliberately keeps the current chapter on a network
+        // failure.  Restore the rail to that same visible chapter instead of
+        // leaving a newly selected row beside an older manuscript.
+        guard editor.currentChapter?.id == summary.id else {
+            selectedChapterID = editor.currentChapter?.id ?? previousEditorChapterID
+            inspiration.clearIfChapterChanged(to: selectedChapterID)
+            return
+        }
     }
 
     private func createChapter() {
+        guard !creatingChapter, chapterLoadID == nil else { return }
+        creatingChapter = true
         Task {
-            await workspace.createChapter()
-            selectedChapterID = workspace.chapterPath.last?.id
+            defer { creatingChapter = false }
+            if let chapter = await workspace.createChapter() {
+                await navigate(to: chapter, allowsDuringCreation: true)
+            }
         }
     }
 
@@ -430,7 +475,7 @@ struct V2MacWorkspaceDesk: View {
         case .accept: accept(overrideChecker: false)
         case .acceptWithWarning: showAcceptWarning = true
         case .retryArchive: Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
-        case .startNextChapter: createChapter()
+        case .startNewChapter: createChapter()
         case .openSettings: sheet = .settings
         case .none: break
         }
@@ -502,9 +547,10 @@ private struct V2MacChapterRail: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var characters: CharactersStore
-    @Binding var selectedID: String?
+    let selectedID: String?
     let collapsed: Bool
     let onOpenSheet: (V2MacDeskSheet) -> Void
+    let onSelect: (ChapterSummary) -> Void
     let onCreate: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -514,28 +560,34 @@ private struct V2MacChapterRail: View {
                 V2MacDeskSectionLabel(text: "章节轨")
                     .padding(.horizontal, 13).padding(.vertical, 13)
             }
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(workspace.chapters) { chapter in
-                        V2MacChapterRailRow(
-                            chapter: chapter,
-                            selected: chapter.id == selectedID,
-                            current: chapter.id == editor.currentChapter?.id,
-                            collapsed: collapsed
-                        ) { selectedID = chapter.id }
-                    }
-                    Button(action: onCreate) {
-                        HStack(spacing: 7) {
-                            Text("＋").frame(width: 14)
-                            if !collapsed { Text("新的一章") }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(workspace.chapters) { chapter in
+                            V2MacChapterRailRow(
+                                chapter: chapter,
+                                selected: chapter.id == selectedID,
+                                current: chapter.id == editor.currentChapter?.id,
+                                collapsed: collapsed
+                            ) { onSelect(chapter) }
+                            .id(chapter.id)
                         }
-                        .font(V2DeskType.control(11.5))
-                        .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
-                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-                        .padding(.horizontal, collapsed ? 13 : 13)
+                        Button(action: onCreate) {
+                            HStack(spacing: 7) {
+                                Text("＋").frame(width: 24)
+                                if !collapsed { Text("开始新一章") }
+                            }
+                            .font(V2DeskType.control(11.5))
+                            .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                            .padding(.horizontal, collapsed ? 10 : 10)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .scrollIndicators(.hidden)
+                .onAppear { scrollToSelected(proxy) }
+                .onChange(of: selectedID) { _, _ in scrollToSelected(proxy) }
             }
             V2MacDeskHairline()
             VStack(alignment: .leading, spacing: 0) {
@@ -547,6 +599,13 @@ private struct V2MacChapterRail: View {
         }
         .background(V2DeskPalette.color(.rail, scheme: colorScheme))
         .overlay(alignment: .trailing) { V2MacDeskHairline().frame(width: 1, height: nil) }
+    }
+
+    private func scrollToSelected(_ proxy: ScrollViewProxy) {
+        guard let selectedID else { return }
+        withAnimation(.easeOut(duration: 0.16)) {
+            proxy.scrollTo(selectedID, anchor: .center)
+        }
     }
 }
 
@@ -590,7 +649,14 @@ private struct V2MacChapterRailRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                if !collapsed { Text("\(chapter.index)").font(V2DeskType.chapterNumber()).frame(width: 14, alignment: .trailing) }
+                if !collapsed {
+                    Text("\(chapter.index)")
+                        .font(V2DeskType.chapterNumber())
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(width: 24, alignment: .trailing)
+                }
                 V2DeskStatusMark(marker: marker, diameter: 6)
                 if !collapsed {
                     VStack(alignment: .leading, spacing: 1) {
@@ -608,7 +674,7 @@ private struct V2MacChapterRailRow: View {
             .font(V2DeskType.control(selected ? 12 : 11.5, weight: selected ? .medium : .regular))
             .foregroundStyle(selected ? V2DeskPalette.color(.ink, scheme: colorScheme) : V2DeskPalette.color(.tertiaryInk, scheme: colorScheme))
             .frame(maxWidth: .infinity, minHeight: selected ? 34 : 30, alignment: .leading)
-            .padding(.horizontal, collapsed ? 13 : 13)
+            .padding(.horizontal, collapsed ? 13 : 10)
             .background {
                 ZStack {
                     if selected { V2DeskPalette.color(.desk, scheme: colorScheme) }

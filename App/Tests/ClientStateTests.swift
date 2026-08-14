@@ -36,6 +36,25 @@ private func makeChapter(status: String = "draft_ready") throws -> Chapter {
     return try JSONDecoder().decode(Chapter.self, from: data)
 }
 
+private func makeChapterSummary(
+    id: String,
+    index: Int,
+    title: String,
+    status: String
+) throws -> ChapterSummary {
+    let object: [String: Any] = [
+        "id": id,
+        "book_id": "book-1",
+        "index": index,
+        "title": title,
+        "status": status,
+        "source": "agent",
+        "updated_at": "2026-08-14T12:00:00.000000",
+    ]
+    let data = try JSONSerialization.data(withJSONObject: object)
+    return try JSONDecoder().decode(ChapterSummary.self, from: data)
+}
+
 private func testLegacySynopsisDecodesAsCanonicalSummary() throws {
     let object: [String: Any] = [
         "id": "chapter-legacy",
@@ -906,7 +925,8 @@ private func testV2DeskAcceptedArchiveIsolationAndAttention() throws {
     )
     let pending = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted))
     try expect(pending.chapterState == .accepted && pending.isBodyReadOnly, "acceptance must make the manuscript read-only immediately")
-    try expect(pending.primaryAction == .startNextChapter, "archive work must not replace the accepted chapter primary action")
+    try expect(pending.primaryAction == .startNewChapter, "archive work must not replace the accepted chapter primary action")
+    try expect(pending.primaryAction.title == "开始新一章", "accepted desk creation must not be labelled as reading navigation")
     try expect(pending.archive == .pending, "pending archive must remain independent from accepted prose")
     try expect(pending.taskBanner?.kind == .archiving, "archive work must stay visible as a background fact")
 
@@ -966,7 +986,43 @@ private func testV2DeskAcceptedArchiveIsolationAndAttention() throws {
     try expect(canRetry, "retry capability must come from the actual archive contract")
     try expect(preview?.status == "failed" && preview?.factCount == 2, "inactive revision preview must remain display-only metadata")
     try expect(failedArchive.isBodyReadOnly, "archive failure must never reopen accepted prose")
-    try expect(failedArchive.primaryAction == .startNextChapter, "archive retry must stay secondary to accepted chapter flow")
+    try expect(failedArchive.primaryAction == .startNewChapter, "archive retry must stay secondary to accepted chapter flow")
+}
+
+private func testV2DeskReadingOrderSeparatesNavigationFromCreation() throws {
+    let chapterOne = try makeChapterSummary(id: "one", index: 1, title: "第一章", status: "finalized")
+    let chapterThree = try makeChapterSummary(id: "three", index: 3, title: "第三章", status: "draft_ready")
+    let chapterTen = try makeChapterSummary(id: "ten", index: 10, title: "第十章", status: "finalized")
+    let unordered = [chapterTen, chapterThree, chapterOne]
+
+    try expect(
+        V2DeskReadingOrder.next(after: chapterOne.id, in: unordered) == .write(chapterThree),
+        "an unfinished next chapter must continue writing that real chapter across index gaps"
+    )
+    try expect(
+        V2DeskReadingOrder.next(after: chapterThree.id, in: unordered) == .read(chapterTen),
+        "a finalized next chapter must continue reading its real chapter"
+    )
+    try expect(
+        V2DeskReadingOrder.next(after: chapterTen.id, in: unordered) == .startNewChapter,
+        "only the actual final chapter may offer creation"
+    )
+    try expect(
+        V2DeskReadingOrder.previous(after: chapterThree.id, in: unordered) == chapterOne,
+        "previous navigation must use sorted existing chapters despite unordered input"
+    )
+    try expect(
+        V2DeskReadingOrder.previous(after: chapterOne.id, in: unordered) == nil,
+        "the first chapter has no previous navigation target"
+    )
+    try expect(
+        V2DeskReadingOrder.next(after: "missing", in: unordered) == nil,
+        "a missing current ID must never become an implicit create command"
+    )
+    try expect(
+        V2DeskReadingOrder.previous(after: "missing", in: unordered) == nil,
+        "a missing current ID must never invent a previous chapter"
+    )
 }
 
 private func testV2DeskLocalSaveConnectionAndModelConfiguration() throws {
@@ -1032,6 +1088,7 @@ private struct ClientStateTestRunner {
         try testV2DeskGenerationCancelAndFailurePreserveVisibleProse()
         try testV2DeskCheckerCurrentStaleAndUnavailableStates()
         try testV2DeskAcceptedArchiveIsolationAndAttention()
+        try testV2DeskReadingOrderSeparatesNavigationFromCreation()
         try testV2DeskLocalSaveConnectionAndModelConfiguration()
         print("Client state tests passed")
     }

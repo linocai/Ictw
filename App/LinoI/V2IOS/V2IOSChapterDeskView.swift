@@ -1,5 +1,215 @@
 import SwiftUI
 
+/// A chapter summary is only a navigation hint. The destination always loads
+/// the complete server chapter before choosing the author-facing space, so an
+/// out-of-date rail row can never send a reopened/finalized chapter to the
+/// wrong surface.
+struct V2IOSChapterDestinationView: View {
+    let summary: ChapterSummary
+
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @State private var resolvedChapter: Chapter?
+    @State private var loadFailed = false
+
+    var body: some View {
+        Group {
+            if let resolvedChapter {
+                if resolvedChapter.status == "finalized" {
+                    V2IOSChapterReaderView(summary: summary, resolvedChapter: resolvedChapter)
+                } else {
+                    V2IOSChapterDeskView(summary: summary)
+                }
+            } else if loadFailed {
+                VStack(spacing: 12) {
+                    Text("这一章没有读到")
+                        .font(V2DeskType.prose(19, weight: .semibold))
+                    Text("请返回章节轨后重试")
+                        .font(V2DeskType.control(12.5))
+                        .foregroundStyle(Color.secondary)
+                    V2IOSSecondaryButton(title: "返回章节轨", action: dismiss.callAsFunction)
+                        .padding(.top, 4)
+                }
+                .padding(24)
+            } else {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("读取章节")
+                        .font(V2DeskType.control(12.5))
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+        }
+        .task(id: summary.id) {
+            resolvedChapter = nil
+            loadFailed = false
+            inspiration.clearIfChapterChanged(to: summary.id)
+            await editor.load(summary)
+            guard let chapter = editor.currentChapter, chapter.id == summary.id else {
+                loadFailed = true
+                return
+            }
+            workspace.upsert(chapter)
+            resolvedChapter = chapter
+        }
+        .onChange(of: editor.currentChapter) { _, chapter in
+            guard let chapter, chapter.id == summary.id else { return }
+            workspace.upsert(chapter)
+            resolvedChapter = chapter
+        }
+    }
+}
+
+/// Reading is intentionally a separate surface, rather than a read-only
+/// variation of the writing desk. Its only primary navigation is the real
+/// ordered next chapter supplied by the shared policy.
+struct V2IOSChapterReaderView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @State private var showingExport = false
+    @State private var showingReopen = false
+    @State private var isMoving = false
+
+    let summary: ChapterSummary
+    let resolvedChapter: Chapter
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    Text("第 \(chapter.index) 章")
+                        .font(V2DeskType.control(12, weight: .medium))
+                        .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                    Text(displayTitle(chapter))
+                        .font(V2DeskType.prose(28, weight: .semibold))
+                    Text(chapter.draftText)
+                        .font(V2DeskType.prose())
+                        .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                        .lineSpacing(V2DeskType.proseLineSpacing)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 30)
+                .padding(.bottom, 30)
+            }
+            readerDock
+        }
+        .v2IOSPage()
+        .sheet(isPresented: $showingExport) {
+            V2IOSExportSheet(currentChapterID: chapter.id)
+                .presentationDetents([.large])
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
+        .confirmationDialog("重新编辑这一章？", isPresented: $showingReopen, titleVisibility: .visible) {
+            Button("重新编辑", role: .destructive) {
+                Task {
+                    if let reopened = await editor.reopen() {
+                        workspace.upsert(reopened)
+                    }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("正文与本章意图会保留；本章之后的归档记忆可能不再可靠，并会在章节轨中标记出来。")
+        }
+    }
+
+    private var chapter: Chapter {
+        // The destination only creates this view after a matching successful
+        // load. The fallback avoids a transient crash while SwiftUI replaces a
+        // route after a reopen.
+        editor.currentChapter?.id == summary.id ? editor.currentChapter! : resolvedChapter
+    }
+
+    private var header: some View {
+        HStack(spacing: 7) {
+            V2IOSBackButton(action: dismiss.callAsFunction, label: "返回章节")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("阅读")
+                    .font(V2DeskType.control(13.5, weight: .semibold))
+                Text("已完成 · \(chapter.draftText.filter { !$0.isWhitespace }.count) 字")
+                    .font(V2DeskType.control(11))
+                    .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+            }
+            Spacer()
+            Menu {
+                Button("重新编辑这一章", role: .destructive) { showingReopen = true }
+                Button("导出") { showingExport = true }
+            } label: {
+                Text("更多").font(V2DeskType.control(12)).frame(width: 48, height: 44)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(V2DeskPalette.color(.titleBar, scheme: colorScheme))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    @ViewBuilder private var readerDock: some View {
+        let previous = V2DeskReadingOrder.previous(after: chapter.id, in: workspace.chapters)
+        let next = V2DeskReadingOrder.next(after: chapter.id, in: workspace.chapters)
+        if let next {
+            HStack(spacing: 10) {
+                if let previous {
+                    Button("上一章") { replaceRoute(with: previous) }
+                        .font(V2DeskType.control(12.5, weight: .medium))
+                        .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                        .frame(width: 76, height: 48)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
+                        .buttonStyle(.plain)
+                        .disabled(isMoving)
+                }
+                switch next {
+                case .read(let nextChapter):
+                    V2IOSPrimaryButton(title: displayTitle(nextChapter), disabled: isMoving) {
+                        replaceRoute(with: nextChapter)
+                    }
+                case .write(let nextChapter):
+                    V2IOSPrimaryButton(title: "继续写《\(displayTitle(nextChapter))》", disabled: isMoving) {
+                        replaceRoute(with: nextChapter)
+                    }
+                case .startNewChapter:
+                    V2IOSPrimaryButton(title: "开始新一章", disabled: isMoving) {
+                        createNewChapter()
+                    }
+                }
+            }
+            .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 8)
+            .background(V2DeskPalette.color(.rail, scheme: colorScheme))
+            .overlay(alignment: .top) { Divider() }
+        }
+    }
+
+    private func replaceRoute(with chapter: ChapterSummary) {
+        guard !isMoving else { return }
+        isMoving = true
+        workspace.replaceCurrentDestination(with: chapter)
+    }
+
+    private func createNewChapter() {
+        guard !isMoving else { return }
+        isMoving = true
+        Task {
+            await workspace.createChapter(replacingCurrentDestination: true)
+            isMoving = false
+        }
+    }
+
+    private func displayTitle(_ chapter: Chapter) -> String {
+        chapter.title.v2IOSTrimmed.isEmpty ? "第 \(chapter.index) 章" : chapter.title
+    }
+
+    private func displayTitle(_ chapter: ChapterSummary) -> String {
+        chapter.title.v2IOSTrimmed.isEmpty ? "第 \(chapter.index) 章" : chapter.title
+    }
+}
+
 struct V2IOSChapterDeskView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -53,7 +263,9 @@ struct V2IOSChapterDeskView: View {
         .v2IOSPage()
         .task(id: summary.id) {
             inspiration.clearIfChapterChanged(to: summary.id)
-            await editor.load(summary)
+            if editor.currentChapter?.id != summary.id {
+                await editor.load(summary)
+            }
             if let book = session.currentBook { await characters.load(bookId: book.id) }
         }
         .onChange(of: editor.currentChapter) { _, chapter in
@@ -165,7 +377,7 @@ struct V2IOSChapterDeskView: View {
         case .rerunChecker: Task { _ = await editor.rerunChecker() }
         case .accept: Task { if let chapter = await editor.accept() { workspace.upsert(chapter) } }
         case .acceptWithWarning: showingAcceptWarning = true
-        case .startNextChapter: Task { await workspace.createChapter() }
+        case .startNewChapter: Task { await workspace.createChapter() }
         case .retryArchive: Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
         case .openSettings: showingSettings = true
         case .none: break

@@ -478,3 +478,39 @@ Connection to 198.18.18.54 port 22 timed out
 
 - **Resolved**: 2026-08-14T15:53:00+08:00
 - **Notes**: 改用精确主机地址后，Alembic、SQLite、systemd、监听 PID 及内外网鉴权健康复核全部通过。
+
+## [ERR-20260814-012] swift-pure-library-linked-without-main
+
+**Logged**: 2026-08-14T16:50:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+验证 v2.0.1 共享纯 Swift 文件时误用 `swiftc -o` 进入链接阶段，因没有 `main` 而退出。
+
+### Error
+
+```
+link command failed: undefined symbol: main
+```
+
+### Context
+
+- 共享文件是供 App 与测试 runner 编译的库代码，本身不应生成可执行文件。
+- 失败只发生在额外的本地验证命令，正式客户端状态测试随后通过。
+
+### Suggested Fix
+
+纯库文件的独立验证使用 `swiftc -typecheck`；只有包含入口点时才使用 `-o` 链接可执行文件。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `App/LinoI/V2Shared/V2DeskPresentation.swift`
+
+### Resolution
+
+- **Resolved**: 2026-08-14T16:50:00+08:00
+- **Notes**: 已改用类型检查与现有客户端状态测试 runner 验证共享切片。

@@ -110,8 +110,6 @@ struct V2IOSManuscriptFace: View {
                             .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
                             .lineSpacing(V2DeskType.proseLineSpacing)
                             .textSelection(.enabled)
-                        Divider().overlay(Color.secondary.opacity(0.22)).padding(.top, 10)
-                        Text("开始下一章").font(V2DeskType.control(12.5, weight: .medium)).foregroundStyle(Color.secondary)
                     }
                     .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 20)
                 }

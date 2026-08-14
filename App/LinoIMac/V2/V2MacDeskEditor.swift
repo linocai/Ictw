@@ -8,6 +8,7 @@ struct V2MacManuscriptDesk: View {
     let snapshot: V2DeskSnapshot
     let onOpenContext: () -> Void
     let onOpenReader: () -> Void
+    let onStartNewChapter: () -> Void
     let performAction: (V2DeskPrimaryAction) -> Void
     let onPrimary: () -> Void
     let onReopen: () -> Void
@@ -19,7 +20,7 @@ struct V2MacManuscriptDesk: View {
                 V2MacDeskTaskBanner(banner: banner, primaryAction: snapshot.primaryAction, perform: performAction)
             }
             if editor.currentChapter == nil {
-                V2MacDeskEmptyPrompt(title: "选择一章，或新建一章开始。", actionTitle: "新的一章") {}
+                V2MacDeskEmptyPrompt(title: "选择一章，或开始新一章。", actionTitle: "开始新一章", action: onStartNewChapter)
             } else {
                 GeometryReader { proxy in
                     let layout = V2MacManuscriptMeasure(availableWidth: proxy.size.width)
@@ -27,15 +28,6 @@ struct V2MacManuscriptDesk: View {
                         VStack(alignment: .leading, spacing: 0) {
                             V2MacChapterHeading(snapshot: snapshot)
                             V2MacManuscriptText(snapshot: snapshot)
-                            if snapshot.chapterState == .accepted {
-                                HStack(spacing: 12) {
-                                    Rectangle().fill(V2DeskPalette.color(.strongLine, scheme: colorScheme)).frame(height: 1)
-                                    Button("开始下一章", action: onPrimary)
-                                        .buttonStyle(V2MacDeskButton(kind: .secondary))
-                                    Spacer()
-                                }
-                                .padding(.top, 30)
-                            }
                         }
                         .frame(width: layout.measure, alignment: .leading)
                         .padding(.horizontal, layout.horizontalPadding)

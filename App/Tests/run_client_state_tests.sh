@@ -34,6 +34,14 @@ if rg -n 'WriterCandidate|AdoptCandidate|DiscardCandidate|writerCandidate|adoptC
   exit 1
 fi
 
+# Reading an existing next chapter and creating a brand-new chapter are
+# separate actions in v2.0.1. Keep the removed ambiguous wording and symbol
+# from returning anywhere in the v2 author surfaces.
+if rg -n '开始下一章|startNextChapter' "${v2_dirs[@]}"; then
+  print -u2 "V2 must distinguish next-chapter reading from starting a new chapter"
+  exit 1
+fi
+
 # Regression gates for v2 interaction wiring that pure presentation tests
 # cannot exercise: banner actions must dispatch themselves, and iOS chapter
 # transitions must clear chapter-scoped inspiration state before loading.

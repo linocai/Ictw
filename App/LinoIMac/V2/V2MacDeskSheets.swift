@@ -636,18 +636,95 @@ private struct V2MacExportSheet: View {
 }
 
 struct V2MacReaderSheet: View {
+    @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var editor: ChapterEditorStore
-    @Environment(\.dismiss) private var dismiss
+    @Binding var selectedChapterID: String?
+    let onReadChapter: (ChapterSummary) async -> Void
+    let onOpenWriting: (ChapterSummary) async -> Void
+    let onStartNewChapter: () -> Void
+    @State private var navigationInFlight = false
     @Environment(\.colorScheme) private var colorScheme
+
+    private var currentChapterID: String? {
+        editor.currentChapter?.id ?? selectedChapterID
+    }
+
+    private var previousChapter: ChapterSummary? {
+        guard let currentChapterID else { return nil }
+        return V2DeskReadingOrder.previous(after: currentChapterID, in: workspace.chapters)
+    }
+
+    private var nextStep: V2DeskReadingNextStep? {
+        guard let currentChapterID else { return nil }
+        return V2DeskReadingOrder.next(after: currentChapterID, in: workspace.chapters)
+    }
+
     var body: some View {
         V2MacSheetFrame(title: editor.currentChapter?.title.isEmpty == false ? (editor.currentChapter?.title ?? "") : "正文", width: 760) {
-            ScrollView {
-                Text(editor.currentChapter?.draftText ?? "")
-                    .font(V2DeskType.prose()).lineSpacing(V2DeskType.proseLineSpacing)
-                    .foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme)).textSelection(.enabled)
-                    .frame(maxWidth: 600, alignment: .leading).padding(38)
-                    .frame(maxWidth: .infinity, alignment: .center)
+            VStack(spacing: 0) {
+                ScrollView {
+                    Text(editor.currentChapter?.draftText ?? "")
+                        .font(V2DeskType.prose()).lineSpacing(V2DeskType.proseLineSpacing)
+                        .foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme)).textSelection(.enabled)
+                        .frame(maxWidth: 600, alignment: .leading).padding(38)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                V2MacDeskHairline()
+                HStack(spacing: 8) {
+                    if let previousChapter {
+                        Button("上一章") { moveBack(to: previousChapter) }
+                            .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                            .disabled(navigationInFlight)
+                    }
+                    Spacer()
+                    nextButton
+                }
+                .padding(.horizontal, 22)
+                .frame(height: V2DeskMetric.actionBarHeight)
+                .background(V2DeskPalette.color(.acceptedPaper, scheme: colorScheme))
             }
+        }
+    }
+
+    @ViewBuilder private var nextButton: some View {
+        switch nextStep {
+        case .read(let chapter):
+            Button(chapter.title.isEmpty ? "未命名" : chapter.title) { read(chapter) }
+                .buttonStyle(V2MacDeskButton(kind: .primary))
+                .disabled(navigationInFlight)
+                .help("继续阅读第 \(chapter.index) 章")
+        case .write(let chapter):
+            Button("继续写《\(chapter.title.isEmpty ? "未命名" : chapter.title)》") { write(chapter) }
+                .buttonStyle(V2MacDeskButton(kind: .primary))
+                .disabled(navigationInFlight)
+        case .startNewChapter:
+            Button("开始新一章", action: onStartNewChapter)
+                .buttonStyle(V2MacDeskButton(kind: .primary))
+                .disabled(navigationInFlight)
+        case .none:
+            EmptyView()
+        }
+    }
+
+    private func moveBack(to chapter: ChapterSummary) {
+        chapter.status == "finalized" ? read(chapter) : write(chapter)
+    }
+
+    private func read(_ chapter: ChapterSummary) {
+        guard !navigationInFlight else { return }
+        navigationInFlight = true
+        Task {
+            await onReadChapter(chapter)
+            navigationInFlight = false
+        }
+    }
+
+    private func write(_ chapter: ChapterSummary) {
+        guard !navigationInFlight else { return }
+        navigationInFlight = true
+        Task {
+            await onOpenWriting(chapter)
+            navigationInFlight = false
         }
     }
 }

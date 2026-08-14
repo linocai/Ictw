@@ -22,7 +22,7 @@ struct V2IOSRootView: View {
                 }
             }
             .navigationDestination(for: ChapterSummary.self) { summary in
-                V2IOSChapterDeskView(summary: summary)
+                V2IOSChapterDestinationView(summary: summary)
             }
             .overlay(alignment: .bottom) {
                 V2IOSNoticeToast()

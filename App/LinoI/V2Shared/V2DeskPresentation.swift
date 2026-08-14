@@ -48,7 +48,10 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
     case rerunChecker
     case accept
     case acceptWithWarning
-    case startNextChapter
+    /// This is a deliberate creation command at the end of the book. Reading
+    /// order is modelled separately by `V2DeskReadingOrder` and must never
+    /// reuse a creation action.
+    case startNewChapter
     case retryGeneration
     case retryArchive
     case openSettings
@@ -61,7 +64,7 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
         case .rerunChecker: "重新复查"
         case .accept: "接受这一章"
         case .acceptWithWarning: "仍然接受"
-        case .startNextChapter: "开始下一章"
+        case .startNewChapter: "开始新一章"
         case .retryGeneration: "重试"
         case .retryArchive: "重试整理"
         case .openSettings: "去设置"
@@ -71,6 +74,46 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
 
     var requiresConfirmation: Bool {
         self == .acceptWithWarning
+    }
+}
+
+/// The only possible forward moves from a reader. The existing chapter cases
+/// are navigation; only the final case may create a chapter.
+enum V2DeskReadingNextStep: Equatable, Sendable {
+    case read(ChapterSummary)
+    case write(ChapterSummary)
+    case startNewChapter
+}
+
+/// Pure reading-order policy shared by iOS and macOS. The caller supplies the
+/// chapter list it currently has; this policy deliberately does not infer a
+/// missing current chapter as permission to create a new one.
+enum V2DeskReadingOrder {
+    static func next(after chapterID: String, in chapters: [ChapterSummary]) -> V2DeskReadingNextStep? {
+        let ordered = orderedChapters(chapters)
+        guard let currentIndex = ordered.firstIndex(where: { $0.id == chapterID }) else { return nil }
+        let nextIndex = ordered.index(after: currentIndex)
+        guard nextIndex < ordered.endIndex else { return .startNewChapter }
+
+        let next = ordered[nextIndex]
+        return next.status == "finalized" ? .read(next) : .write(next)
+    }
+
+    /// Backward navigation always stays within existing chapters and never
+    /// creates a chapter, even when the source list is stale or incomplete.
+    static func previous(after chapterID: String, in chapters: [ChapterSummary]) -> ChapterSummary? {
+        let ordered = orderedChapters(chapters)
+        guard let currentIndex = ordered.firstIndex(where: { $0.id == chapterID }), currentIndex > ordered.startIndex else {
+            return nil
+        }
+        return ordered[ordered.index(before: currentIndex)]
+    }
+
+    private static func orderedChapters(_ chapters: [ChapterSummary]) -> [ChapterSummary] {
+        chapters.sorted {
+            if $0.index != $1.index { return $0.index < $1.index }
+            return $0.id < $1.id
+        }
     }
 }
 
@@ -352,7 +395,7 @@ enum V2DeskPresentation {
         currentVerdict: V2DeskCheckerVerdict
     ) -> V2DeskPrimaryAction {
         if source.writingPhase.isGenerating { return .cancelGeneration }
-        if isAccepted { return .startNextChapter }
+        if isAccepted { return .startNewChapter }
         if case .failed(let code, _, let stage) = source.writingPhase {
             if stage == .extraction { return .retryArchive }
             return needsSettings(code) ? .openSettings : .retryGeneration

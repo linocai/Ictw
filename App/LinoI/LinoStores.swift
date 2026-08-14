@@ -134,19 +134,36 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    func createChapter() async {
-        guard let book = session.currentBook else { return }
+    /// Creates an actual new chapter at the end of the book. Chapter-to-chapter reading must
+    /// use `replaceCurrentDestination(with:)` instead; it never creates data.
+    @discardableResult
+    func createChapter(replacingCurrentDestination: Bool = false) async -> ChapterSummary? {
+        guard let book = session.currentBook else { return nil }
         do {
             let payload = ChapterCreatePayload(title: "新章节", user_prompt: "")
             let chapter: Chapter = try await session.api.request("/books/\(book.id)/chapters", method: "POST", body: payload)
             upsert(chapter)
             chapters = try await session.api.request("/books/\(book.id)/chapters")
             if let created = chapters.first(where: { $0.id == chapter.id }) {
-                chapterPath.append(created)
+                replaceCurrentDestination(with: created, orAppend: !replacingCurrentDestination)
+                return created
             }
+            return nil
         } catch {
             session.notices.publish(error)
+            return nil
         }
+    }
+
+    /// Replaces the visible chapter destination so continuous reading remains
+    /// one navigation level deep. The rail and legacy callers can still append
+    /// their first destination through the default behavior.
+    func replaceCurrentDestination(with summary: ChapterSummary, orAppend: Bool = true) {
+        guard !chapterPath.isEmpty else {
+            if orAppend { chapterPath.append(summary) }
+            return
+        }
+        chapterPath[chapterPath.count - 1] = summary
     }
 
     func saveBook(title: String, world: String) async {

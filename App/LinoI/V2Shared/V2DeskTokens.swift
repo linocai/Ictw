@@ -126,7 +126,10 @@ enum V2DeskType {
 enum V2DeskMetric {
     static let manuscriptMeasure: CGFloat = 600
     static let manuscriptMinimum: CGFloat = 480
-    static let chapterRail: CGFloat = 104
+    /// The complete chapter rail reserves a fixed number column even for
+    /// triple-digit chapters, so the title never has to compete with wrapped
+    /// numerals or a visible scroll indicator.
+    static let chapterRail: CGFloat = 128
     static let collapsedRail: CGFloat = 44
     static let contextPanel: CGFloat = 344
     static let titleBarHeight: CGFloat = 38
