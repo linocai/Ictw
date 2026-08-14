@@ -256,3 +256,152 @@ active_jobs=157
 
 - **Resolved**: 2026-08-14T15:25:00+08:00
 - **Notes**: 已按当前实体终态重查，确认真实在途 JobRun 为 0。
+
+## [ERR-20260814-006] remote-preflight-stage-cwd
+
+**Logged**: 2026-08-14T15:37:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+远端发布包预检通过变量拼接 `runuser sh -c` 时没有让 compileall/Alembic 稳定落到解包根目录。
+
+### Error
+
+```
+Can't list 'app'
+FAILED: No 'script_location' key found in configuration.
+```
+
+### Context
+
+- 包哈希、解包、AppleDouble 与空字节检查已经通过。
+- 生产服务尚未停止，代码和数据库均未修改。
+- 远端 stage 层级正确，`linoi` 用户也可访问；失败来自嵌套 shell 的 cwd 传递。
+
+### Suggested Fix
+
+远端生产预检使用显式绝对 stage 路径，不在 `runuser sh -c` 中混合外层临时变量。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `.deploy/ictw-backend-v1.9.3-build40.tar.gz`
+
+### Resolution
+
+- **Resolved**: 2026-08-14T15:37:00+08:00
+- **Notes**: 已用显式绝对路径验证 cwd、包结构与服务仍 active，随后重跑门禁。
+
+## [ERR-20260814-007] zero-warning-pipefail-triggered-rollback
+
+**Logged**: 2026-08-14T15:41:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+生产切换已通过迁移和健康检查，但最后统计零 warning 时 `grep` 的零匹配退出码被 `pipefail` 误判为失败，触发自动回滚。
+
+### Error
+
+```
+deployment_failed_rolling_back
+rollback_health=1.9.2
+```
+
+### Context
+
+- v1.9.3 migration、SQLite integrity/foreign keys、内外网健康均已先通过。
+- `journalctl | grep | wc -l` 在没有 warning 时由 `grep` 返回 1；`set -o pipefail` 将正常的零结果升级为 ERR。
+- 自动回滚恢复了旧代码与停服前数据库；复核 Alembic `20260809_0011`、无新表、内外网 v1.9.2、单实例和零在途任务。
+
+### Suggested Fix
+
+零匹配属于合法结果的只读统计必须使用不会因空结果失败的实现，例如 Python 计行或给过滤分支显式容错；部署成功后的非关键统计不得触发回滚。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `/Users/linotsai/Lino/NB_info.md`
+- See Also: `archive/learnings/ERRORS-20260809-through-20260813.md` 中 Build 38 ready 误判记录
+
+### Resolution
+
+- **Resolved**: 2026-08-14T15:41:00+08:00
+- **Notes**: 已完整验证回滚状态，后续重发移除会把零匹配视为错误的 pipeline。
+
+## [ERR-20260814-008] exec-javascript-reserved-binding
+
+**Logged**: 2026-08-14T15:44:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+并行站外健康与 GitHub Release 查询的编排脚本把结果变量命名为 JavaScript 保留字 `public`，解析阶段失败。
+
+### Error
+
+```
+SyntaxError: Unexpected strict mode reserved word
+```
+
+### Context
+
+- 失败发生在 V8 脚本解析阶段，任何 curl 或 GitHub 命令都尚未执行。
+- 已上线 Backend 与生产状态不受影响。
+
+### Suggested Fix
+
+`functions.exec` 编排变量使用任务限定名，例如 `publicCheck`，避免 `public / private / static` 等严格模式保留字。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-14T15:44:00+08:00
+- **Notes**: 已改用非保留变量名重新执行。
+
+## [ERR-20260814-009] macos-pgrep-unavailable
+
+**Logged**: 2026-08-14T15:46:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+本机 macOS 换装前进程检查调用 `pgrep`，当前环境没有该命令。
+
+### Error
+
+```
+zsh: command not found: pgrep
+```
+
+### Context
+
+- 交付包目标路径只读检查已完成，没有复制或替换 App。
+- 当前环境可用 `ps` 与 `rg`。
+
+### Suggested Fix
+
+macOS App 换装进程检查使用 `ps -axo pid,command | rg` 精确匹配 bundle executable 路径。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `/Applications/ICTW.app`
+
+### Resolution
+
+- **Resolved**: 2026-08-14T15:46:00+08:00
+- **Notes**: 已切换到 `ps | rg`。
