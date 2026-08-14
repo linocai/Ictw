@@ -59,6 +59,9 @@ struct V2IOSChapterDestinationView: View {
             workspace.upsert(chapter)
             resolvedChapter = chapter
         }
+        .navigationTitle(summary.title.v2IOSTrimmed.isEmpty ? "第 \(summary.index) 章" : summary.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
     }
 }
 
@@ -79,7 +82,6 @@ struct V2IOSChapterReaderView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     Text("第 \(chapter.index) 章")
@@ -101,9 +103,24 @@ struct V2IOSChapterReaderView: View {
             readerDock
         }
         .v2IOSPage()
+        .navigationTitle(displayTitle(chapter))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("重新编辑这一章", role: .destructive) { showingReopen = true }
+                    Button("导出") { showingExport = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel("更多章节操作")
+            }
+        }
         .sheet(isPresented: $showingExport) {
             V2IOSExportSheet(currentChapterID: chapter.id)
-                .presentationDetents([.large])
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
         .confirmationDialog("重新编辑这一章？", isPresented: $showingReopen, titleVisibility: .visible) {
@@ -125,30 +142,6 @@ struct V2IOSChapterReaderView: View {
         // load. The fallback avoids a transient crash while SwiftUI replaces a
         // route after a reopen.
         editor.currentChapter?.id == summary.id ? editor.currentChapter! : resolvedChapter
-    }
-
-    private var header: some View {
-        HStack(spacing: 7) {
-            V2IOSBackButton(action: dismiss.callAsFunction, label: "返回章节")
-            VStack(alignment: .leading, spacing: 2) {
-                Text("阅读")
-                    .font(V2DeskType.control(13.5, weight: .semibold))
-                Text("已完成 · \(chapter.draftText.filter { !$0.isWhitespace }.count) 字")
-                    .font(V2DeskType.control(11))
-                    .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
-            }
-            Spacer()
-            Menu {
-                Button("重新编辑这一章", role: .destructive) { showingReopen = true }
-                Button("导出") { showingExport = true }
-            } label: {
-                Text("更多").font(V2DeskType.control(12)).frame(width: 48, height: 44)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(V2DeskPalette.color(.titleBar, scheme: colorScheme))
-        .overlay(alignment: .bottom) { Divider() }
     }
 
     @ViewBuilder private var readerDock: some View {
@@ -230,7 +223,6 @@ struct V2IOSChapterDeskView: View {
     var body: some View {
         let snapshot = V2DeskPresentation.make(source)
         VStack(spacing: 0) {
-            header(snapshot: snapshot)
             if let banner = snapshot.taskBanner {
                 V2IOSTaskBanner(banner: banner, primaryAction: snapshot.primaryAction, perform: perform)
             }
@@ -261,6 +253,31 @@ struct V2IOSChapterDeskView: View {
             }
         }
         .v2IOSPage()
+        .navigationTitle(snapshot.title.v2IOSTrimmed.isEmpty ? "第 \(summary.index) 章" : snapshot.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if snapshot.chapterState == .accepted {
+                        Button("重开这一章", role: .destructive) { showingReopen = true }
+                        Button("导出") { showingExport = true }
+                    } else {
+                        Button("保存到服务器") {
+                            Task {
+                                if let chapter = await editor.save() {
+                                    workspace.upsert(chapter)
+                                }
+                            }
+                        }
+                        Button("导出") { showingExport = true }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel("更多章节操作")
+            }
+        }
         .task(id: summary.id) {
             inspiration.clearIfChapterChanged(to: summary.id)
             if editor.currentChapter?.id != summary.id {
@@ -279,11 +296,15 @@ struct V2IOSChapterDeskView: View {
         }
         .sheet(isPresented: $showingExport) {
             V2IOSExportSheet(currentChapterID: editor.currentChapter?.id)
-                .presentationDetents([.large])
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
         .sheet(isPresented: $showingSettings) {
-            V2IOSSettingsView().presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+            V2IOSSettingsView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
         .confirmationDialog("这一章会被记为完成", isPresented: $showingAcceptWarning, titleVisibility: .visible) {
             Button("仍然接受", role: .destructive) { Task { if let chapter = await editor.accept(overrideChecker: true) { workspace.upsert(chapter) } } }
@@ -315,47 +336,6 @@ struct V2IOSChapterDeskView: View {
             saveState: editor.saveState,
             connectionInterrupted: editor.pollingConnectionInterrupted
         )
-    }
-
-    private func header(snapshot: V2DeskSnapshot) -> some View {
-        HStack(spacing: 7) {
-            V2IOSBackButton(action: dismiss.callAsFunction, label: "返回章节")
-            VStack(alignment: .leading, spacing: 2) {
-                Text(snapshot.title.v2IOSTrimmed.isEmpty ? "第 \(summary.index) 章" : snapshot.title)
-                    .font(V2DeskType.control(13.5, weight: .semibold)).lineLimit(1)
-                Text(subtitle(snapshot: snapshot))
-                    .font(V2DeskType.control(11)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
-            }
-            Spacer()
-            if snapshot.chapterState == .accepted {
-                Text("已接受")
-                    .font(V2DeskType.control(11, weight: .medium))
-                    .foregroundStyle(V2DeskPalette.color(.success, scheme: colorScheme))
-                    .padding(.horizontal, 7).padding(.vertical, 5)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(V2DeskPalette.color(.success, scheme: colorScheme).opacity(0.4)))
-            }
-            Menu {
-                if snapshot.chapterState == .accepted {
-                    Button("重开这一章", role: .destructive) { showingReopen = true }
-                    Button("导出") { showingExport = true }
-                } else {
-                    Button("保存到服务器") { Task { if let chapter = await editor.save() { workspace.upsert(chapter) } } }
-                    Button("导出") { showingExport = true }
-                }
-            } label: {
-                Text("更多").font(V2DeskType.control(12)).frame(width: 48, height: 44)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(V2DeskPalette.color(.titleBar, scheme: colorScheme))
-        .overlay(alignment: .bottom) { Divider() }
-    }
-
-    private func subtitle(snapshot: V2DeskSnapshot) -> String {
-        if snapshot.showsUnsavedLocalDraft { return "本机草稿 · \(snapshot.characterCount) 字" }
-        if snapshot.chapterState == .accepted { return "已完成 · \(snapshot.characterCount) 字" }
-        return snapshot.characterCount == 0 ? "还没有正文" : "草稿 · \(snapshot.characterCount) 字"
     }
 
     private var pageIndicator: some View {

@@ -37,6 +37,8 @@ struct V2IOSBookshelfView: View {
         }
         .sheet(isPresented: $showingSettings) {
             V2IOSSettingsView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
     }

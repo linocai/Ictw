@@ -166,14 +166,17 @@ final class WorkspaceStore: ObservableObject {
         chapterPath[chapterPath.count - 1] = summary
     }
 
-    func saveBook(title: String, world: String) async {
-        guard let book = session.currentBook else { return }
+    @discardableResult
+    func saveBook(title: String, world: String) async -> Bool {
+        guard let book = session.currentBook else { return false }
         do {
             let payload = BookPayload(title: title, world_setting: world)
             let updated: Book = try await session.api.request("/books/\(book.id)", method: "PATCH", body: payload)
             session.currentBook = updated
+            return true
         } catch {
             session.notices.publish(error)
+            return false
         }
     }
 
@@ -239,15 +242,18 @@ final class CharactersStore: ObservableObject {
         }
     }
 
-    func create(name: String) async {
-        guard let book = session.currentBook else { return }
+    @discardableResult
+    func create(name: String, role: String = "", fixedProfile: String = "") async -> Character? {
+        guard let book = session.currentBook else { return nil }
         do {
-            let payload = CharacterPatchPayload(name: name, role: "", fixed_profile: "")
+            let payload = CharacterPatchPayload(name: name, role: role, fixed_profile: fixedProfile)
             let character: Character = try await session.api.request("/books/\(book.id)/characters", method: "POST", body: payload)
             characters.append(character)
             selectedCharacterId = character.id
+            return character
         } catch {
             session.notices.publish(error)
+            return nil
         }
     }
 
@@ -264,23 +270,29 @@ final class CharactersStore: ObservableObject {
         }
     }
 
-    func update(_ character: Character) async {
+    @discardableResult
+    func update(_ character: Character) async -> Bool {
         do {
             let payload = CharacterPatchPayload(character)
             let updated: Character = try await session.api.request("/characters/\(character.id)", method: "PATCH", body: payload)
             replace(updated)
+            return true
         } catch {
             session.notices.publish(error)
+            return false
         }
     }
 
-    func delete(_ character: Character) async {
+    @discardableResult
+    func delete(_ character: Character) async -> Bool {
         do {
             try await session.api.rawRequest("/characters/\(character.id)", method: "DELETE")
             characters.removeAll { $0.id == character.id }
             ensureSelection()
+            return true
         } catch {
             session.notices.publish(error)
+            return false
         }
     }
 
@@ -1441,17 +1453,21 @@ final class AgentSettingsStore: ObservableObject {
         }
     }
 
-    func createProfile(name: String, baseURL: String, apiKey: String, model: String) async {
+    @discardableResult
+    func createProfile(name: String, baseURL: String, apiKey: String, model: String) async -> Bool {
         do {
             let payload = LLMProfileCreatePayload(name: name, provider: "openai-compatible", base_url: baseURL, api_key: apiKey, model_name: model)
             let profile: LLMProfile = try await session.api.request("/llm_profiles", method: "POST", body: payload)
             profiles.append(profile)
+            return true
         } catch {
             session.notices.publish(error)
+            return false
         }
     }
 
-    func updateProfile(_ profile: LLMProfile, apiKey: String?) async {
+    @discardableResult
+    func updateProfile(_ profile: LLMProfile, apiKey: String?) async -> Bool {
         do {
             let payload = LLMProfilePatchPayload(profile: profile, apiKey: apiKey)
             let updated: LLMProfile = try await session.api.request("/llm_profiles/\(profile.id)", method: "PATCH", body: payload)
@@ -1459,8 +1475,10 @@ final class AgentSettingsStore: ObservableObject {
                 profiles[idx] = updated
             }
             bindings = try await session.api.request("/agent-model-bindings")
+            return true
         } catch {
             session.notices.publish(error)
+            return false
         }
     }
 

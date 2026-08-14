@@ -51,9 +51,24 @@ struct V2IOSChapterRailView: View {
         }
         .sheet(isPresented: $showingWorld) { V2IOSWorldEditorView().presentationCornerRadius(V2DeskMetric.sheetCornerRadius) }
         .sheet(isPresented: $showingCharacters) { V2IOSCharactersView().presentationCornerRadius(V2DeskMetric.sheetCornerRadius) }
-        .sheet(isPresented: $showingBookSettings) { V2IOSBookSettingsView().presentationCornerRadius(V2DeskMetric.sheetCornerRadius) }
-        .sheet(isPresented: $showingExport) { V2IOSExportSheet(currentChapterID: nil).presentationCornerRadius(V2DeskMetric.sheetCornerRadius) }
-        .sheet(isPresented: $showingGlobalSettings) { V2IOSSettingsView().presentationCornerRadius(V2DeskMetric.sheetCornerRadius) }
+        .sheet(isPresented: $showingBookSettings) {
+            V2IOSBookSettingsView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
+        .sheet(isPresented: $showingExport) {
+            V2IOSExportSheet(currentChapterID: nil)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
+        .sheet(isPresented: $showingGlobalSettings) {
+            V2IOSSettingsView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
     }
 
     private var header: some View {

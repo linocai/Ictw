@@ -551,3 +551,108 @@ Error Reading File
 
 - **Resolved**: 2026-08-14T17:23:00+08:00
 - **Notes**: 已改用标准输出形式确认 iOS 为 Apple Development 签名，包含预期的 `get-task-allow=true`；macOS Developer ID 产物仍明确不含该权限。
+
+## [ERR-20260814-014] apply-patch-wrong-source-path
+
+**Logged**: 2026-08-14T18:30:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+一次存储层补丁误用了省略 `LinoI` 的源文件路径，工具在写入前拒绝操作。
+
+### Error
+
+```
+Failed to read file to update /Users/linotsai/Lino/Ictw/App/LinoStores.swift
+```
+
+### Context
+
+- 项目客户端源文件实际位于 `App/LinoI/`。
+- 操作未修改工作区内容。
+
+### Suggested Fix
+
+在补丁前复用已检索到的精确路径。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `App/LinoI/LinoStores.swift`
+
+### Resolution
+
+- **Resolved**: 2026-08-14T18:30:00+08:00
+- **Notes**: 后续补丁使用完整正确路径。
+
+## [ERR-20260814-015] apply-patch-stale-context
+
+**Logged**: 2026-08-14T18:45:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+一次 UI 头部补丁遗漏了中间的布局行，精确上下文校验拒绝写入。
+
+### Error
+
+```
+apply_patch verification failed: Failed to find expected lines
+```
+
+### Context
+
+- 目标文件没有被该次失败操作改变。
+
+### Suggested Fix
+
+补丁前先读取目标的当前完整块，并按实际上下文构造最小替换。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `App/LinoI/V2IOS/V2IOSPeripheralViews.swift`
+
+### Resolution
+
+- **Resolved**: 2026-08-14T18:45:00+08:00
+- **Notes**: 已按当前块重新构造补丁。
+
+## [ERR-20260814-016] inspiration-gate-generic-activate-collision
+
+**Logged**: 2026-08-14T18:53:45+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+人物 Sheet 离开协调器使用通用方法名 `activate`，撞上“灵感界面不得打开即生成”的源码门禁，导致客户端状态测试误报。
+
+### Error
+
+```
+Inspiration UI must not generate on open
+```
+
+### Context
+
+- 门禁有意全局禁止历史灵感入口 `func activate(`，以防恢复打开即请求模型的旧行为。
+- 新方法只注册未保存编辑的离开回调，不涉及灵感或网络生成。
+
+### Suggested Fix
+
+非灵感组件避免使用已被产品门禁保留的通用 `activate` 方法名；优先使用能说明职责的 `register`。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `App/LinoI/V2IOS/V2IOSPeripheralViews.swift`, `App/Tests/run_client_state_tests.sh`
+
+### Resolution
+
+- **Resolved**: 2026-08-14T18:53:45+08:00
+- **Notes**: 将离开协调器方法改名为 `register`，不放宽灵感产品门禁。

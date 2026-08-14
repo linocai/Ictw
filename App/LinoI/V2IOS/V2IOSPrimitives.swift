@@ -11,7 +11,6 @@ struct V2IOSPage: ViewModifier {
             .font(V2DeskType.control(14))
             .foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme))
             .background(V2DeskPalette.color(.desk, scheme: colorScheme).ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
     }
 }
 

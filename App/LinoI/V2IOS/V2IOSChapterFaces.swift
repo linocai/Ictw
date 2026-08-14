@@ -76,8 +76,18 @@ struct V2IOSIntentFace: View {
             }
             .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 16)
         }
-        .sheet(isPresented: $showingCharacters) { V2IOSCharactersView().presentationCornerRadius(V2DeskMetric.sheetCornerRadius) }
-        .sheet(isPresented: $showingWorld) { V2IOSWorldEditorView().presentationCornerRadius(V2DeskMetric.sheetCornerRadius) }
+        .sheet(isPresented: $showingCharacters) {
+            V2IOSCharactersView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
+        .sheet(isPresented: $showingWorld) {
+            V2IOSWorldEditorView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
     }
 
     private var intent: Binding<String> {

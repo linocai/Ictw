@@ -21,13 +21,16 @@ struct V2IOSRootView: View {
                     V2IOSChapterRailView()
                 }
             }
+            // The book shelf and chapter rail own their root-level chrome.
+            // Destinations explicitly restore the system navigation bar.
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: ChapterSummary.self) { summary in
                 V2IOSChapterDestinationView(summary: summary)
             }
-            .overlay(alignment: .bottom) {
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 V2IOSNoticeToast()
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 10)
+                    .padding(.vertical, 10)
             }
         }
         .v2IOSPage()
@@ -95,17 +98,40 @@ struct V2IOSConnectionView: View {
 
 private struct V2IOSNoticeToast: View {
     @EnvironmentObject private var notices: NoticeBus
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if let notice = notices.current {
-            Text(notice.message)
-                .font(V2DeskType.control(12))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(.black.opacity(0.78), in: Capsule())
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: notice.isCritical ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(notice.isCritical ? Color.red.opacity(0.9) : Color.white.opacity(0.82))
+                    .accessibilityHidden(true)
+                Text(notice.message)
+                    .font(V2DeskType.control(12))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    notices.dismiss(id: notice.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.82))
+                .accessibilityLabel("关闭提示")
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, 6)
+            .padding(.vertical, 8)
+            .frame(maxWidth: 520, alignment: .leading)
+            .background(.black.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(notice.isCritical ? "重要提示" : "提示")
+            .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .bottom)))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: notice.id)
         }
     }
 }

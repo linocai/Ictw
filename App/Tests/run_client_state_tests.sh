@@ -59,6 +59,10 @@ xcrun swiftc -parse-as-library \
   "$app_dir/LinoI/ChapterDraftCache.swift" \
   "$app_dir/LinoI/InspirationCreator.swift" \
   "$app_dir/LinoI/V2Shared/V2DeskPresentation.swift" \
+  "$app_dir/LinoI/LinoTheme.swift" \
+  "$app_dir/LinoI/LinoErrorPresenter.swift" \
+  "$app_dir/LinoI/NoticeBus.swift" \
+  "$test_dir/V202NoticeLifecycleTests.swift" \
   "$test_dir/ClientStateTests.swift" \
   -o "$test_binary"
 

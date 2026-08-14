@@ -654,6 +654,15 @@ private func testCheckedSnapshotAndExportComposer() throws {
     try expect(files[0].text.contains("## 世界观") && files[0].text.contains("## 第 1 章"), "export must include opted-in fixed setting and chapter prose")
     let separate = ExportComposer.compose(book: book, chapters: [chapter], characters: [], format: .plainText, includeWorld: true, includeCharacters: true, separateChapters: true)
     try expect(separate.count == 2 && separate[0].filename.contains("设定") && separate[0].text.contains("世界观"), "per-chapter export must emit one non-empty settings companion")
+
+    try expect(
+        ExportPresentationPolicy.availableScopes(currentChapterID: nil) == [.accepted, .all],
+        "book-level export must not offer an unavailable current chapter scope"
+    )
+    try expect(
+        ExportPresentationPolicy.availableScopes(currentChapterID: "chapter-1") == [.accepted, .all, .current],
+        "chapter-level export must retain the current chapter scope"
+    )
 }
 
 private func testArchiveRailUsesHealthNotSchema() throws {
@@ -1090,6 +1099,7 @@ private struct ClientStateTestRunner {
         try testV2DeskAcceptedArchiveIsolationAndAttention()
         try testV2DeskReadingOrderSeparatesNavigationFromCreation()
         try testV2DeskLocalSaveConnectionAndModelConfiguration()
+        try runV202NoticeLifecycleTests()
         print("Client state tests passed")
     }
 }

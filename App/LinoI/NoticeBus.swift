@@ -11,14 +11,17 @@ final class NoticeBus: ObservableObject {
 
     @Published var current: Notice?
     @Published private(set) var history: [Notice] = []
+    private var automaticDismissTask: Task<Void, Never>?
 
     func publish(_ message: String, critical: Bool = false) {
         let notice = Notice(message: message, isCritical: critical)
+        automaticDismissTask?.cancel()
         current = notice
         history.append(notice)
         if history.count > 30 {
             history.removeFirst(history.count - 30)
         }
+        scheduleAutomaticDismiss(for: notice)
     }
 
     func publish(_ error: Error) {
@@ -26,8 +29,47 @@ final class NoticeBus: ObservableObject {
         publish(presented.message, critical: presented.critical)
     }
 
-    func dismiss() {
-        current = nil
+    /// The optional identifier prevents an expired timer for an older notice
+    /// from clearing a newer one that replaced it.
+    func dismiss(id: Notice.ID? = nil) {
+        guard let current else { return }
+        guard id == nil || current.id == id else { return }
+        automaticDismissTask?.cancel()
+        automaticDismissTask = nil
+        self.current = nil
+    }
+
+    private func scheduleAutomaticDismiss(for notice: Notice) {
+        guard NoticeLifecyclePolicy.dismissesAutomatically(notice) else { return }
+        automaticDismissTask = Task { [weak self, noticeID = notice.id] in
+            try? await Task.sleep(nanoseconds: NoticeLifecyclePolicy.automaticDismissDelayNanoseconds)
+            guard let self else { return }
+            guard NoticeLifecyclePolicy.canDismissExpiredNotice(
+                noticeID: noticeID,
+                currentNoticeID: self.current?.id,
+                wasCancelled: Task.isCancelled
+            ) else { return }
+            self.dismiss(id: noticeID)
+        }
+    }
+}
+
+/// The notice timing and identity checks are deliberately kept outside of a
+/// SwiftUI view so replacement behaviour stays deterministic across roots.
+enum NoticeLifecyclePolicy {
+    static let automaticDismissDelay: TimeInterval = 5
+    static let automaticDismissDelayNanoseconds: UInt64 = 5_000_000_000
+
+    static func dismissesAutomatically(_ notice: NoticeBus.Notice) -> Bool {
+        !notice.isCritical
+    }
+
+    static func canDismissExpiredNotice(
+        noticeID: NoticeBus.Notice.ID,
+        currentNoticeID: NoticeBus.Notice.ID?,
+        wasCancelled: Bool
+    ) -> Bool {
+        !wasCancelled && noticeID == currentNoticeID
     }
 }
 
@@ -84,7 +126,7 @@ struct LinoIToast: View {
     private func scheduleDismiss(_ notice: NoticeBus.Notice) {
         dismissWorkItem?.cancel()
         guard !notice.isCritical else { return }
-        let item = DispatchWorkItem { bus.dismiss() }
+        let item = DispatchWorkItem { bus.dismiss(id: notice.id) }
         dismissWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.6, execute: item)
     }

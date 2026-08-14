@@ -460,6 +460,19 @@ enum ExportScope: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Presentation-only scope policy. The composer still accepts every scope so
+/// existing callers retain their export semantics; a book-level surface simply
+/// must not offer a chapter that it cannot identify.
+enum ExportPresentationPolicy {
+    static func availableScopes(currentChapterID: String?) -> [ExportScope] {
+        var scopes: [ExportScope] = [.accepted, .all]
+        if currentChapterID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            scopes.append(.current)
+        }
+        return scopes
+    }
+}
+
 struct ExportFile: Hashable, Sendable {
     var filename: String
     var text: String
