@@ -451,7 +451,10 @@ struct V2MacWorkspaceDesk: View {
 
     private func titleBar(usesInlineContext: Bool) -> some View {
         HStack(spacing: 8) {
-            Color.clear.frame(width: 68)
+            Text("ICTW")
+                .font(V2DeskType.prose(18, weight: .semibold))
+                .foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme))
+                .frame(width: 68, alignment: .leading)
             V2MacDeskIconButton(symbol: "books.vertical", label: "返回书架") { session.closeBook() }
             Text(session.currentBook?.title.isEmpty == false ? (session.currentBook?.title ?? "") : "未命名书籍")
                 .font(V2DeskType.control(13, weight: .medium))

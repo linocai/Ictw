@@ -30,3 +30,33 @@
 
 - **Resolved**: 2026-08-13T00:00:00+08:00
 - **Notes**: 已提升为 `AGENTS.md` 永久规则，并将 v1.9.2 完整计划归档、根计划改为精简版本记录。
+
+## [LRN-20260814-001] best_practice
+
+**Logged**: 2026-08-14T16:20:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: config
+
+### Summary
+
+Developer ID Release 构建必须显式关闭 Xcode base-entitlement 注入，并复核最终签名不含 `get-task-allow`。
+
+### Details
+
+macOS Release 使用 Developer ID Application 与 Hardened Runtime 构建时，首次产物虽通过 `codesign --verify`，但 Xcode 注入了源码 entitlements 中不存在的 `com.apple.security.get-task-allow=true`。这会让公开交付包保留调试附加能力。重新隔离构建并传入 `CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO` 后，最终签名只保留 App Sandbox、网络客户端和用户选择文件读写权限。
+
+### Suggested Action
+
+后续 Developer ID 打包命令固定加入 `CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO`；交付前同时执行深度严格验签，并用 `codesign -d --entitlements :-` 明确拒绝 `get-task-allow`。
+
+### Metadata
+
+- Source: error
+- Related Files: `App/LinoIMac/LinoIMac.entitlements`, `App/LinoI.xcodeproj/project.pbxproj`
+- Tags: macos, developer-id, entitlements, release-gate
+
+### Resolution
+
+- **Resolved**: 2026-08-14T16:21:00+08:00
+- **Notes**: Build 42 已用新隔离目录重建，通用架构、严格签名和无调试权限门禁均通过。
