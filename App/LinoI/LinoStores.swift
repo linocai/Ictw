@@ -168,7 +168,11 @@ final class WorkspaceStore: ObservableObject {
             title: chapter.title,
             status: chapter.status,
             source: chapter.source,
-            updatedAt: chapter.updatedAt
+            updatedAt: chapter.updatedAt,
+            archiveStatus: chapter.archive?.status ?? "stale",
+            archiveSchema: chapter.archive?.archiveSchema ?? "none",
+            archiveCanRetry: chapter.archive?.canRetry ?? false,
+            archiveLatestAttemptStatus: chapter.archive?.latestAttemptStatus
         )
         upsert(summary)
     }
@@ -327,6 +331,9 @@ final class ChapterEditorStore: ObservableObject {
     @Published private(set) var failedCandidateCheckerResult: CheckerResult?
     @Published private(set) var checkerAppliesToVisibleDraft = false
     @Published private(set) var checkerRefreshing = false
+    /// Local-only previous result, retained after edits strictly as stale
+    /// context. It can never unlock acceptance or be sent back to Backend.
+    @Published private(set) var staleCheckedSnapshot: CheckedDraftSnapshot?
     @Published private(set) var restoredLocalDraft = false
     /// Names the last preflight/job failure reported as unauthorized-but-present.
     /// Non-empty exactly when the editor should offer "本章豁免并重试".
@@ -345,6 +352,26 @@ final class ChapterEditorStore: ObservableObject {
 
     var draftCharCount: Int {
         currentChapter?.draftText.filter { !$0.isWhitespace }.count ?? 0
+    }
+
+    var staleCheckerChangedRanges: [Range<String.Index>] {
+        guard let chapter = currentChapter,
+              let snapshot = staleCheckedSnapshot,
+              snapshot.chapterID == chapter.id,
+              CheckerSnapshotPresentationPolicy.shouldShowStaleSnapshot(
+                hasConcreteSnapshot: snapshot.checkerResult.hasConcreteVerdict,
+                checkerAppliesToVisibleDraft: checkerAppliesToVisibleDraft,
+                currentCheckerResult: checkerResult
+              ) else { return [] }
+        return CheckedDraftSentenceDiff.changedRanges(previous: snapshot.draftText, current: chapter.draftText)
+    }
+
+    var hasStaleCheckedSnapshot: Bool {
+        CheckerSnapshotPresentationPolicy.shouldShowStaleSnapshot(
+            hasConcreteSnapshot: staleCheckedSnapshot?.checkerResult.hasConcreteVerdict == true,
+            checkerAppliesToVisibleDraft: checkerAppliesToVisibleDraft,
+            currentCheckerResult: checkerResult
+        )
     }
 
     var presentationState: ChapterEditorPresentationState {
@@ -367,6 +394,7 @@ final class ChapterEditorStore: ObservableObject {
         checkerResult = nil
         failedCandidateCheckerResult = nil
         checkerAppliesToVisibleDraft = false
+        staleCheckedSnapshot = nil
         defer { isLoading = false }
         do {
             let remote: Chapter = try await session.api.request("/chapters/\(summary.id)")
@@ -383,6 +411,7 @@ final class ChapterEditorStore: ObservableObject {
                 cache.saveClean(remote)
                 saveState = .synced
             }
+            staleCheckedSnapshot = cache.loadCheckedSnapshot(chapterId: remote.id)
             pendingExemptionNames = []
             currentValidationReason = nil
             if pollingChapterId != remote.id {
@@ -408,6 +437,7 @@ final class ChapterEditorStore: ObservableObject {
 
     func editString(_ keyPath: WritableKeyPath<Chapter, String>, value: String) {
         guard var chapter = currentChapter else { return }
+        guard ChapterEditingPolicy.canEdit(chapter) else { return }
         guard chapter[keyPath: keyPath] != value else { return }
         chapter[keyPath: keyPath] = value
         currentChapter = chapter
@@ -423,6 +453,7 @@ final class ChapterEditorStore: ObservableObject {
 
     func setCharacterLinks(_ links: [ChapterLink]) {
         guard var chapter = currentChapter else { return }
+        guard ChapterEditingPolicy.canEdit(chapter) else { return }
         guard chapter.characterLinks != links else { return }
         chapter.characterLinks = links
         currentChapter = chapter
@@ -588,6 +619,10 @@ final class ChapterEditorStore: ObservableObject {
             checkerResult = response.checkerResult
             failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = response.checkerResult != nil
+            if let result = response.checkerResult, let checked = currentChapter, result.hasConcreteVerdict {
+                let snapshot = CheckedDraftSnapshot(chapter: checked, checkerResult: result)
+                if cache.saveCheckedSnapshot(snapshot) { staleCheckedSnapshot = snapshot }
+            }
             return response.checkerResult
         } catch {
             session.notices.publish(error)
@@ -604,6 +639,12 @@ final class ChapterEditorStore: ObservableObject {
         result.status = "stale"
         result.verdict = nil
         checkerResult = result
+    }
+
+    private func saveCheckedSnapshotIfCurrent(_ result: CheckerResult?, chapter: Chapter?) {
+        guard let result, result.hasConcreteVerdict, let chapter else { return }
+        let snapshot = CheckedDraftSnapshot(chapter: chapter, checkerResult: result)
+        if cache.saveCheckedSnapshot(snapshot) { staleCheckedSnapshot = snapshot }
     }
 
     /// Adds the names from the last unauthorized-character failure to this
@@ -888,6 +929,9 @@ final class ChapterEditorStore: ObservableObject {
             }
             if let chapter = status.chapter {
                 currentChapter = chapter
+                if status.kind == "write", status.visibleCheckerResult != nil {
+                    saveCheckedSnapshotIfCurrent(status.visibleCheckerResult, chapter: chapter)
+                }
                 cache.saveClean(chapter)
                 saveState = .synced
             } else {
@@ -916,6 +960,7 @@ final class ChapterEditorStore: ObservableObject {
             if status.kind == "write" {
                 checkerResult = status.visibleCheckerResult
                 checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
+                saveCheckedSnapshotIfCurrent(status.visibleCheckerResult, chapter: currentChapter)
             }
             if let chapter = currentChapter {
                 ChapterTaskOutcomeStore.save(
@@ -942,6 +987,7 @@ final class ChapterEditorStore: ObservableObject {
             failedCandidateCheckerResult = status.failedCandidateCheckerResult
             checkerResult = status.visibleCheckerResult
             checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
+            saveCheckedSnapshotIfCurrent(status.visibleCheckerResult, chapter: currentChapter)
         }
         writingPhase = .failed(
             code: status.errorCode,
@@ -1287,6 +1333,8 @@ final class AgentSettingsStore: ObservableObject {
     @Published private(set) var profiles: [LLMProfile] = []
     @Published private(set) var bindings: [AgentBinding] = []
     @Published private(set) var isLoading = false
+    @Published private(set) var bookPersonas: [BookAgentPersona] = []
+    @Published private(set) var bookPersonasBookID: String?
 
     private let session: AppSession
 
@@ -1303,6 +1351,76 @@ final class AgentSettingsStore: ObservableObject {
             bindings = try await session.api.request("/agent-model-bindings")
         } catch {
             session.notices.publish(error)
+        }
+    }
+
+    /// Configuration-only read. This endpoint does not create a task or call
+    /// a model, so opening a persona screen is safe by construction.
+    @discardableResult
+    func loadBookPersonas(bookID: String) async -> Bool {
+        guard session.currentBook?.id == bookID else { return false }
+        if bookPersonasBookID != bookID {
+            bookPersonas = []
+            bookPersonasBookID = bookID
+        }
+        do {
+            let values: [BookAgentPersona] = try await session.api.request("/books/\(bookID)/agent-personas")
+            guard BookPersonaResponsePolicy.accepts(
+                responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
+            ) else { return false }
+            bookPersonas = values
+            bookPersonasBookID = bookID
+            return true
+        } catch {
+            session.notices.publish(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func saveBookPersona(bookID: String, role: String, editablePersona: String) async -> Bool {
+        guard BookPersonaResponsePolicy.accepts(
+            responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
+        ) else { return false }
+        do {
+            let payload = BookAgentPersonaPayload(editable_persona: editablePersona)
+            let saved: BookAgentPersona = try await session.api.request(
+                "/books/\(bookID)/agent-personas/\(role)", method: "PUT", body: payload
+            )
+            guard BookPersonaResponsePolicy.accepts(
+                responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
+            ) else { return false }
+            replaceBookPersona(saved, bookID: bookID)
+            return true
+        } catch {
+            session.notices.publish(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func resetBookPersona(bookID: String, role: String) async -> Bool {
+        guard BookPersonaResponsePolicy.accepts(
+            responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
+        ) else { return false }
+        do {
+            try await session.api.rawRequest("/books/\(bookID)/agent-personas/\(role)", method: "DELETE")
+            // DELETE deliberately carries no response. Reload so source stays
+            // server-authoritative instead of inferring global vs default from
+            // equal text values.
+            return await loadBookPersonas(bookID: bookID)
+        } catch {
+            session.notices.publish(error)
+            return false
+        }
+    }
+
+    private func replaceBookPersona(_ persona: BookAgentPersona, bookID: String) {
+        bookPersonasBookID = bookID
+        if let index = bookPersonas.firstIndex(where: { $0.agentRole == persona.agentRole }) {
+            bookPersonas[index] = persona
+        } else {
+            bookPersonas.append(persona)
         }
     }
 

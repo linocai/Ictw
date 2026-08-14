@@ -472,8 +472,12 @@ struct MacChapterEditor: View {
             Divider()
         }
         let result = editor.checkerResult
-        Text("当前正文 · \((result?.displayVerdict ?? "unavailable").checkerLabel)").font(.system(size: 12, weight: .semibold)).foregroundStyle(result?.isPassed == true ? LinoTheme.success : LinoTheme.warning)
+        Text(result?.isPassed == true && editor.checkerAppliesToVisibleDraft ? "检查通过 · 对应当前正文" : "当前正文 · \((result?.displayVerdict ?? "unavailable").checkerLabel)").font(.system(size: 12, weight: .semibold)).foregroundStyle(result?.isPassed == true ? LinoTheme.success : LinoTheme.warning)
         if let issues = result?.issues, !issues.isEmpty { ForEach(issues) { issue in VStack(alignment: .leading, spacing: 3) { labeledText("正文证据", issue.draftEvidence); labeledText("Bible 证据", issue.bibleEvidence); Text(issue.reason).font(.system(size: 11)).foregroundStyle(LinoTheme.muted) } } } else { Text(result?.displayVerdict == "unavailable" ? "当前正文尚无可用的 Bible 检查结果。" : "Checker 只检查剧情边界，不评价文风。").font(.system(size: 11)).foregroundStyle(LinoTheme.muted) }
+        if editor.hasStaleCheckedSnapshot {
+            Text(editor.staleCheckerChangedRanges.isEmpty ? "上一份本地检查结论已失效；无法证明正文差异。" : "上一份本地检查结论已失效；检测到 \(editor.staleCheckerChangedRanges.count) 处句子改动。")
+                .font(.system(size: 11)).foregroundStyle(LinoTheme.warning)
+        }
         if editor.writingPhase.isFailed && !editor.checkerAppliesToVisibleDraft {
             Text("这次失败稿只在后端留档，没有进入正文区。请调整输入后重新生成。")
                 .font(.system(size: 11))
@@ -541,6 +545,13 @@ struct MacChapterEditor: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(LinoTheme.warning)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if let inactive = archive.inactivePreview {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("失效归档预览 · 仅供查看").font(.system(size: 11, weight: .semibold)).foregroundStyle(LinoTheme.warning)
+                        Text("第 \(inactive.revision) 次 · \(inactive.status)\(inactive.summary.isEmpty ? "" : "\n\(inactive.summary)")")
+                            .font(.system(size: 11)).foregroundStyle(LinoTheme.muted)
+                    }
                 }
                 if archive.canRetry && archive.status != "pending" && archive.status != "extracting" {
                     Button("重新归档") {

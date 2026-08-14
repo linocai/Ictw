@@ -226,6 +226,14 @@ def load_rebuild_checkpoint(
     return outputs
 
 
+def build_book_extractor(db, book: Book) -> ExtractorAgent:
+    """Freeze this maintenance run's book-effective Extractor persona."""
+    return ExtractorAgent(
+        build_llm_client(db, "extractor"),
+        get_persona(db, "extractor", book_id=book.id),
+    )
+
+
 def main() -> int:
     args = parse_args()
     db = SessionLocal()
@@ -272,7 +280,7 @@ def main() -> int:
                 rebuild_book_projection(db, book.id)
             if completed_count:
                 print(f"resumed checkpoint chapters={completed_count}")
-            extractor = ExtractorAgent(build_llm_client(db, "extractor"), get_persona(db, "extractor"))
+            extractor = build_book_extractor(db, book)
             for chapter in chapters[completed_count:]:
                 selected = [(link.character_id, link.character.name) for link in chapter.character_links]
                 message = extractor_user_message(db, book, chapter)

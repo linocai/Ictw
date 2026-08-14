@@ -57,6 +57,7 @@ from app.services.write_jobs import WriteJob, WriteJobConflict, record_job_phase
 from app.services.write_ownership import cancel_local_writer_jobs, invalidate_writer_inputs
 from app.services.archive_v2 import (
     archive_input_fingerprint,
+    archive_health_summaries,
     archive_read_model,
     build_archive_user_message,
     create_archive_revision,
@@ -173,8 +174,13 @@ def _apply_author_note(chapter: Chapter, author_note: str | None) -> None:
 
 
 @router.get("/books/{book_id}/chapters", response_model=list[ChapterSummary])
-def list_chapters(book_id: str, db: Session = Depends(get_db)) -> list[Chapter]:
-    return list(db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.index)).all())
+def list_chapters(book_id: str, db: Session = Depends(get_db)) -> list[ChapterSummary]:
+    chapters = list(db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.index)).all())
+    health = archive_health_summaries(db, chapters)
+    return [
+        ChapterSummary.model_validate(chapter).model_copy(update=health.get(chapter.id, {}))
+        for chapter in chapters
+    ]
 
 
 @router.post("/books/{book_id}/chapters", response_model=ChapterRead, status_code=status.HTTP_201_CREATED)
@@ -270,7 +276,10 @@ def create_inspirations(
             upstream_reason=upstream_reason,
         )
 
-    agent = InspirationCreatorAgent(inspiration_client, get_persona(db, "inspiration_creator"))
+    agent = InspirationCreatorAgent(
+        inspiration_client,
+        get_persona(db, "inspiration_creator", book_id=chapter.book_id),
+    )
     try:
         cards = agent.generate(
             context.user_message,
@@ -474,9 +483,11 @@ def write_chapter(
         chapter_id=chapter.id,
         job_id=job_id,
         kind="write",
-        memory_selector=MemorySelectorAgent(memory_selector_client, get_persona(db, "memory_selector")),
-        writer=WriterAgent(writer_client, get_persona(db, "writer")),
-        checker=CheckerAgent(checker_client, get_persona(db, "checker")),
+        memory_selector=MemorySelectorAgent(
+            memory_selector_client, get_persona(db, "memory_selector", book_id=chapter.book_id)
+        ),
+        writer=WriterAgent(writer_client, get_persona(db, "writer", book_id=chapter.book_id)),
+        checker=CheckerAgent(checker_client, get_persona(db, "checker", book_id=chapter.book_id)),
         selector_user_message=selector_message,
         memory_candidates=candidates,
         memory_budget=budget,
@@ -684,7 +695,7 @@ def rerun_checker(chapter_id: str, db: Session = Depends(get_db), checker_client
     fingerprint = _candidate_fingerprint(chapter, candidate)
     from app.services.context import checker_user_message
     try:
-        raw = CheckerAgent(checker_client, get_persona(db, "checker")).check(
+        raw = CheckerAgent(checker_client, get_persona(db, "checker", book_id=chapter.book_id)).check(
             checker_user_message(chapter, chapter.draft_text, chapter.user_prompt)
         )
         from app.services.write_jobs import _valid_checker_result
@@ -711,7 +722,7 @@ def _start_archive_job(
     if provenance == "live":
         chapter.legacy_archive_eligible = False
         chapter.archive_status = "stale"
-    extractor = ExtractorAgent(extractor_client, get_persona(db, "extractor"))
+    extractor = ExtractorAgent(extractor_client, get_persona(db, "extractor", book_id=chapter.book_id))
     selected_characters = [(link.character_id, link.character.name) for link in chapter.character_links]
     message = build_archive_user_message(chapter, projected_fields_before_chapter(db, chapter))
     revision = create_archive_revision(

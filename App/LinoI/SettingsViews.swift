@@ -163,7 +163,7 @@ private struct LinoIAgentDetailView: View {
                         LinoIAgentBindingCard(role: role)
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        LinoISectionLabel("人格").padding(.horizontal, 6)
+                        LinoISectionLabel("全局人格").padding(.horizontal, 6)
                         if let persona = agents.personas.first(where: { $0.agentRole == role }) {
                             LinoIAgentPersonaEditor(persona: persona)
                         } else {
@@ -367,7 +367,7 @@ private struct LinoIAgentPersonaEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 9) {
-                LinoISectionLabel("可编辑人格词")
+                LinoISectionLabel("全局可编辑人格")
                 TextEditor(text: $prompt)
                     .scrollContentBackground(.hidden)
                     .font(LinoType.serif(14))

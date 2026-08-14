@@ -12,7 +12,7 @@ struct LinoICharactersPane: View {
                     Text("人物")
                         .font(LinoType.paneTitle)
                         .foregroundStyle(LinoTheme.ink)
-                    Text("固定设定你维护，当前状态由 Extractor 投影")
+                Text("姓名、身份和人物设定由你维护；归档层只读")
                         .font(LinoType.ui(12))
                         .foregroundStyle(LinoTheme.muted)
                 }
@@ -96,7 +96,7 @@ private struct LinoICharacterListRow: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                Text("\(character.events.count) 条")
+                Text(character.events.isEmpty ? "还没有正文记录" : "\(Set(character.events.map(\.chapterId)).count) 章有归档记录")
                     .font(LinoType.caption)
                     .foregroundStyle(LinoTheme.faint)
             }
@@ -129,7 +129,7 @@ private struct LinoICharacterCard: View {
                         .textFieldStyle(.plain)
                         .font(LinoType.serif(18, .bold))
                         .foregroundStyle(LinoTheme.ink)
-                    TextField("身份 / 职能", text: $role)
+                    TextField("身份", text: $role)
                         .textFieldStyle(.plain)
                         .font(LinoType.ui(12))
                         .foregroundStyle(LinoTheme.muted)
@@ -150,7 +150,7 @@ private struct LinoICharacterCard: View {
             Divider().overlay(LinoTheme.line).padding(.horizontal, 16)
 
             VStack(alignment: .leading, spacing: 10) {
-                LinoISectionLabel("固定设定")
+                LinoISectionLabel("人物设定")
                 TextEditor(text: $fixedProfile)
                     .scrollContentBackground(.hidden)
                     .font(LinoType.serif(14))
@@ -224,7 +224,7 @@ private struct LinoICharacterCard: View {
     private var storylineSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                LinoISectionLabel("人物故事线")
+                LinoISectionLabel("归档记录 · 只读")
                 Spacer()
                 Text("\(character.events.count) 条")
                     .font(LinoType.caption)
@@ -233,7 +233,7 @@ private struct LinoICharacterCard: View {
             .padding(.horizontal, 16)
 
             if character.events.isEmpty {
-                Text("接受章节后，Extractor 会把本人物的大事和故事线写到这里。")
+                Text("还没有正文记录。接受章节后，Extractor 会把可证明的归档记录写到这里。")
                     .font(LinoType.ui(12))
                     .foregroundStyle(LinoTheme.faint)
                     .padding(.horizontal, 16)

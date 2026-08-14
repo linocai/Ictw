@@ -163,6 +163,10 @@ private struct MacBookCard: View {
                     Text("\(book.chapterCount) 章 · \(book.characterCount) 人物")
                         .font(.system(size: 12))
                         .foregroundStyle(LinoTheme.muted)
+                    if book.archivePendingCount > 0 || book.archiveAttentionCount > 0 {
+                        Text("归档中 \(book.archivePendingCount) · 待处理 \(book.archiveAttentionCount)")
+                            .font(.system(size: 11.5)).foregroundStyle(LinoTheme.warning)
+                    }
                     Text(macRelativeDate(book.updatedAt))
                         .font(.system(size: 11.5))
                         .foregroundStyle(LinoTheme.faint)

@@ -130,7 +130,13 @@ private struct MacChapterRow: View {
                         .foregroundStyle(selected ? LinoTheme.accentDeep : LinoTheme.ink)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    LinoIStatusPill(text: chapter.status.linoStatusLabel, status: chapter.status)
+                    HStack(spacing: 5) {
+                        LinoIStatusPill(text: chapter.status.linoStatusLabel, status: chapter.status)
+                        if let archiveLabel = ChapterArchiveRailState.resolve(status: chapter.archiveStatus, canRetry: chapter.archiveCanRetry).label {
+                            Text(archiveLabel)
+                                .font(.system(size: 10, weight: .medium)).foregroundStyle(LinoTheme.warning)
+                        }
+                    }
                 }
                 Spacer(minLength: 0)
             }

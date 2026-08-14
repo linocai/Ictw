@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.common import ORMModel
 
@@ -21,20 +22,57 @@ class AgentPersonaRead(ORMModel):
 class AgentPersonaPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    editable_persona: str | None = None
+    editable_persona: str | None = Field(default=None, max_length=8000)
     # Compatibility input for older clients.  It changes only editable text.
-    system_prompt: str | None = None
+    system_prompt: str | None = Field(default=None, max_length=8000)
 
     @model_validator(mode="after")
     def exactly_one_editable_value(self) -> "AgentPersonaPatch":
         supplied = [value for value in (self.editable_persona, self.system_prompt) if value is not None]
         if len(supplied) != 1:
             raise ValueError("provide exactly one editable persona value")
+        if not self.value.strip():
+            raise ValueError("editable persona must not be blank")
         return self
 
     @property
     def value(self) -> str:
         return self.editable_persona if self.editable_persona is not None else self.system_prompt or ""
+
+
+class BookAgentPersonaPut(BaseModel):
+    """A complete book-local replacement, with the old input alias retained."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    editable_persona: str | None = Field(default=None, max_length=8000)
+    system_prompt: str | None = Field(default=None, max_length=8000)
+
+    @model_validator(mode="after")
+    def exactly_one_editable_value(self) -> "BookAgentPersonaPut":
+        supplied = [value for value in (self.editable_persona, self.system_prompt) if value is not None]
+        if len(supplied) != 1:
+            raise ValueError("provide exactly one editable persona value")
+        if not self.value.strip():
+            raise ValueError("editable persona must not be blank")
+        return self
+
+    @property
+    def value(self) -> str:
+        return self.editable_persona if self.editable_persona is not None else self.system_prompt or ""
+
+
+class BookAgentPersonaRead(BaseModel):
+    agent_role: str
+    # "book" means this book owns an override. "global" and "default"
+    # distinguish a saved global value from the built-in fallback.
+    source: Literal["book", "global", "default"]
+    book_persona: str | None
+    global_persona: str
+    default_persona: str
+    effective_persona: str
+    program_protocol: str
+    updated_at: datetime | None
 
 
 class LLMProfileCreate(BaseModel):

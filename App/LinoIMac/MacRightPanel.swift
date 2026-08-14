@@ -5,6 +5,7 @@ import SwiftUI
 /// 人格在 Agent tab 全部就位。
 struct MacRightPanel: View {
     @Binding var tab: MacRightTab
+    @Binding var currentChapterID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,7 +17,7 @@ struct MacRightPanel: View {
                 Group {
                     switch tab {
                     case .characters: MacCharacterTab()
-                    case .book: MacBookSettingsTab()
+                    case .book: MacBookSettingsTab(currentChapterID: currentChapterID)
                     case .inspiration: MacInspirationTab()
                     case .agent: MacAgentTab()
                     }

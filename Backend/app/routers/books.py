@@ -7,13 +7,106 @@ from sqlalchemy.orm import Session
 import json
 
 from app.db import get_db
-from app.models import Book, Chapter, Character, CharacterEvent
+from app.models import AgentPersona, Book, BookAgentPersona, Chapter, ChapterArchiveRevision, Character, CharacterEvent
 from app.models.entities import utc_now
 from app.schemas.book import BookCreate, BookPatch, BookRead
+from app.schemas.settings import BookAgentPersonaPut, BookAgentPersonaRead
 from app.services.archive_v2 import active_archive_revision
+from app.services.personas import AGENT_ROLES, DEFAULT_PERSONAS, PROGRAM_PROTOCOLS
 from app.services.write_ownership import cancel_local_writer_jobs, chapters_for_book, invalidate_writer_inputs
 
 router = APIRouter(tags=["books"])
+
+
+def _book_persona_response(
+    role: str,
+    override: BookAgentPersona | None,
+    global_persona: AgentPersona | None,
+) -> dict[str, object]:
+    global_value = global_persona.system_prompt if global_persona is not None else DEFAULT_PERSONAS[role]
+    if override is not None:
+        source, effective = "book", override.editable_persona
+    elif global_persona is not None:
+        source, effective = "global", global_value
+    else:
+        source, effective = "default", global_value
+    return {
+        "agent_role": role,
+        "source": source,
+        "book_persona": override.editable_persona if override is not None else None,
+        "global_persona": global_value,
+        "default_persona": DEFAULT_PERSONAS[role],
+        "effective_persona": effective,
+        "program_protocol": PROGRAM_PROTOCOLS[role],
+        "updated_at": override.updated_at if override is not None else None,
+    }
+
+
+def _require_book(db: Session, book_id: str) -> Book:
+    book = db.get(Book, book_id)
+    if book is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="book not found")
+    return book
+
+
+@router.get("/books/{book_id}/agent-personas", response_model=list[BookAgentPersonaRead])
+def list_book_personas(book_id: str, db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    _require_book(db, book_id)
+    overrides = {
+        item.agent_role: item
+        for item in db.scalars(select(BookAgentPersona).where(BookAgentPersona.book_id == book_id)).all()
+    }
+    globals_by_role = {item.agent_role: item for item in db.scalars(select(AgentPersona)).all()}
+    return [_book_persona_response(role, overrides.get(role), globals_by_role.get(role)) for role in AGENT_ROLES]
+
+
+@router.put("/books/{book_id}/agent-personas/{agent_role}", response_model=BookAgentPersonaRead)
+def put_book_persona(
+    book_id: str,
+    agent_role: str,
+    payload: BookAgentPersonaPut,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    _require_book(db, book_id)
+    if agent_role not in AGENT_ROLES:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="agent role not found")
+    override = db.scalars(
+        select(BookAgentPersona).where(
+            BookAgentPersona.book_id == book_id,
+            BookAgentPersona.agent_role == agent_role,
+        )
+    ).first()
+    if override is None:
+        override = BookAgentPersona(book_id=book_id, agent_role=agent_role, editable_persona=payload.value)
+        db.add(override)
+    else:
+        override.editable_persona = payload.value
+    db.commit()
+    db.refresh(override)
+    return _book_persona_response(agent_role, override, db.get(AgentPersona, agent_role))
+
+
+@router.delete("/books/{book_id}/agent-personas/{agent_role}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_book_persona(book_id: str, agent_role: str, db: Session = Depends(get_db)) -> Response:
+    _require_book(db, book_id)
+    if agent_role not in AGENT_ROLES:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="agent role not found")
+    override = db.scalars(
+        select(BookAgentPersona).where(
+            BookAgentPersona.book_id == book_id,
+            BookAgentPersona.agent_role == agent_role,
+        )
+    ).first()
+    if override is not None:
+        db.delete(override)
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def book_read(db: Session, book: Book) -> BookRead:
@@ -22,6 +115,24 @@ def book_read(db: Session, book: Book) -> BookRead:
     data = BookRead.model_validate(book)
     data.chapter_count = chapter_count
     data.character_count = character_count
+    data.archive_pending_count = db.scalar(
+        select(func.count()).select_from(Chapter).where(
+            Chapter.book_id == book.id,
+            Chapter.archive_status.in_(("pending", "extracting")),
+        )
+    ) or 0
+    data.archive_attention_count = db.scalar(
+        select(func.count()).select_from(Chapter).where(
+            Chapter.book_id == book.id,
+            Chapter.archive_status.in_(("stale", "partial", "failed")),
+            # New editable chapters start stale before any archive exists.
+            # Attention means a real archive lifecycle has since become
+            # incomplete or invalid, not merely "not archived yet".
+            select(ChapterArchiveRevision.id)
+            .where(ChapterArchiveRevision.chapter_id == Chapter.id)
+            .exists(),
+        )
+    ) or 0
     return data
 
 

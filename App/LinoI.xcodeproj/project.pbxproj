@@ -53,6 +53,24 @@
 		B00000000000000000000231 /* InspirationCreator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000135 /* InspirationCreator.swift */; };
 		B00000000000000000000232 /* MacInspirationTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000334 /* MacInspirationTab.swift */; };
 		B00000000000000000000221 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000321 /* Assets.xcassets */; };
+		C00000000000000000000001 /* V2DeskTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000301 /* V2DeskTokens.swift */; };
+		C00000000000000000000002 /* V2DeskPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000302 /* V2DeskPresentation.swift */; };
+		C00000000000000000000003 /* V2DeskStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000303 /* V2DeskStatusViews.swift */; };
+		C00000000000000000000011 /* V2DeskTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000301 /* V2DeskTokens.swift */; };
+		C00000000000000000000012 /* V2DeskPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000302 /* V2DeskPresentation.swift */; };
+		C00000000000000000000013 /* V2DeskStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000303 /* V2DeskStatusViews.swift */; };
+		C00000000000000000000101 /* V2IOSBookshelfView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000311 /* V2IOSBookshelfView.swift */; };
+		C00000000000000000000102 /* V2IOSChapterDeskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000312 /* V2IOSChapterDeskView.swift */; };
+		C00000000000000000000103 /* V2IOSChapterFaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000313 /* V2IOSChapterFaces.swift */; };
+		C00000000000000000000104 /* V2IOSChapterRailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000314 /* V2IOSChapterRailView.swift */; };
+		C00000000000000000000105 /* V2IOSPeripheralViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000315 /* V2IOSPeripheralViews.swift */; };
+		C00000000000000000000106 /* V2IOSPrimitives.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000316 /* V2IOSPrimitives.swift */; };
+		C00000000000000000000107 /* V2IOSRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000317 /* V2IOSRootView.swift */; };
+		C00000000000000000000108 /* V2IOSSettingsAndExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000318 /* V2IOSSettingsAndExport.swift */; };
+		C00000000000000000000201 /* V2MacDeskEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000321 /* V2MacDeskEditor.swift */; };
+		C00000000000000000000202 /* V2MacDeskPrimitives.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000322 /* V2MacDeskPrimitives.swift */; };
+		C00000000000000000000203 /* V2MacDeskRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000323 /* V2MacDeskRoot.swift */; };
+		C00000000000000000000204 /* V2MacDeskSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000324 /* V2MacDeskSheets.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -98,6 +116,21 @@
 		B00000000000000000000333 /* MacSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsSheet.swift; sourceTree = "<group>"; };
 		B00000000000000000000334 /* MacInspirationTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacInspirationTab.swift; sourceTree = "<group>"; };
 		B00000000000000000000321 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C00000000000000000000301 /* V2DeskTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskTokens.swift; sourceTree = "<group>"; };
+		C00000000000000000000302 /* V2DeskPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskPresentation.swift; sourceTree = "<group>"; };
+		C00000000000000000000303 /* V2DeskStatusViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskStatusViews.swift; sourceTree = "<group>"; };
+		C00000000000000000000311 /* V2IOSBookshelfView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSBookshelfView.swift; sourceTree = "<group>"; };
+		C00000000000000000000312 /* V2IOSChapterDeskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSChapterDeskView.swift; sourceTree = "<group>"; };
+		C00000000000000000000313 /* V2IOSChapterFaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSChapterFaces.swift; sourceTree = "<group>"; };
+		C00000000000000000000314 /* V2IOSChapterRailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSChapterRailView.swift; sourceTree = "<group>"; };
+		C00000000000000000000315 /* V2IOSPeripheralViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSPeripheralViews.swift; sourceTree = "<group>"; };
+		C00000000000000000000316 /* V2IOSPrimitives.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSPrimitives.swift; sourceTree = "<group>"; };
+		C00000000000000000000317 /* V2IOSRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSRootView.swift; sourceTree = "<group>"; };
+		C00000000000000000000318 /* V2IOSSettingsAndExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSSettingsAndExport.swift; sourceTree = "<group>"; };
+		C00000000000000000000321 /* V2MacDeskEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacDeskEditor.swift; sourceTree = "<group>"; };
+		C00000000000000000000322 /* V2MacDeskPrimitives.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacDeskPrimitives.swift; sourceTree = "<group>"; };
+		C00000000000000000000323 /* V2MacDeskRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacDeskRoot.swift; sourceTree = "<group>"; };
+		C00000000000000000000324 /* V2MacDeskSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacDeskSheets.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -130,6 +163,8 @@
 		A00000000000000000000031 /* LinoI */ = {
 			isa = PBXGroup;
 			children = (
+				C00000000000000000000401 /* V2Shared */,
+				C00000000000000000000402 /* V2IOS */,
 				A00000000000000000000011 /* LinoIApp.swift */,
 				A00000000000000000000121 /* LinoTheme.swift */,
 				A00000000000000000000122 /* LinoModels.swift */,
@@ -164,6 +199,7 @@
 		B00000000000000000000330 /* LinoIMac */ = {
 			isa = PBXGroup;
 			children = (
+				C00000000000000000000403 /* V2 */,
 				B00000000000000000000311 /* LinoIMacApp.swift */,
 				B00000000000000000000312 /* MacShell.swift */,
 				B00000000000000000000315 /* LinoMacTheme.swift */,
@@ -188,6 +224,42 @@
 				B00000000000000000000314 /* LinoIMac.entitlements */,
 			);
 			path = LinoIMac;
+			sourceTree = "<group>";
+		};
+		C00000000000000000000401 /* V2Shared */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000301 /* V2DeskTokens.swift */,
+				C00000000000000000000302 /* V2DeskPresentation.swift */,
+				C00000000000000000000303 /* V2DeskStatusViews.swift */,
+			);
+			path = V2Shared;
+			sourceTree = "<group>";
+		};
+		C00000000000000000000402 /* V2IOS */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000311 /* V2IOSBookshelfView.swift */,
+				C00000000000000000000312 /* V2IOSChapterDeskView.swift */,
+				C00000000000000000000313 /* V2IOSChapterFaces.swift */,
+				C00000000000000000000314 /* V2IOSChapterRailView.swift */,
+				C00000000000000000000315 /* V2IOSPeripheralViews.swift */,
+				C00000000000000000000316 /* V2IOSPrimitives.swift */,
+				C00000000000000000000317 /* V2IOSRootView.swift */,
+				C00000000000000000000318 /* V2IOSSettingsAndExport.swift */,
+			);
+			path = V2IOS;
+			sourceTree = "<group>";
+		};
+		C00000000000000000000403 /* V2 */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000321 /* V2MacDeskEditor.swift */,
+				C00000000000000000000322 /* V2MacDeskPrimitives.swift */,
+				C00000000000000000000323 /* V2MacDeskRoot.swift */,
+				C00000000000000000000324 /* V2MacDeskSheets.swift */,
+			);
+			path = V2;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -289,6 +361,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C00000000000000000000001 /* V2DeskTokens.swift in Sources */,
+				C00000000000000000000002 /* V2DeskPresentation.swift in Sources */,
+				C00000000000000000000003 /* V2DeskStatusViews.swift in Sources */,
+				C00000000000000000000101 /* V2IOSBookshelfView.swift in Sources */,
+				C00000000000000000000102 /* V2IOSChapterDeskView.swift in Sources */,
+				C00000000000000000000103 /* V2IOSChapterFaces.swift in Sources */,
+				C00000000000000000000104 /* V2IOSChapterRailView.swift in Sources */,
+				C00000000000000000000105 /* V2IOSPeripheralViews.swift in Sources */,
+				C00000000000000000000106 /* V2IOSPrimitives.swift in Sources */,
+				C00000000000000000000107 /* V2IOSRootView.swift in Sources */,
+				C00000000000000000000108 /* V2IOSSettingsAndExport.swift in Sources */,
 				A00000000000000000000001 /* LinoIApp.swift in Sources */,
 				A00000000000000000000101 /* LinoTheme.swift in Sources */,
 				A00000000000000000000102 /* LinoModels.swift in Sources */,
@@ -312,6 +395,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C00000000000000000000011 /* V2DeskTokens.swift in Sources */,
+				C00000000000000000000012 /* V2DeskPresentation.swift in Sources */,
+				C00000000000000000000013 /* V2DeskStatusViews.swift in Sources */,
+				C00000000000000000000201 /* V2MacDeskEditor.swift in Sources */,
+				C00000000000000000000202 /* V2MacDeskPrimitives.swift in Sources */,
+				C00000000000000000000203 /* V2MacDeskRoot.swift in Sources */,
+				C00000000000000000000204 /* V2MacDeskSheets.swift in Sources */,
 				B00000000000000000000206 /* LinoTheme.swift in Sources */,
 				B00000000000000000000203 /* LinoModels.swift in Sources */,
 				B00000000000000000000202 /* LinoAPI.swift in Sources */,
@@ -464,7 +554,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 41;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -474,7 +564,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9.2;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -490,7 +580,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 41;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LinoI/Info.plist;
@@ -499,7 +589,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9.2;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -516,7 +606,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 41;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -526,7 +616,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.9.2;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;
@@ -542,7 +632,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 41;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -552,7 +642,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.9.2;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;

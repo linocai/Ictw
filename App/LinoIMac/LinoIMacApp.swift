@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 /// macOS 端入口。与 iOS `LinoIApp` 一致地在 `init()` 建同一套共享 Store
-/// 并注入 environment；桌面窗口配置为隐藏原生标题栏 + 最小尺寸约束。另注入
+/// 并注入 environment；v2 Desk 配置为隐藏原生标题栏 + 窄窗可用约束。另注入
 /// macOS-only 的 `MacCommandBus`，承接 `.commands` 菜单/⌘ 快捷键派发的
 /// 「设置 / 新建作品 / 新建章节」意图。
 @main
@@ -41,7 +41,7 @@ struct LinoIMacApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MacShell()
+            V2MacDeskRoot()
                 .environmentObject(notices)
                 .environmentObject(session)
                 .environmentObject(bookshelfStore)
@@ -51,8 +51,8 @@ struct LinoIMacApp: App {
                 .environmentObject(inspirationCreatorStore)
                 .environmentObject(agentSettingsStore)
                 .environmentObject(commandBus)
-                .frame(minWidth: 1080, minHeight: 720)
-                .tint(LinoTheme.accent)
+                .frame(minWidth: 600, minHeight: 640)
+                .tint(V2DeskPalette.hex(0xA0713A))
                 .task {
                     await session.bootstrap()
                     await bookshelfStore.load()

@@ -32,6 +32,7 @@ class Book(Base):
 
     chapters = relationship("Chapter", back_populates="book", cascade="all, delete-orphan")
     characters = relationship("Character", back_populates="book", cascade="all, delete-orphan")
+    agent_personas = relationship("BookAgentPersona", back_populates="book", cascade="all, delete-orphan")
 
 
 class Character(Base):
@@ -390,6 +391,26 @@ class AgentPersona(Base):
     agent_role: Mapped[str] = mapped_column(String(32), primary_key=True)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class BookAgentPersona(Base):
+    """A book-scoped editable persona override.
+
+    The absence of a row deliberately means "follow the current global
+    persona".  Model bindings and program protocols never live in this table.
+    """
+
+    __tablename__ = "book_agent_personas"
+    __table_args__ = (UniqueConstraint("book_id", "agent_role", name="uq_book_agent_persona_role"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    book_id: Mapped[str] = mapped_column(String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    agent_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    editable_persona: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    book = relationship("Book", back_populates="agent_personas")
 
 
 class LLMProfile(Base):

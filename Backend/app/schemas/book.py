@@ -26,3 +26,7 @@ class BookRead(ORMModel):
     last_opened_at: datetime | None
     chapter_count: int = 0
     character_count: int = 0
+    # Count-only archive health lets chapter rails render book-level attention
+    # without fetching every chapter detail.
+    archive_pending_count: int = 0
+    archive_attention_count: int = 0

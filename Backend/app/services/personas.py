@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AgentModelBinding, AgentPersona
+from app.models import AgentModelBinding, AgentPersona, BookAgentPersona
 
 
 DEFAULT_PERSONAS: dict[str, str] = {
@@ -181,9 +182,23 @@ def seed_defaults(db: Session) -> None:
         db.commit()
 
 
-def get_persona(db: Session, role: str) -> str:
+def get_persona(db: Session, role: str, *, book_id: str | None = None) -> str:
+    """Resolve the editable persona at the moment an agent is started.
+
+    Callers retain the returned string inside the agent/job, so a later
+    settings edit affects only a subsequently started request.
+    """
     if role not in AGENT_ROLES:
         raise KeyError(f"unknown active agent role: {role}")
+    if book_id is not None:
+        override = db.scalars(
+            select(BookAgentPersona).where(
+                BookAgentPersona.book_id == book_id,
+                BookAgentPersona.agent_role == role,
+            )
+        ).first()
+        if override is not None:
+            return override.editable_persona
     persona = db.get(AgentPersona, role)
     if persona is None:
         return DEFAULT_PERSONAS[role]

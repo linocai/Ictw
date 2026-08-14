@@ -88,6 +88,8 @@ struct Book: Codable, Identifiable, Hashable, Sendable {
     var worldSetting: String
     var chapterCount: Int
     var characterCount: Int
+    var archivePendingCount: Int
+    var archiveAttentionCount: Int
     var updatedAt: String
 
     enum CodingKeys: String, CodingKey {
@@ -95,7 +97,21 @@ struct Book: Codable, Identifiable, Hashable, Sendable {
         case worldSetting = "world_setting"
         case chapterCount = "chapter_count"
         case characterCount = "character_count"
+        case archivePendingCount = "archive_pending_count"
+        case archiveAttentionCount = "archive_attention_count"
         case updatedAt = "updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        worldSetting = try container.decodeIfPresent(String.self, forKey: .worldSetting) ?? ""
+        chapterCount = try container.decodeIfPresent(Int.self, forKey: .chapterCount) ?? 0
+        characterCount = try container.decodeIfPresent(Int.self, forKey: .characterCount) ?? 0
+        archivePendingCount = try container.decodeIfPresent(Int.self, forKey: .archivePendingCount) ?? 0
+        archiveAttentionCount = try container.decodeIfPresent(Int.self, forKey: .archiveAttentionCount) ?? 0
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
     }
 }
 
@@ -136,6 +152,7 @@ struct ChapterArchive: Codable, Hashable, Sendable {
     var errorMessage: String?
     var canRetry: Bool
     var latestAttemptStatus: String?
+    var inactivePreview: ChapterArchiveInactivePreview?
 
     enum CodingKeys: String, CodingKey {
         case status, summary, facts, revision
@@ -146,6 +163,25 @@ struct ChapterArchive: Codable, Hashable, Sendable {
         case errorMessage = "error_message"
         case canRetry = "can_retry"
         case latestAttemptStatus = "latest_attempt_status"
+        case inactivePreview = "inactive_preview"
+    }
+}
+
+/// A failed/stale archive revision is intentionally display-only.  It must
+/// never be rendered as active memory or used by a later writing request.
+struct ChapterArchiveInactivePreview: Codable, Hashable, Sendable {
+    var revisionId: String
+    var revision: Int
+    var status: String
+    var summary: String
+    var factCount: Int
+    var stateDeltaCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case revision, status, summary
+        case revisionId = "revision_id"
+        case factCount = "fact_count"
+        case stateDeltaCount = "state_delta_count"
     }
 }
 
@@ -251,11 +287,55 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
     var status: String
     var source: String
     var updatedAt: String
+    var archiveStatus: String
+    var archiveSchema: String
+    var archiveCanRetry: Bool
+    var archiveLatestAttemptStatus: String?
 
     enum CodingKeys: String, CodingKey {
         case id, index, title, status, source
         case bookId = "book_id"
         case updatedAt = "updated_at"
+        case archiveStatus = "archive_status"
+        case archiveSchema = "archive_schema"
+        case archiveCanRetry = "archive_can_retry"
+        case archiveLatestAttemptStatus = "archive_latest_attempt_status"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        bookId = try container.decode(String.self, forKey: .bookId)
+        index = try container.decode(Int.self, forKey: .index)
+        title = try container.decode(String.self, forKey: .title)
+        status = try container.decode(String.self, forKey: .status)
+        source = try container.decode(String.self, forKey: .source)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        archiveStatus = try container.decodeIfPresent(String.self, forKey: .archiveStatus) ?? "stale"
+        archiveSchema = try container.decodeIfPresent(String.self, forKey: .archiveSchema) ?? "none"
+        archiveCanRetry = try container.decodeIfPresent(Bool.self, forKey: .archiveCanRetry) ?? false
+        archiveLatestAttemptStatus = try container.decodeIfPresent(String.self, forKey: .archiveLatestAttemptStatus)
+    }
+
+    init(
+        id: String, bookId: String, index: Int, title: String, status: String,
+        source: String, updatedAt: String, archiveStatus: String = "stale",
+        archiveSchema: String = "none", archiveCanRetry: Bool = false,
+        archiveLatestAttemptStatus: String? = nil
+    ) {
+        self.id = id; self.bookId = bookId; self.index = index; self.title = title
+        self.status = status; self.source = source; self.updatedAt = updatedAt
+        self.archiveStatus = archiveStatus; self.archiveSchema = archiveSchema
+        self.archiveCanRetry = archiveCanRetry; self.archiveLatestAttemptStatus = archiveLatestAttemptStatus
+    }
+}
+
+/// Finalized prose is immutable until the Backend has accepted an explicit
+/// reopen. Keep this policy shared so UI affordances and Store mutations agree.
+enum ChapterEditingPolicy {
+    static func canEdit(_ chapter: Chapter?) -> Bool {
+        guard let chapter else { return false }
+        return chapter.status != "finalized"
     }
 }
 
@@ -335,6 +415,140 @@ struct AgentPersona: Codable, Identifiable, Hashable, Sendable {
         editablePersona = try container.decodeIfPresent(String.self, forKey: .editablePersona) ?? systemPrompt
         defaultPersona = try container.decodeIfPresent(String.self, forKey: .defaultPersona) ?? editablePersona
         programProtocol = try container.decodeIfPresent(String.self, forKey: .programProtocol) ?? ""
+    }
+}
+
+/// The resolved book-level persona exposes the source so the UI never calls a
+/// book override a "default" when it really follows a user-edited global one.
+struct BookAgentPersona: Codable, Identifiable, Hashable, Sendable {
+    var id: String { agentRole }
+    var agentRole: String
+    var source: String
+    var bookPersona: String?
+    var globalPersona: String
+    var defaultPersona: String
+    var effectivePersona: String
+    var programProtocol: String
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case agentRole = "agent_role"
+        case bookPersona = "book_persona"
+        case globalPersona = "global_persona"
+        case defaultPersona = "default_persona"
+        case effectivePersona = "effective_persona"
+        case programProtocol = "program_protocol"
+    }
+}
+
+struct BookAgentPersonaPayload: Encodable, Sendable {
+    let editable_persona: String
+}
+
+enum ExportFormat: String, CaseIterable, Identifiable, Sendable {
+    case plainText, markdown
+    var id: String { rawValue }
+    var fileExtension: String { self == .markdown ? "md" : "txt" }
+    var label: String { self == .markdown ? "Markdown" : "纯文本" }
+}
+
+enum ExportScope: String, CaseIterable, Identifiable, Sendable {
+    case accepted, all, current
+    var id: String { rawValue }
+    var label: String {
+        switch self { case .accepted: "已接受章节"; case .all: "全部章节"; case .current: "本章" }
+    }
+}
+
+struct ExportFile: Hashable, Sendable {
+    var filename: String
+    var text: String
+}
+
+/// Pure composer deliberately consumes only chapter prose and fixed book data;
+/// Extractor memory remains exported through its separate legacy endpoint.
+enum ExportComposer {
+    static func chapters(for scope: ExportScope, chapters: [Chapter], currentID: String?) -> [Chapter] {
+        switch scope {
+        case .accepted: chapters.filter { $0.status == "finalized" }
+        case .all: chapters
+        case .current: chapters.filter { $0.id == currentID }
+        }
+    }
+
+    static func compose(
+        book: Book,
+        chapters: [Chapter],
+        characters: [Character],
+        format: ExportFormat,
+        includeWorld: Bool,
+        includeCharacters: Bool,
+        separateChapters: Bool
+    ) -> [ExportFile] {
+        let sorted = chapters.sorted { $0.index < $1.index }
+        let base = safeFilename(book.title.isEmpty ? "LinoI书稿" : book.title)
+        if separateChapters {
+            var files: [ExportFile] = []
+            if let settings = companionSettingsText(
+                book: book, characters: characters, format: format,
+                includeWorld: includeWorld, includeCharacters: includeCharacters
+            ) {
+                files.append(ExportFile(filename: "\(base)-设定.\(format.fileExtension)", text: settings))
+            }
+            files.append(contentsOf: sorted.map { chapter in
+                ExportFile(filename: "\(base)-第\(chapter.index)章.\(format.fileExtension)", text: chapterText(chapter, format: format, includeHeading: true))
+            })
+            return files
+        }
+        var parts: [String] = []
+        if format == .markdown { parts.append("# \(book.title.isEmpty ? "未命名书籍" : book.title)") }
+        else { parts.append(book.title.isEmpty ? "未命名书籍" : book.title) }
+        if includeWorld, !book.worldSetting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(format == .markdown ? "## 世界观\n\n\(book.worldSetting)" : "世界观\n\(book.worldSetting)")
+        }
+        if includeCharacters, !characters.isEmpty {
+            let rows = characters.sorted { $0.name < $1.name }.map { character in
+                format == .markdown
+                    ? "- **\(character.name)**（身份：\(character.role.isEmpty ? "未填写" : character.role)）\n  \(character.fixedProfile)"
+                    : "\(character.name)（身份：\(character.role.isEmpty ? "未填写" : character.role)）\n\(character.fixedProfile)"
+            }
+            parts.append((format == .markdown ? "## 人物设定\n\n" : "人物设定\n") + rows.joined(separator: "\n\n"))
+        }
+        parts.append(contentsOf: sorted.map { chapterText($0, format: format, includeHeading: true) })
+        return [ExportFile(filename: "\(base).\(format.fileExtension)", text: parts.joined(separator: "\n\n"))]
+    }
+
+    private static func chapterText(_ chapter: Chapter, format: ExportFormat, includeHeading: Bool) -> String {
+        let title = chapter.title.isEmpty ? "第 \(chapter.index) 章" : "第 \(chapter.index) 章 \(chapter.title)"
+        guard includeHeading else { return chapter.draftText }
+        return format == .markdown ? "## \(title)\n\n\(chapter.draftText)" : "\(title)\n\n\(chapter.draftText)"
+    }
+
+    /// In per-chapter mode fixed material is emitted once as a companion
+    /// instead of being silently dropped or repeated in every chapter file.
+    private static func companionSettingsText(
+        book: Book, characters: [Character], format: ExportFormat,
+        includeWorld: Bool, includeCharacters: Bool
+    ) -> String? {
+        var parts: [String] = []
+        if includeWorld, !book.worldSetting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(format == .markdown ? "## 世界观\n\n\(book.worldSetting)" : "世界观\n\(book.worldSetting)")
+        }
+        if includeCharacters, !characters.isEmpty {
+            let rows = characters.sorted { $0.name < $1.name }.map { character in
+                format == .markdown
+                    ? "- **\(character.name)**（身份：\(character.role.isEmpty ? "未填写" : character.role)）\n  \(character.fixedProfile)"
+                    : "\(character.name)（身份：\(character.role.isEmpty ? "未填写" : character.role)）\n\(character.fixedProfile)"
+            }
+            parts.append((format == .markdown ? "## 人物设定\n\n" : "人物设定\n") + rows.joined(separator: "\n\n"))
+        }
+        guard !parts.isEmpty else { return nil }
+        let title = book.title.isEmpty ? "未命名书籍" : book.title
+        return (format == .markdown ? "# \(title)" : title) + "\n\n" + parts.joined(separator: "\n\n")
+    }
+
+    private static func safeFilename(_ name: String) -> String {
+        name.replacingOccurrences(of: "/", with: "-")
     }
 }
 
@@ -585,7 +799,7 @@ struct MemoryContext: Decodable, Hashable, Sendable {
     }
 }
 
-struct CheckerIssue: Decodable, Hashable, Sendable, Identifiable {
+struct CheckerIssue: Codable, Hashable, Sendable, Identifiable {
     var id: String { "\(kind)|\(draftEvidence)|\(bibleEvidence)" }
     var kind: String
     var draftEvidence: String
@@ -594,7 +808,7 @@ struct CheckerIssue: Decodable, Hashable, Sendable, Identifiable {
     enum CodingKeys: String, CodingKey { case kind, reason; case draftEvidence = "draft_evidence"; case bibleEvidence = "bible_evidence" }
 }
 
-struct CheckerResult: Decodable, Hashable, Sendable {
+struct CheckerResult: Codable, Hashable, Sendable {
     var verdict: String?
     var status: String?
     var draftFingerprint: String?
@@ -609,7 +823,58 @@ struct CheckerResult: Decodable, Hashable, Sendable {
     }
     var displayVerdict: String { verdict ?? status ?? "unavailable" }
     var isPassed: Bool { displayVerdict == "passed" }
+    /// Only these server verdicts are meaningful historical Checker evidence.
+    /// Transport/unavailable/stale states must never be retained as a check.
+    var hasConcreteVerdict: Bool {
+        ["passed", "suspect", "violation"].contains(displayVerdict)
+    }
     var isOverride: Bool { wasOverridden == true }
+}
+
+/// A Checker transport/status response is not itself evidence. This keeps a
+/// historical concrete verdict visible as stale when the current response is
+/// unavailable, while never allowing it to act as the current result.
+enum CheckerSnapshotPresentationPolicy {
+    static func shouldShowStaleSnapshot(
+        hasConcreteSnapshot: Bool,
+        checkerAppliesToVisibleDraft: Bool,
+        currentCheckerResult: CheckerResult?
+    ) -> Bool {
+        guard hasConcreteSnapshot else { return false }
+        return !(checkerAppliesToVisibleDraft && currentCheckerResult?.hasConcreteVerdict == true)
+    }
+}
+
+/// Chapter rails receive health as independent fields. Schema describes an
+/// active memory format, not whether an archive lifecycle needs attention.
+enum ChapterArchiveRailState: Equatable, Sendable {
+    case none
+    case pending
+    case attention
+
+    static func resolve(status: String, canRetry: Bool) -> Self {
+        switch status {
+        case "pending", "extracting": return .pending
+        case "partial", "failed", "stale": return canRetry ? .attention : .none
+        default: return .none
+        }
+    }
+
+    var label: String? {
+        switch self {
+        case .none: nil
+        case .pending: "归档中"
+        case .attention: "归档待处理"
+        }
+    }
+}
+
+/// Async book-scoped configuration must never repaint a newer book after the
+/// author switches books while a request is in flight.
+enum BookPersonaResponsePolicy {
+    static func accepts(responseBookID: String, activeBookID: String?, targetBookID: String?) -> Bool {
+        responseBookID == activeBookID && responseBookID == targetBookID
+    }
 }
 
 struct CheckerRunResult: Decodable, Sendable {

@@ -66,7 +66,7 @@ struct MacAgentTab: View {
 
     private var personasSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            LinoISectionLabel("Agent 人格")
+            LinoISectionLabel("全局 Agent 人格")
             ForEach(personasInRoleOrder) { persona in
                 MacPersonaCard(persona: persona)
             }

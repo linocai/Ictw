@@ -40,7 +40,7 @@ struct MacCharacterTab: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
                 LinoISectionLabel("角色")
-                Text("固定设定由你维护，当前状态与故事线由 Extractor 更新。")
+                Text("姓名、身份和人物设定由你维护；归档层只读。")
                     .font(.system(size: 11))
                     .foregroundStyle(LinoTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -128,7 +128,7 @@ private struct MacCharacterCard: View {
                 LinoIAvatar(name: name.isEmpty ? character.name : name, size: 40, rounded: true)
                 VStack(alignment: .leading, spacing: 7) {
                     LinoITextField("姓名", text: $name)
-                    LinoITextField("身份 / 职能", text: $role)
+                    LinoITextField("身份", text: $role)
                 }
                 LinoMacIconButton(systemName: "trash", style: .danger, size: 30, fontSize: 13, help: "删除人物") {
                     confirmingDelete = true
@@ -136,7 +136,7 @@ private struct MacCharacterCard: View {
             }
 
             LinoIEditor(
-                title: "固定设定",
+                title: "人物设定",
                 text: $fixedProfile,
                 minHeight: 180,
                 placeholder: "外貌、背景、性格、关系、说话方式、禁忌等。"
@@ -203,9 +203,9 @@ private struct MacCharacterCard: View {
 
     private var storylineSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            LinoISectionLabel("人物故事线")
+            LinoISectionLabel("归档记录 · 只读")
             if character.events.isEmpty {
-                hint("接受章节后，Extractor 会把本人物的大事和故事线写到这里。")
+                hint("还没有正文记录。接受章节后，Extractor 会把可证明的归档记录写到这里。")
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(character.events) { event in

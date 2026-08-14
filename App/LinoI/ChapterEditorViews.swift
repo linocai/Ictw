@@ -953,7 +953,7 @@ private struct LinoIChapterEditor: View {
             }
 
             let result = editor.checkerResult
-            Text("当前正文 · \((result?.displayVerdict ?? "unavailable").checkerLabel)")
+            Text(result?.isPassed == true && editor.checkerAppliesToVisibleDraft ? "检查通过 · 对应当前正文" : "当前正文 · \((result?.displayVerdict ?? "unavailable").checkerLabel)")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(result?.isPassed == true ? LinoTheme.success : LinoTheme.warning)
 
@@ -971,6 +971,11 @@ private struct LinoIChapterEditor: View {
                 Text(result?.displayVerdict == "unavailable" ? "当前正文尚无可用的 Bible 检查结果。" : "Checker 只检查剧情边界，不评价文风。")
                     .font(.system(size: 12.5))
                     .foregroundStyle(LinoTheme.muted)
+            }
+
+            if editor.hasStaleCheckedSnapshot {
+                Text(editor.staleCheckerChangedRanges.isEmpty ? "上一份本地检查结论已失效；无法证明正文差异。" : "上一份本地检查结论已失效；检测到 \(editor.staleCheckerChangedRanges.count) 处句子改动。")
+                    .font(.system(size: 11.5)).foregroundStyle(LinoTheme.warning)
             }
 
             if editor.writingPhase.isFailed && !editor.checkerAppliesToVisibleDraft {
@@ -1084,6 +1089,15 @@ private struct LinoIChapterEditor: View {
                         .font(.system(size: 12.5))
                         .foregroundStyle(LinoTheme.warning)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let inactive = archive.inactivePreview {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("失效归档预览 · 仅供查看")
+                            .font(LinoType.ui(11.5, .semibold)).foregroundStyle(LinoTheme.warning)
+                        Text("第 \(inactive.revision) 次 · \(inactive.status)\(inactive.summary.isEmpty ? "" : "\n\(inactive.summary)")")
+                            .font(LinoType.ui(11.5)).foregroundStyle(LinoTheme.muted)
+                    }
                 }
 
                 if archive.canRetry && archive.status != "extracting" && archive.status != "pending" {

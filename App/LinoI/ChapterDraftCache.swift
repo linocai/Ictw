@@ -1,5 +1,79 @@
 import Foundation
 
+/// A local-only, versioned record of the latest Checker result that is known
+/// to apply to a complete visible draft. It is never uploaded and never used
+/// to authorize acceptance; it only makes stale UI evidence honest.
+struct CheckedDraftSnapshot: Codable, Hashable, Sendable {
+    static let currentVersion = 1
+    let version: Int
+    let chapterID: String
+    let draftText: String
+    let inputFingerprint: String
+    let checkerResult: CheckerResult
+    let savedAt: Date
+
+    init(chapter: Chapter, checkerResult: CheckerResult) {
+        version = Self.currentVersion
+        chapterID = chapter.id
+        draftText = chapter.draftText
+        inputFingerprint = Self.fingerprint(for: chapter)
+        self.checkerResult = checkerResult
+        savedAt = Date()
+    }
+
+    func applies(to chapter: Chapter) -> Bool {
+        version == Self.currentVersion
+            && chapterID == chapter.id
+            && draftText == chapter.draftText
+            && inputFingerprint == Self.fingerprint(for: chapter)
+    }
+
+    static func fingerprint(for chapter: Chapter) -> String {
+        // Length-prefixing makes the serialized input unambiguous without
+        // introducing another platform-specific crypto dependency.
+        let links = chapter.characterLinks.map(\.characterId).sorted().joined(separator: "\u{1F}")
+        let values = [chapter.title, chapter.userPrompt, chapter.authorNote, links, chapter.draftText]
+        return values.map { "\($0.utf8.count):\($0)" }.joined(separator: "\u{1E}")
+    }
+}
+
+enum CheckedDraftSentenceDiff {
+    /// Sentence-level diff only runs when a real snapshot exists. The range
+    /// list is intentionally deterministic and does not claim a semantic
+    /// rewrite explanation for a missing local baseline.
+    static func changedRanges(previous: String, current: String) -> [Range<String.Index>] {
+        guard previous != current else { return [] }
+        let old = sentences(previous)
+        let new = sentences(current)
+        var oldCounts: [String: Int] = [:]
+        old.forEach { oldCounts[$0.text, default: 0] += 1 }
+        return new.compactMap { sentence in
+            guard (oldCounts[sentence.text] ?? 0) > 0 else { return sentence.range }
+            oldCounts[sentence.text, default: 0] -= 1
+            return nil
+        }
+    }
+
+    private static func sentences(_ text: String) -> [(text: String, range: Range<String.Index>)] {
+        var result: [(String, Range<String.Index>)] = []
+        var start = text.startIndex
+        for index in text.indices {
+            guard "。！？!?\n".contains(text[index]) else { continue }
+            let end = text.index(after: index)
+            let range = start..<end
+            let value = text[range].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { result.append((value, range)) }
+            start = end
+        }
+        if start < text.endIndex {
+            let range = start..<text.endIndex
+            let value = text[range].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { result.append((value, range)) }
+        }
+        return result
+    }
+}
+
 struct LocalChapterDraft: Codable {
     var chapterId: String
     var title: String
@@ -125,6 +199,25 @@ final class ChapterDraftCache {
 
     func remove(chapterId: String) {
         try? FileManager.default.removeItem(at: fileURL(chapterId))
+        try? FileManager.default.removeItem(at: checkedSnapshotURL(chapterId))
+    }
+
+    func loadCheckedSnapshot(chapterId: String) -> CheckedDraftSnapshot? {
+        guard let data = try? Data(contentsOf: checkedSnapshotURL(chapterId)) else { return nil }
+        guard let snapshot = try? decoder.decode(CheckedDraftSnapshot.self, from: data),
+              snapshot.version == CheckedDraftSnapshot.currentVersion,
+              snapshot.checkerResult.hasConcreteVerdict else { return nil }
+        return snapshot
+    }
+
+    @discardableResult
+    func saveCheckedSnapshot(_ snapshot: CheckedDraftSnapshot) -> Bool {
+        guard snapshot.checkerResult.hasConcreteVerdict else { return false }
+        do {
+            let data = try encoder.encode(snapshot)
+            try data.write(to: checkedSnapshotURL(snapshot.chapterID), options: [.atomic])
+            return true
+        } catch { return false }
     }
 
     private func save(_ draft: LocalChapterDraft) -> Bool {
@@ -143,5 +236,10 @@ final class ChapterDraftCache {
     private func fileURL(_ chapterId: String) -> URL {
         let safe = chapterId.replacingOccurrences(of: "/", with: "_")
         return directory.appendingPathComponent("\(safe).json")
+    }
+
+    private func checkedSnapshotURL(_ chapterId: String) -> URL {
+        let safe = chapterId.replacingOccurrences(of: "/", with: "_")
+        return directory.appendingPathComponent("\(safe).checked-v\(CheckedDraftSnapshot.currentVersion).json")
     }
 }

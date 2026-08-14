@@ -139,6 +139,10 @@ private struct LinoIBookCard: View {
                         .foregroundStyle(LinoTheme.muted)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
+                    if book.archivePendingCount > 0 || book.archiveAttentionCount > 0 {
+                        Text("归档中 \(book.archivePendingCount) · 待处理 \(book.archiveAttentionCount)")
+                            .font(LinoType.caption).foregroundStyle(LinoTheme.warning)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)

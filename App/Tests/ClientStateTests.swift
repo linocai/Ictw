@@ -575,6 +575,430 @@ private func testLocalDraftPersistsOnlyAtTransitionBoundaries() throws {
     )
 }
 
+private func testV193ArchiveAndBookPersonaDecode() throws {
+    let bookData = try JSONSerialization.data(withJSONObject: [
+        "id": "book-1", "title": "测试书", "world_setting": "海上城市", "chapter_count": 2,
+        "character_count": 1, "archive_pending_count": 1, "archive_attention_count": 2,
+        "updated_at": "2026-08-14T12:00:00.000000",
+    ])
+    let book = try JSONDecoder().decode(Book.self, from: bookData)
+    try expect(book.archivePendingCount == 1 && book.archiveAttentionCount == 2, "book archive counts must decode")
+
+    let summaryData = try JSONSerialization.data(withJSONObject: [
+        "id": "chapter-1", "book_id": "book-1", "index": 1, "title": "第一章", "status": "finalized",
+        "source": "agent", "updated_at": "2026-08-14T12:00:00.000000", "archive_status": "failed",
+        "archive_schema": "v2", "archive_can_retry": true, "archive_latest_attempt_status": "failed",
+    ])
+    let summary = try JSONDecoder().decode(ChapterSummary.self, from: summaryData)
+    try expect(summary.archiveCanRetry && summary.archiveStatus == "failed", "chapter archive health must decode")
+
+    let personaData = try JSONSerialization.data(withJSONObject: [
+        "agent_role": "writer", "source": "book", "book_persona": "短句", "global_persona": "全局",
+        "default_persona": "默认", "effective_persona": "短句", "program_protocol": "只读",
+    ])
+    let persona = try JSONDecoder().decode(BookAgentPersona.self, from: personaData)
+    try expect(persona.source == "book" && persona.effectivePersona == "短句", "book persona source and effective text must decode")
+}
+
+private func testCheckedSnapshotAndExportComposer() throws {
+    let chapter = try makeChapter(status: "finalized")
+    let result = CheckerResult(verdict: "passed", status: "passed", draftFingerprint: nil, issues: nil, errorCode: nil, wasOverridden: nil)
+    let snapshot = CheckedDraftSnapshot(chapter: chapter, checkerResult: result)
+    try expect(snapshot.applies(to: chapter), "unchanged checked draft must retain its local result")
+    let unavailable = CheckerResult(verdict: nil, status: "unavailable", draftFingerprint: nil, issues: nil, errorCode: nil, wasOverridden: nil)
+    try expect(!unavailable.hasConcreteVerdict, "unavailable Checker state must not become a historical verdict")
+    try expect(!CheckedDraftSnapshot(chapter: chapter, checkerResult: unavailable).checkerResult.hasConcreteVerdict, "snapshot guard must distinguish a real verdict from availability state")
+    try expect(
+        CheckerSnapshotPresentationPolicy.shouldShowStaleSnapshot(
+            hasConcreteSnapshot: true, checkerAppliesToVisibleDraft: true, currentCheckerResult: unavailable
+        ),
+        "an unavailable current response must leave a concrete old result visibly stale"
+    )
+    try expect(
+        !CheckerSnapshotPresentationPolicy.shouldShowStaleSnapshot(
+            hasConcreteSnapshot: true, checkerAppliesToVisibleDraft: true, currentCheckerResult: result
+        ),
+        "a current concrete verdict must hide the old snapshot"
+    )
+    var revised = chapter
+    revised.draftText = "正文已修改。另起一句。"
+    try expect(!snapshot.applies(to: revised), "draft edits must stale local checker snapshot")
+    try expect(!CheckedDraftSentenceDiff.changedRanges(previous: chapter.draftText, current: revised.draftText).isEmpty, "a real local baseline must yield deterministic changed sentences")
+
+    let bookData = try JSONSerialization.data(withJSONObject: [
+        "id": "book-1", "title": "测试书", "world_setting": "海上城市", "chapter_count": 1,
+        "character_count": 0, "updated_at": "2026-08-14T12:00:00.000000",
+    ])
+    let book = try JSONDecoder().decode(Book.self, from: bookData)
+    let files = ExportComposer.compose(book: book, chapters: [chapter], characters: [], format: .markdown, includeWorld: true, includeCharacters: false, separateChapters: false)
+    try expect(files.count == 1 && files[0].filename.hasSuffix(".md"), "markdown export must produce one markdown file")
+    try expect(files[0].text.contains("## 世界观") && files[0].text.contains("## 第 1 章"), "export must include opted-in fixed setting and chapter prose")
+    let separate = ExportComposer.compose(book: book, chapters: [chapter], characters: [], format: .plainText, includeWorld: true, includeCharacters: true, separateChapters: true)
+    try expect(separate.count == 2 && separate[0].filename.contains("设定") && separate[0].text.contains("世界观"), "per-chapter export must emit one non-empty settings companion")
+}
+
+private func testArchiveRailUsesHealthNotSchema() throws {
+    try expect(
+        ChapterArchiveRailState.resolve(status: "pending", canRetry: false) == .pending,
+        "pending archive must show even without an active archive schema"
+    )
+    try expect(
+        ChapterArchiveRailState.resolve(status: "failed", canRetry: true) == .attention,
+        "retryable failed archive must show attention even without a schema"
+    )
+    try expect(
+        ChapterArchiveRailState.resolve(status: "stale", canRetry: false) == .none,
+        "a fresh draft's default stale state must not appear as archive attention"
+    )
+}
+
+private func testFinalizedChapterEditingPolicy() throws {
+    let draft = try makeChapter()
+    let finalized = try makeChapter(status: "finalized")
+    try expect(ChapterEditingPolicy.canEdit(draft), "draft chapters must remain editable")
+    try expect(!ChapterEditingPolicy.canEdit(finalized), "finalized chapters must stay immutable until reopen changes their status")
+    try expect(!ChapterEditingPolicy.canEdit(nil), "a missing chapter must never accept an edit")
+}
+
+private func testBookPersonaResponseCannotCrossBook() throws {
+    try expect(
+        BookPersonaResponsePolicy.accepts(responseBookID: "book-b", activeBookID: "book-b", targetBookID: "book-b"),
+        "current book persona response must apply"
+    )
+    try expect(
+        !BookPersonaResponsePolicy.accepts(responseBookID: "book-a", activeBookID: "book-b", targetBookID: "book-b"),
+        "a slow old-book response must not overwrite the new book"
+    )
+}
+
+private func makeV2DeskSource(
+    chapter: Chapter? = nil,
+    writingPhase: ChapterWritingPhase = .idle,
+    checkerResult: CheckerResult? = nil,
+    checkerApplies: Bool = false,
+    checkerRefreshing: Bool = false,
+    staleSnapshot: CheckedDraftSnapshot? = nil,
+    saveState: ChapterSaveState = .synced,
+    connectionInterrupted: Bool = false
+) -> V2DeskEditorSource {
+    V2DeskEditorSource(
+        chapter: chapter,
+        writingPhase: writingPhase,
+        checkerResult: checkerResult,
+        checkerAppliesToVisibleDraft: checkerApplies,
+        checkerRefreshing: checkerRefreshing,
+        staleCheckedSnapshot: staleSnapshot,
+        saveState: saveState,
+        connectionInterrupted: connectionInterrupted
+    )
+}
+
+private func checkerResult(_ verdict: String, issues: [CheckerIssue] = []) -> CheckerResult {
+    CheckerResult(
+        verdict: verdict,
+        status: verdict,
+        draftFingerprint: nil,
+        issues: issues,
+        errorCode: nil,
+        wasOverridden: nil
+    )
+}
+
+private func testV2DeskUsesFixedThreeFacesAndOnePrimaryAction() throws {
+    try expect(
+        V2DeskChapterFace.allCases == [.intent, .manuscript, .evidence],
+        "v2 chapter navigation must retain exactly intent, manuscript and evidence faces"
+    )
+
+    let empty = V2DeskPresentation.make(makeV2DeskSource())
+    try expect(empty.chapterState == .empty, "an empty desk must remain an empty chapter state")
+    try expect(empty.primaryAction == .generate, "an empty chapter must offer generation as its only primary action")
+    try expect(empty.marker == .notYetHappened, "an empty chapter must use the not-yet marker")
+    try expect(empty.evidence == .none, "an empty chapter must not invent Checker evidence")
+
+    var prose = try makeChapter()
+    prose.draftText = "作者已有的一段正文。"
+    let drafting = V2DeskPresentation.make(makeV2DeskSource(chapter: prose))
+    try expect(drafting.chapterState == .drafting, "existing prose without a current Checker result must remain drafting")
+    try expect(drafting.primaryAction == .rerunChecker, "existing prose without current evidence must require a recheck")
+    try expect(!drafting.isBodyReadOnly, "unaccepted prose must remain editable")
+}
+
+private func testV2DeskGenerationCancelAndFailurePreserveVisibleProse() throws {
+    var chapter = try makeChapter()
+    chapter.draftText = "作者正在保留的原正文。"
+
+    let generating = V2DeskPresentation.make(makeV2DeskSource(chapter: chapter, writingPhase: .writing))
+    try expect(generating.chapterState == .generating, "write-side jobs must map to generating")
+    try expect(generating.primaryAction == .cancelGeneration, "a generating chapter must expose cancellation as its only primary action")
+    try expect(generating.taskBanner?.kind == .writing, "generation must be represented in the task banner")
+    try expect(generating.isBodyEditableWhileGenerating, "visible prose must remain editable while a job runs")
+    try expect(!generating.isBodyReadOnly, "generation must not make the visible prose read-only")
+
+    let cancelled = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        writingPhase: .cancelled(message: "已取消", stage: .drafting)
+    ))
+    try expect(cancelled.primaryAction == .generate, "cancelled generation must allow a new generation")
+    try expect(cancelled.taskBanner?.kind == .cancelled, "cancelled generation must remain author-visible")
+    try expect(cancelled.taskBanner?.text.contains("正文没有变化") == true, "cancellation must state that visible prose was preserved")
+
+    let failed = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        writingPhase: .failed(code: "write_failed", message: "失败", stage: .drafting)
+    ))
+    try expect(failed.chapterState == .failed, "a write failure must remain a failure state")
+    try expect(failed.primaryAction == .retryGeneration, "a write failure must retry rather than expose a server-side alternative draft")
+    try expect(failed.taskBanner?.text.contains("正文没有变化") == true, "write failure must state that visible prose was preserved")
+}
+
+private func testV2DeskCheckerCurrentStaleAndUnavailableStates() throws {
+    var chapter = try makeChapter()
+    chapter.draftText = "雨停之后，林夕走进旧站。"
+    let passed = checkerResult("passed")
+    let currentPassed = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        checkerResult: passed,
+        checkerApplies: true
+    ))
+    try expect(currentPassed.chapterState == .checked, "only a concrete current pass may produce checked state")
+    try expect(currentPassed.primaryAction == .accept, "a current Checker pass may enable acceptance")
+    guard case .current(let verdict, _) = currentPassed.evidence else {
+        throw TestFailure.assertion("current Checker evidence must stay current")
+    }
+    try expect(verdict == .passed, "current pass must retain its verdict")
+
+    let issue = CheckerIssue(kind: "new_plot", draftEvidence: "林夕走进旧站", bibleEvidence: "尚未进入旧站", reason: "越界")
+    let suspect = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        checkerResult: checkerResult("suspect", issues: [issue]),
+        checkerApplies: true
+    ))
+    try expect(suspect.primaryAction == .acceptWithWarning, "a current suspect verdict must use the confirmed warning accept path")
+    try expect(suspect.primaryAction.requiresConfirmation, "warning acceptance must require confirmation")
+    guard case .current(let suspectVerdict, let issues) = suspect.evidence else {
+        throw TestFailure.assertion("suspect Checker evidence must remain current")
+    }
+    try expect(suspectVerdict == .suspect && issues.count == 1, "current issues must retain backend evidence")
+
+    let snapshot = CheckedDraftSnapshot(chapter: chapter, checkerResult: passed)
+    var bodyEdited = chapter
+    bodyEdited.draftText = "雨停之后，林夕改去码头。"
+    let stale = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: bodyEdited,
+        staleSnapshot: snapshot
+    ))
+    try expect(stale.chapterState == .needsRecheck, "changed prose with only a historical result must require recheck")
+    try expect(stale.primaryAction == .rerunChecker, "stale Checker evidence must never authorize acceptance")
+    try expect(stale.marker == .unreliable, "stale Checker evidence must use the unreliable marker")
+    guard case .stale(_, _, let canMarkChangedSentences) = stale.evidence else {
+        throw TestFailure.assertion("historical Checker evidence must be visibly stale")
+    }
+    try expect(canMarkChangedSentences, "sentence marking requires and may use a real local baseline")
+
+    var bibleEdited = chapter
+    bibleEdited.userPrompt = "新的本章意图"
+    let staleWithoutBodyDiff = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: bibleEdited,
+        staleSnapshot: snapshot
+    ))
+    guard case .stale(_, _, let canMarkChangedSentences) = staleWithoutBodyDiff.evidence else {
+        throw TestFailure.assertion("input changes must stale historical evidence even without a body diff")
+    }
+    try expect(!canMarkChangedSentences, "sentence marking must not be fabricated when the body has no provable diff")
+
+    let currentUnavailableResult = CheckerResult(
+        verdict: nil,
+        status: "unavailable",
+        draftFingerprint: nil,
+        issues: nil,
+        errorCode: nil,
+        wasOverridden: nil
+    )
+    let unavailableCurrent = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        checkerResult: currentUnavailableResult,
+        checkerApplies: true
+    ))
+    try expect(unavailableCurrent.primaryAction == .rerunChecker, "a completed unavailable check must offer recheck as the single primary action")
+    try expect(unavailableCurrent.taskBanner?.kind == .checkerUnavailable, "a completed unavailable check must be author-visible")
+    try expect(unavailableCurrent.taskBanner?.tone == .warning, "a completed unavailable check must use warning semantics")
+    try expect(unavailableCurrent.taskBanner?.text == "这次没能检查", "unavailable Checker copy must state the failed check without machine detail")
+    try expect(unavailableCurrent.taskBanner?.action == .acceptWithWarning, "unavailable Checker acceptance must remain a distinct confirmed secondary action")
+    try expect(unavailableCurrent.evidence == .unavailable, "unavailable Checker data must never become current evidence")
+
+    let unavailableCurrentWithHistory = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        checkerResult: currentUnavailableResult,
+        checkerApplies: true,
+        staleSnapshot: snapshot
+    ))
+    try expect(unavailableCurrentWithHistory.primaryAction == .rerunChecker, "historical evidence must not change unavailable Checker primary action")
+    try expect(unavailableCurrentWithHistory.taskBanner?.action == .acceptWithWarning, "historical evidence must not turn warning acceptance into the primary action")
+    guard case .stale = unavailableCurrentWithHistory.evidence else {
+        throw TestFailure.assertion("unavailable current Checker data must retain historical evidence only as stale")
+    }
+
+    let unavailableWithHistory = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        checkerResult: currentUnavailableResult,
+        checkerApplies: false,
+        checkerRefreshing: true,
+        staleSnapshot: snapshot
+    ))
+    try expect(unavailableWithHistory.primaryAction == .none, "an in-flight recheck must not offer a competing primary action")
+    try expect(unavailableWithHistory.taskBanner?.kind == .checking, "an unavailable/in-flight Checker must stay in the task banner")
+    guard case .stale = unavailableWithHistory.evidence else {
+        throw TestFailure.assertion("an unavailable Checker must preserve prior concrete evidence only as stale")
+    }
+
+    let unavailableWithoutHistory = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        checkerResult: currentUnavailableResult,
+        checkerApplies: false,
+        checkerRefreshing: true
+    ))
+    try expect(unavailableWithoutHistory.evidence == .unavailable, "unavailable Checker data without a real snapshot must not invent evidence")
+}
+
+private func testV2DeskAcceptedArchiveIsolationAndAttention() throws {
+    var newDraft = try makeChapter()
+    newDraft.draftText = "尚未接受的新草稿。"
+    newDraft.archive = ChapterArchive(
+        status: "stale",
+        archiveSchema: "",
+        revisionId: nil,
+        revision: nil,
+        summary: "",
+        facts: [],
+        stateDeltaCount: 0,
+        errorCode: nil,
+        errorMessage: nil,
+        canRetry: false,
+        latestAttemptStatus: nil,
+        inactivePreview: ChapterArchiveInactivePreview(
+            revisionId: "should-not-render",
+            revision: 0,
+            status: "stale",
+            summary: "默认草稿状态不是归档预览",
+            factCount: 1,
+            stateDeltaCount: 1
+        )
+    )
+    let notStartedArchive = V2DeskPresentation.make(makeV2DeskSource(chapter: newDraft))
+    try expect(notStartedArchive.archive == .notStarted, "a new draft's default stale archive state must not become archive attention")
+
+    var accepted = try makeChapter(status: "finalized")
+    accepted.draftText = "已经被作者接受的正文。"
+    accepted.archive = ChapterArchive(
+        status: "pending",
+        archiveSchema: "v2",
+        revisionId: nil,
+        revision: nil,
+        summary: "",
+        facts: [],
+        stateDeltaCount: 0,
+        errorCode: nil,
+        errorMessage: nil,
+        canRetry: false,
+        latestAttemptStatus: "pending",
+        inactivePreview: nil
+    )
+    let pending = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted))
+    try expect(pending.chapterState == .accepted && pending.isBodyReadOnly, "acceptance must make the manuscript read-only immediately")
+    try expect(pending.primaryAction == .startNextChapter, "archive work must not replace the accepted chapter primary action")
+    try expect(pending.archive == .pending, "pending archive must remain independent from accepted prose")
+    try expect(pending.taskBanner?.kind == .archiving, "archive work must stay visible as a background fact")
+
+    accepted.archive = ChapterArchive(
+        status: "stale",
+        archiveSchema: "v2",
+        revisionId: "revision-1",
+        revision: 1,
+        summary: "",
+        facts: [],
+        stateDeltaCount: 0,
+        errorCode: nil,
+        errorMessage: nil,
+        canRetry: true,
+        latestAttemptStatus: "stale",
+        inactivePreview: ChapterArchiveInactivePreview(
+            revisionId: "revision-1",
+            revision: 1,
+            status: "stale",
+            summary: "仅供预览的失效归档",
+            factCount: 2,
+            stateDeltaCount: 1
+        )
+    )
+    let staleFinalizedArchive = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted))
+    guard case .attention(let staleCanRetry, let stalePreview) = staleFinalizedArchive.archive else {
+        throw TestFailure.assertion("a retryable stale finalized revision must remain archive attention")
+    }
+    try expect(staleCanRetry, "retryability must distinguish a real stale revision from a new draft default")
+    try expect(stalePreview?.status == "stale" && stalePreview?.factCount == 2, "only a real inactive revision may be offered as a preview")
+
+    accepted.archive = ChapterArchive(
+        status: "failed",
+        archiveSchema: "v2",
+        revisionId: nil,
+        revision: nil,
+        summary: "",
+        facts: [],
+        stateDeltaCount: 0,
+        errorCode: "extract_failed",
+        errorMessage: "失败",
+        canRetry: true,
+        latestAttemptStatus: "failed",
+        inactivePreview: ChapterArchiveInactivePreview(
+            revisionId: "revision-1",
+            revision: 1,
+            status: "failed",
+            summary: "不可作为记忆的预览",
+            factCount: 2,
+            stateDeltaCount: 1
+        )
+    )
+    let failedArchive = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted))
+    guard case .attention(let canRetry, let preview) = failedArchive.archive else {
+        throw TestFailure.assertion("failed archive must remain an attention state, not active memory")
+    }
+    try expect(canRetry, "retry capability must come from the actual archive contract")
+    try expect(preview?.status == "failed" && preview?.factCount == 2, "inactive revision preview must remain display-only metadata")
+    try expect(failedArchive.isBodyReadOnly, "archive failure must never reopen accepted prose")
+    try expect(failedArchive.primaryAction == .startNextChapter, "archive retry must stay secondary to accepted chapter flow")
+}
+
+private func testV2DeskLocalSaveConnectionAndModelConfiguration() throws {
+    var chapter = try makeChapter()
+    chapter.draftText = "本地草稿。"
+    let localDraft = V2DeskPresentation.make(makeV2DeskSource(chapter: chapter, saveState: .localDraft))
+    try expect(localDraft.showsUnsavedLocalDraft, "a recoverable local draft must not be displayed as server-synced")
+
+    let disconnected = V2DeskPresentation.make(makeV2DeskSource(chapter: chapter, connectionInterrupted: true))
+    try expect(disconnected.taskBanner?.kind == .connectionInterrupted, "connection interruption must be visible without discarding prose")
+    try expect(disconnected.taskBanner?.action == nil, "connection interruption must not invent a server command")
+
+    for code in [
+        "llm_profile_not_configured",
+        "llm_profile_missing",
+        "extractor_thinking_not_disableable",
+    ] {
+        let missingModel = V2DeskPresentation.make(makeV2DeskSource(
+            chapter: chapter,
+            writingPhase: .failed(code: code, message: "尚未配置模型", stage: .drafting)
+        ))
+        try expect(missingModel.primaryAction == .openSettings, "the current backend configuration error \(code) must route authors to settings")
+        try expect(missingModel.taskBanner?.action == .openSettings, "configuration failure \(code) must expose settings from the task banner")
+    }
+
+    let ordinaryLLMFailure = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        writingPhase: .failed(code: "llm_timeout", message: "超时", stage: .drafting)
+    ))
+    try expect(ordinaryLLMFailure.primaryAction == .retryGeneration, "unrelated LLM failures must remain retryable rather than be mislabeled as missing settings")
+}
+
 @main
 private struct ClientStateTestRunner {
     static func main() throws {
@@ -599,6 +1023,16 @@ private struct ClientStateTestRunner {
         try testLateRefreshCannotOverwriteLocalCharacterEdit()
         try testFailedRegenerationKeepsVisibleDraftActions()
         try testLocalDraftPersistsOnlyAtTransitionBoundaries()
+        try testV193ArchiveAndBookPersonaDecode()
+        try testCheckedSnapshotAndExportComposer()
+        try testArchiveRailUsesHealthNotSchema()
+        try testFinalizedChapterEditingPolicy()
+        try testBookPersonaResponseCannotCrossBook()
+        try testV2DeskUsesFixedThreeFacesAndOnePrimaryAction()
+        try testV2DeskGenerationCancelAndFailurePreserveVisibleProse()
+        try testV2DeskCheckerCurrentStaleAndUnavailableStates()
+        try testV2DeskAcceptedArchiveIsolationAndAttention()
+        try testV2DeskLocalSaveConnectionAndModelConfiguration()
         print("Client state tests passed")
     }
 }

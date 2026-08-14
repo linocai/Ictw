@@ -622,6 +622,54 @@ def active_archive_revision(db: Session, chapter: Chapter) -> ChapterArchiveRevi
     return revision
 
 
+def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, dict[str, Any]]:
+    """Return list-safe archive health in one revision query.
+
+    This is deliberately count/status-only; display previews stay on the
+    chapter detail endpoint and inactive rows are never fed back into memory.
+    """
+    if not chapters:
+        return {}
+    chapter_ids = [chapter.id for chapter in chapters]
+    revisions = db.scalars(
+        select(ChapterArchiveRevision)
+        .where(ChapterArchiveRevision.chapter_id.in_(chapter_ids))
+        .order_by(ChapterArchiveRevision.chapter_id, ChapterArchiveRevision.revision.desc())
+    ).all()
+    latest_by_chapter: dict[str, ChapterArchiveRevision] = {}
+    by_id = {revision.id: revision for revision in revisions}
+    for revision in revisions:
+        latest_by_chapter.setdefault(revision.chapter_id, revision)
+    result: dict[str, dict[str, Any]] = {}
+    for chapter in chapters:
+        active = by_id.get(chapter.active_archive_revision_id or "")
+        active_valid = (
+            active is not None
+            and active.is_active
+            and active.status == "complete"
+            and active.input_fingerprint == archive_input_fingerprint(chapter)
+        )
+        latest = latest_by_chapter.get(chapter.id)
+        retry_allowed = (
+            chapter.status == "finalized"
+            and latest is not None
+            and latest.status in {"partial", "failed", "stale"}
+        )
+        if active_valid:
+            schema, status = "v2", "complete"
+        elif chapter.status == "finalized" and chapter.legacy_archive_eligible:
+            schema, status = "legacy", "complete"
+        else:
+            schema, status = "none", chapter.archive_status
+        result[chapter.id] = {
+            "archive_status": status,
+            "archive_schema": schema,
+            "archive_can_retry": retry_allowed,
+            "archive_latest_attempt_status": latest.status if latest is not None else chapter.archive_status,
+        }
+    return result
+
+
 def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
     active = active_archive_revision(db, chapter)
     latest = db.scalars(
@@ -634,6 +682,18 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
         and latest is not None
         and latest.status in {"partial", "failed", "stale"}
     )
+    inactive_preview = None
+    if latest is not None and latest is not active and latest.status in {"partial", "failed", "stale"}:
+        # This deliberately exposes only a compact, inactive display record.
+        # It is not shaped like active facts and no selector/projection reads it.
+        inactive_preview = {
+            "revision_id": latest.id,
+            "revision": latest.revision,
+            "status": latest.status,
+            "summary": latest.summary,
+            "fact_count": len(latest.facts),
+            "state_delta_count": len(latest.state_deltas),
+        }
     if active is not None:
         return {
             "status": "complete",
@@ -658,6 +718,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "error_message": None,
             "can_retry": retry_allowed,
             "latest_attempt_status": latest.status if latest is not None else active.status,
+            "inactive_preview": inactive_preview,
         }
     if chapter.status == "finalized" and chapter.legacy_archive_eligible:
         return {
@@ -672,6 +733,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "error_message": latest.error_message if latest is not None else None,
             "can_retry": retry_allowed,
             "latest_attempt_status": latest.status if latest is not None else "legacy",
+            "inactive_preview": inactive_preview,
         }
     return {
         "status": chapter.archive_status,
@@ -685,4 +747,5 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
         "error_message": latest.error_message if latest is not None else None,
         "can_retry": retry_allowed,
         "latest_attempt_status": latest.status if latest is not None else chapter.archive_status,
+        "inactive_preview": inactive_preview,
     }

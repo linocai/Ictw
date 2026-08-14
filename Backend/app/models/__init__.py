@@ -1,6 +1,7 @@
 from app.models.entities import (
     AgentModelBinding,
     AgentPersona,
+    BookAgentPersona,
     Book,
     Chapter,
     ChapterDraftCandidate,
@@ -21,6 +22,7 @@ from app.models.entities import (
 __all__ = [
     "AgentModelBinding",
     "AgentPersona",
+    "BookAgentPersona",
     "Book",
     "Chapter",
     "ChapterDraftCandidate",

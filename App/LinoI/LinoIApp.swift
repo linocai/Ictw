@@ -26,7 +26,7 @@ struct LinoIApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            V2IOSRootView()
                 .environmentObject(notices)
                 .environmentObject(session)
                 .environmentObject(bookshelfStore)
@@ -35,7 +35,7 @@ struct LinoIApp: App {
                 .environmentObject(chapterEditorStore)
                 .environmentObject(inspirationCreatorStore)
                 .environmentObject(agentSettingsStore)
-                .tint(LinoTheme.accent)
+                .tint(V2DeskPalette.hex(0xA0713A))
                 .task {
                     await session.bootstrap()
                     await bookshelfStore.load()

@@ -170,7 +170,7 @@ struct MacWorkspaceView: View {
             .frame(maxWidth: .infinity)
 
             if showRightInline {
-                MacRightPanel(tab: $rightTab)
+                MacRightPanel(tab: $rightTab, currentChapterID: $selectedChapterId)
                     .frame(width: LinoMacMetrics.rightPanelWidth)
                     .transition(.opacity)
             }
@@ -220,7 +220,7 @@ struct MacWorkspaceView: View {
     }
 
     private var rightDrawer: some View {
-        MacRightPanel(tab: $rightTab)
+        MacRightPanel(tab: $rightTab, currentChapterID: $selectedChapterId)
             .frame(width: LinoMacMetrics.rightPanelWidth)
             .background(LinoTheme.surface2)
             .shadow(color: LinoTheme.hex(0x17181C, opacity: 0.12), radius: 12, x: -6)

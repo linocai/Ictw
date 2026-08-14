@@ -67,6 +67,10 @@ class ChapterSummary(ORMModel):
     status: str
     source: str
     updated_at: datetime
+    archive_status: str = "stale"
+    archive_schema: str = "none"
+    archive_can_retry: bool = False
+    archive_latest_attempt_status: str | None = None
 
 
 class ArchiveFactRead(BaseModel):
@@ -77,6 +81,15 @@ class ArchiveFactRead(BaseModel):
     participant_ids: list[str] = Field(default_factory=list)
     start_id: str
     end_id: str
+
+
+class ArchiveInactivePreviewRead(BaseModel):
+    revision_id: str
+    revision: int
+    status: str
+    summary: str = ""
+    fact_count: int = 0
+    state_delta_count: int = 0
 
 
 class ChapterArchiveRead(BaseModel):
@@ -91,6 +104,10 @@ class ChapterArchiveRead(BaseModel):
     error_message: str | None = None
     can_retry: bool = False
     latest_attempt_status: str | None = None
+    # An inactive revision is display-only troubleshooting context.  It is
+    # intentionally separate from summary/facts above, which remain active
+    # memory only.
+    inactive_preview: ArchiveInactivePreviewRead | None = None
 
 
 class ChapterRead(ORMModel):
