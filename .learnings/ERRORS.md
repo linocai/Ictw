@@ -405,3 +405,76 @@ macOS App 换装进程检查使用 `ps -axo pid,command | rg` 精确匹配 bundl
 
 - **Resolved**: 2026-08-14T15:46:00+08:00
 - **Notes**: 已切换到 `ps | rg`。
+
+## [ERR-20260814-010] gh-release-is-latest-field-unsupported
+
+**Logged**: 2026-08-14T15:50:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+当前 `gh release view` 版本不支持 JSON 字段 `isLatest`，导致首次 Release 元数据复核退出 1。
+
+### Error
+
+```
+Unknown JSON field: "isLatest"
+```
+
+### Context
+
+- Release 与附件已经成功创建，失败只发生在随后的只读元数据查询。
+- 当前 `gh` 支持 `tagName`、`assets`、`publishedAt` 等字段，但不暴露 `isLatest`。
+
+### Suggested Fix
+
+用 `gh api repos/{owner}/{repo}/releases/latest` 判断 latest，并继续用 `gh release view` 核对附件元数据。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-14T15:51:00+08:00
+- **Notes**: 已通过 Releases API 确认 `v2.0.0` 是 latest，附件大小与 SHA-256 digest 均和本地交付包一致。
+
+## [ERR-20260814-011] ssh-short-alias-resolved-to-fake-ip
+
+**Logged**: 2026-08-14T15:52:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+最终只读复核使用未配置的短主机名 `nb`，本机代理 DNS 将它解析到 `198.18.18.54`，SSH 在 banner 阶段超时。
+
+### Error
+
+```
+Connection timed out during banner exchange
+Connection to 198.18.18.54 port 22 timed out
+```
+
+### Context
+
+- 超时连接仅执行只读复核，未触达生产主机，也未改变已部署服务。
+- 遗留探测进程已中止；生产公网 health 在此期间一直可用。
+
+### Suggested Fix
+
+在 SSH config 未明确配置别名之前，生产运维使用 `NB_info.md` 记录的精确主机地址并设置 `BatchMode` 与 `ConnectTimeout`。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `/Users/linotsai/Lino/NB_info.md`
+
+### Resolution
+
+- **Resolved**: 2026-08-14T15:53:00+08:00
+- **Notes**: 改用精确主机地址后，Alembic、SQLite、systemd、监听 PID 及内外网鉴权健康复核全部通过。
