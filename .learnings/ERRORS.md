@@ -514,3 +514,40 @@ link command failed: undefined symbol: main
 
 - **Resolved**: 2026-08-14T16:50:00+08:00
 - **Notes**: 已改用类型检查与现有客户端状态测试 runner 验证共享切片。
+
+## [ERR-20260814-013] ios-codesign-entitlements-file-format
+
+**Logged**: 2026-08-14T17:23:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: config
+
+### Summary
+
+iOS Release 验签时把 `codesign -d --entitlements <file>` 的文本输出交给 PlistBuddy，因该格式不是可解析 plist 而失败。
+
+### Error
+
+```
+Unexpected character [ at line 1
+Error Reading File
+```
+
+### Context
+
+- App 的代码签名、Designated Requirement 与版本检查均已先行通过。
+- 失败仅发生在额外的 entitlement 内容复核，不影响签名产物。
+
+### Suggested Fix
+
+读取已签名 App 的 entitlement 时使用 `codesign -d --entitlements :- <app>`，该形式输出标准 XML plist，再交给 plist 工具或做精确字段检查。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `App/LinoI.xcodeproj/project.pbxproj`
+
+### Resolution
+
+- **Resolved**: 2026-08-14T17:23:00+08:00
+- **Notes**: 已改用标准输出形式确认 iOS 为 Apple Development 签名，包含预期的 `get-task-allow=true`；macOS Developer ID 产物仍明确不含该权限。
