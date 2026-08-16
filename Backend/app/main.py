@@ -20,7 +20,7 @@ from app.services.personas import seed_defaults
 # reads it back to confirm the running build. `EXPECTED_ALEMBIC_HEAD` is
 # asserted against the real migration head by the test suite, so it cannot
 # drift silently.
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"
 EXPECTED_ALEMBIC_HEAD = "20260814_0012"
 
 

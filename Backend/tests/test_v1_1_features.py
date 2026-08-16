@@ -415,7 +415,12 @@ def test_chapter_patch_summary_compatibility_and_headline(client, auth_headers):
 
 
 def test_health_reports_current_version(client, auth_headers):
-    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == "1.9.3"
+    # Bound to the constant health reports, so a version bump cannot leave the
+    # deployment-verification signal asserting a stale string.
+    from app.main import APP_VERSION
+
+    assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == APP_VERSION
+    assert APP_VERSION == "1.9.4"
 
 
 # --- B8 migration from the production revision --------------------------------
