@@ -505,3 +505,187 @@ def test_model_change_to_gemini_clears_temperature(tmp_path) -> None:
         _sanitize_profile_bindings(db, profile)
         db.commit()
         assert db.get(AgentModelBinding, "writer").temperature is None
+
+
+def test_profile_never_returns_the_api_key(client, auth_headers) -> None:
+    created = client.post(
+        "/api/v1/llm_profiles",
+        headers=auth_headers,
+        json={
+            "name": "p",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "sk-should-never-come-back",
+            "model_name": "glm-5",
+        },
+    )
+    assert created.status_code == 201
+    assert "api_key" not in created.json()
+    listed = client.get("/api/v1/llm_profiles", headers=auth_headers)
+    assert "should-never-come-back" not in listed.text
+
+
+def test_profile_rejects_non_http_and_hostless_base_urls(client, auth_headers) -> None:
+    for base_url in ("", "file:///etc/passwd", "ftp://example.com", "https://", "not-a-url"):
+        response = client.post(
+            "/api/v1/llm_profiles",
+            headers=auth_headers,
+            json={"name": "p", "base_url": base_url, "api_key": "k", "model_name": "glm-5"},
+        )
+        assert response.status_code == 422, base_url
+
+
+def test_retargeting_base_url_requires_re_entering_the_api_key(client, auth_headers) -> None:
+    # The stored key is sent to whatever base_url names, so moving a profile to
+    # another host must not carry the existing credential along.
+    profile = client.post(
+        "/api/v1/llm_profiles",
+        headers=auth_headers,
+        json={
+            "name": "p",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "sk-original",
+            "model_name": "glm-5",
+        },
+    ).json()
+
+    moved = client.patch(
+        f"/api/v1/llm_profiles/{profile['id']}",
+        headers=auth_headers,
+        json={"base_url": "https://elsewhere.example.net/v1"},
+    )
+    assert moved.status_code == 422
+    assert moved.json()["detail"]["code"] == "api_key_required_for_new_base_url"
+
+    unchanged = client.get("/api/v1/llm_profiles", headers=auth_headers).json()[0]
+    assert unchanged["base_url"] == "https://api.example.com/v1"
+
+    with_key = client.patch(
+        f"/api/v1/llm_profiles/{profile['id']}",
+        headers=auth_headers,
+        json={"base_url": "https://elsewhere.example.net/v1", "api_key": "sk-new"},
+    )
+    assert with_key.status_code == 200
+
+
+def test_patching_a_profile_with_explicit_null_is_rejected_not_crashed(client, auth_headers) -> None:
+    profile = client.post(
+        "/api/v1/llm_profiles",
+        headers=auth_headers,
+        json={
+            "name": "p",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "k",
+            "model_name": "glm-5",
+        },
+    ).json()
+    for field in ("name", "base_url", "model_name"):
+        response = client.patch(
+            f"/api/v1/llm_profiles/{profile['id']}", headers=auth_headers, json={field: None}
+        )
+        assert response.status_code < 500, field
+
+
+def test_patching_a_book_with_explicit_null_is_rejected_not_crashed(client, auth_headers) -> None:
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    for field in ("title", "world_setting"):
+        response = client.patch(
+            f"/api/v1/books/{book['id']}", headers=auth_headers, json={field: None}
+        )
+        assert response.status_code < 500, field
+
+
+def test_undecryptable_api_key_surfaces_as_configuration_error(client, auth_headers) -> None:
+    # KEK rotation and restoring a production database onto another host both
+    # land here; a bare 500 with an empty message is not diagnosable.
+    import app.db as db_module
+
+    profile = client.post(
+        "/api/v1/llm_profiles",
+        headers=auth_headers,
+        json={
+            "name": "p",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "k",
+            "model_name": "glm-5",
+        },
+    ).json()
+    with db_module.SessionLocal() as db:
+        stored = db.get(LLMProfile, profile["id"])
+        stored.api_key_encrypted = "gAAAAABmnot-a-valid-fernet-token"
+        db.commit()
+
+    response = client.post(f"/api/v1/llm_profiles/{profile['id']}/test", headers=auth_headers)
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "api_key_undecryptable"
+
+
+def test_placeholder_secrets_are_refused_at_startup(monkeypatch) -> None:
+    from app.config import Settings
+
+    monkeypatch.setenv("APP_TOKEN", "change-me-to-a-long-random-token")
+    monkeypatch.setenv("KEK_SECRET", "a-real-kek-secret-value")
+    with pytest.raises(ValueError):
+        Settings(_env_file=None)
+
+
+def test_expected_alembic_head_matches_the_migration_chain() -> None:
+    # health() gates deployment on this constant, so it must not drift from the
+    # real head when a migration is added.
+    from alembic.script import ScriptDirectory
+
+    from app.main import EXPECTED_ALEMBIC_HEAD
+
+    script = ScriptDirectory.from_config(Config("alembic.ini"))
+    assert list(script.get_heads()) == [EXPECTED_ALEMBIC_HEAD]
+
+
+def test_schema_matches_alembic_head(tmp_path, monkeypatch) -> None:
+    """The ORM metadata and `alembic upgrade head` must describe one schema.
+
+    The suite builds its database with `Base.metadata.create_all`, so a model
+    change shipped without a migration would leave every test green and only
+    fail in production at `alembic upgrade head`. This is the guard for that.
+    """
+    from sqlalchemy import inspect
+
+    database_path = tmp_path / "schema_parity.db"
+    database_url = f"sqlite:///{database_path}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    get_settings.cache_clear()
+    command.upgrade(Config("alembic.ini"), "head")
+
+    migrated = make_engine(database_url)
+    orm_path = tmp_path / "schema_parity_orm.db"
+    orm = make_engine(f"sqlite:///{orm_path}")
+    Base.metadata.create_all(bind=orm)
+
+    migrated_inspector = inspect(migrated)
+    orm_inspector = inspect(orm)
+
+    migrated_tables = set(migrated_inspector.get_table_names()) - {"alembic_version"}
+    orm_tables = set(orm_inspector.get_table_names())
+    assert migrated_tables == orm_tables
+
+    def columns(inspector, table):
+        # server_default is deliberately excluded: migrations carry defaults to
+        # backfill existing rows, while the ORM expresses the same values as
+        # Python-side defaults. Names, types and nullability must still agree.
+        return {
+            column["name"]: (str(column["type"]).upper(), bool(column["nullable"]))
+            for column in inspector.get_columns(table)
+        }
+
+    drift = {}
+    for table in sorted(orm_tables):
+        left, right = columns(migrated_inspector, table), columns(orm_inspector, table)
+        if left != right:
+            drift[table] = {
+                "only_in_migration": sorted(set(left) - set(right)),
+                "only_in_orm": sorted(set(right) - set(left)),
+                "mismatched": sorted(
+                    name for name in set(left) & set(right) if left[name] != right[name]
+                ),
+            }
+    assert drift == {}
+
+    get_settings.cache_clear()
