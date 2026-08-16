@@ -27,12 +27,11 @@ struct V2IOSRootView: View {
             .navigationDestination(for: ChapterSummary.self) { summary in
                 V2IOSChapterDestinationView(summary: summary)
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                V2IOSNoticeToast()
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-            }
         }
+        // Attached outside the NavigationStack so pushed destinations — the
+        // chapter desk and reader — surface notices too. Sheets are separate
+        // presentation contexts and carry their own overlay.
+        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -96,7 +95,17 @@ struct V2IOSConnectionView: View {
     }
 }
 
-private struct V2IOSNoticeToast: View {
+extension View {
+    /// Surfaces NoticeBus messages above this view's own bottom chrome.
+    /// Every presentation context that can trigger a save needs one: a single
+    /// overlay on the app root is invisible inside pushed destinations and
+    /// sheets, which is exactly where saving happens.
+    func v2IOSNoticeOverlay() -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) { V2IOSNoticeToast() }
+    }
+}
+
+struct V2IOSNoticeToast: View {
     @EnvironmentObject private var notices: NoticeBus
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -130,6 +139,10 @@ private struct V2IOSNoticeToast: View {
             .background(.black.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(notice.isCritical ? "重要提示" : "提示")
+            // Padding lives inside the branch so an absent notice occupies no
+            // height and never lifts the host's bottom action bar.
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
             .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .bottom)))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: notice.id)
         }

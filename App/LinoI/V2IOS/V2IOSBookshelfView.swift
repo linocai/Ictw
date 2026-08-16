@@ -132,7 +132,6 @@ private struct V2IOSFirstStartView: View {
 private struct V2IOSNewBookSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var bookshelf: BookshelfStore
-    @EnvironmentObject private var workspace: WorkspaceStore
     @State private var title = ""
     @State private var world = ""
     @State private var creating = false
@@ -172,9 +171,13 @@ private struct V2IOSNewBookSheet: View {
             V2IOSPrimaryButton(title: creating ? "正在创建" : "创建", disabled: creating) {
                 creating = true
                 Task {
-                    await bookshelf.createBook(title: title.v2IOSTrimmed.isEmpty ? "未命名书籍" : title.v2IOSTrimmed)
-                    if !world.v2IOSTrimmed.isEmpty { await workspace.saveBook(title: title.v2IOSTrimmed, world: world) }
+                    // One request carries both fields, so an empty book title
+                    // can no longer be overwritten by a follow-up PATCH, and a
+                    // failed create keeps the sheet open with the input intact.
+                    let resolvedTitle = title.v2IOSTrimmed.isEmpty ? "未命名书籍" : title.v2IOSTrimmed
+                    let created = await bookshelf.createBook(title: resolvedTitle, world: world)
                     creating = false
+                    guard created != nil else { return }
                     dismiss()
                 }
             }

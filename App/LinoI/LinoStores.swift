@@ -69,14 +69,17 @@ final class BookshelfStore: ObservableObject {
         }
     }
 
-    func createBook(title: String) async {
+    @discardableResult
+    func createBook(title: String, world: String = "") async -> Book? {
         do {
-            let payload = BookPayload(title: title, world_setting: "")
+            let payload = BookPayload(title: title, world_setting: world)
             let book: Book = try await session.api.request("/books", method: "POST", body: payload)
             books.insert(book, at: 0)
             session.currentBook = book
+            return book
         } catch {
             session.notices.publish(error)
+            return nil
         }
     }
 
@@ -514,12 +517,24 @@ final class ChapterEditorStore: ObservableObject {
         // Persist the exact outgoing snapshot before the network request. If
         // PATCH fails, the UI can truthfully promise the local draft survived.
         let localSnapshotSaved = cache.saveDirty(chapter)
+        let startingRevision = localEditRevision
         isSaving = true
         saveState = .savingRemotely
         defer { isSaving = false }
         do {
             let payload = ChapterPatchPayload(chapter)
             let saved: Chapter = try await session.api.request("/chapters/\(chapter.id)", method: "PATCH", body: payload)
+            guard currentChapter?.id == chapter.id else { return saved }
+            // Keystrokes landing during the round trip must survive it. The
+            // response reflects the text we sent, so adopting it wholesale
+            // would silently roll the editor back and then mark it synced.
+            // ChapterRefreshReconciler is not usable here: saveState is
+            // `.savingRemotely` for the whole call, which it always reads as
+            // divergence. The edit counter is the only signal that matters.
+            guard localEditRevision == startingRevision else {
+                saveState = .unsaved
+                return saved
+            }
             currentChapter = saved
             cache.saveClean(saved)
             restoredLocalDraft = false
@@ -1503,12 +1518,11 @@ final class AgentSettingsStore: ObservableObject {
 
     func bind(role: String, profileId: String?) async {
         do {
-            let payload = AgentBindingPayload(
-                llmProfileId: profileId,
-                thinkingEnabled: nil,
-                reasoningEffort: nil,
-                temperature: nil
-            )
+            // Binding a profile must not restate thinking/effort/temperature.
+            // The server treats an explicitly encoded `null` as "clear this
+            // field", so reusing AgentBindingPayload here would wipe settings
+            // the caller never intended to touch.
+            let payload = AgentBindingProfilePayload(llmProfileId: profileId)
             let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload)
             if let idx = bindings.firstIndex(where: { $0.agentRole == role }) {
                 bindings[idx] = binding
@@ -1689,6 +1703,16 @@ private struct LLMProfilePatchPayload: Encodable, Sendable {
         if let apiKey {
             try container.encode(apiKey, forKey: .apiKey)
         }
+    }
+}
+
+/// Profile-only binding patch. Encodes exactly one key so the server's
+/// `model_fields_set` check leaves thinking, effort and temperature alone.
+private struct AgentBindingProfilePayload: Encodable, Sendable {
+    let llmProfileId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case llmProfileId = "llm_profile_id"
     }
 }
 

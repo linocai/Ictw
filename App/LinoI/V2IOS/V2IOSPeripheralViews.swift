@@ -119,6 +119,7 @@ struct V2IOSWorldEditorView: View {
                 }
         }
         .toolbar(.visible, for: .navigationBar)
+        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .background(
             V2IOSDismissAttemptObserver(
@@ -220,6 +221,7 @@ struct V2IOSCharactersView: View {
         }
         .toolbar(.visible, for: .navigationBar)
         .environmentObject(leaveCoordinator)
+        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .background(
             V2IOSDismissAttemptObserver(
@@ -552,7 +554,9 @@ struct V2IOSInspirationSheet: View {
                     if let chapter = editor.currentChapter { inspiration.generate(for: chapter) }
                 }
             }.padding(20)
-        }.v2IOSPage()
+        }
+        .v2IOSNoticeOverlay()
+        .v2IOSPage()
     }
 
     private var canEditChapter: Bool { ChapterEditingPolicy.canEdit(editor.currentChapter) }

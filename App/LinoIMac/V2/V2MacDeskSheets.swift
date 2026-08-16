@@ -76,8 +76,11 @@ private struct V2MacNewBookSheet: View {
     private func create() async {
         guard !creating else { return }
         creating = true
-        await bookshelf.createBook(title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名书籍" : title)
+        let resolvedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名书籍" : title
+        let created = await bookshelf.createBook(title: resolvedTitle)
         creating = false
+        // A failed create leaves the sheet open with the typed title intact.
+        guard created != nil else { return }
         dismiss()
     }
 }
@@ -129,9 +132,12 @@ private struct V2MacWorldSheet: View {
     }
     private func save() async {
         saving = true
-        await workspace.saveBook(title: title, world: world)
-        if let book = session.currentBook { bookshelf.upsert(book) }
+        let didSave = await workspace.saveBook(title: title, world: world)
         saving = false
+        // The world setting never reaches the local draft cache, so dismissing
+        // on failure would drop everything the author just wrote.
+        guard didSave else { return }
+        if let book = session.currentBook { bookshelf.upsert(book) }
         dismiss()
     }
 }
@@ -259,8 +265,11 @@ private struct V2MacNewPersonSheet: View {
         }.onAppear { focused = true }
     }
     private func create() async {
-        await characters.create(name: name)
-        if var created = characters.selected { created.role = role; created.fixedProfile = traits; await characters.update(created) }
+        // One request carries all three fields. The old two-step form fell back
+        // to `characters.selected` when create failed, which resolves to the
+        // first character in the list and overwrote that person's canon.
+        let created = await characters.create(name: name, role: role, fixedProfile: traits)
+        guard created != nil else { return }
         dismiss()
     }
 }

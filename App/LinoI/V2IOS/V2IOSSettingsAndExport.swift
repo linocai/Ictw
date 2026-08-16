@@ -59,6 +59,7 @@ struct V2IOSSettingsView: View {
                 }
             }
         }
+        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .onAppear {
             baseURL = session.baseURL
@@ -150,6 +151,7 @@ struct V2IOSBookSettingsView: View {
             .toolbar(.visible, for: .navigationBar)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction) } }
         }
+        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .task { if let id = session.currentBook?.id { _ = await agents.loadBookPersonas(bookID: id) } }
         .sheet(isPresented: $showingGlobal) {
@@ -169,18 +171,26 @@ private struct V2IOSGlobalAgentRoleView: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @State private var text = ""
     @State private var savedText = ""
-    @State private var profileID = ""
     @State private var saving = false
     @State private var showingDiscardConfirmation = false
+
+    // Read the binding straight from the store. A @State mirror seeded in
+    // onAppear would make `.onChange` fire on first layout and PATCH the
+    // binding the user only came here to look at.
+    private var profileID: Binding<String> {
+        Binding(
+            get: { agents.bindings.first(where: { $0.agentRole == role })?.llmProfileId ?? "" },
+            set: { value in Task { await agents.bind(role: role, profileId: value.isEmpty ? nil : value) } }
+        )
+    }
 
     var body: some View {
         Form {
             Section("模型") {
-                Picker("绑定模型", selection: $profileID) {
+                Picker("绑定模型", selection: profileID) {
                     Text("未绑定").tag("")
                     ForEach(agents.profiles) { Text($0.name).tag($0.id) }
                 }
-                .onChange(of: profileID) { _, id in Task { await agents.bind(role: role, profileId: id.isEmpty ? nil : id) } }
                 if ["extractor", "inspiration_creator"].contains(role) {
                     LabeledContent("深度思考", value: "不可用")
                 }
@@ -204,7 +214,6 @@ private struct V2IOSGlobalAgentRoleView: View {
         .onAppear {
             text = agents.personas.first(where: { $0.agentRole == role })?.editablePersona ?? ""
             savedText = text
-            profileID = agents.bindings.first(where: { $0.agentRole == role })?.llmProfileId ?? ""
         }
         .interactiveDismissDisabled(hasUnsavedChanges || saving)
         .navigationBarBackButtonHidden(hasUnsavedChanges)
@@ -460,6 +469,7 @@ struct V2IOSExportSheet: View {
                 .padding(.vertical, 18)
             }
         }
+        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .onDisappear(perform: cancelExport)
         .sheet(isPresented: $sharing) { V2IOSShareSheet(urls: urls) }
