@@ -68,6 +68,23 @@ from app.services.archive_v2 import (
 
 router = APIRouter(tags=["chapters"])
 
+# Deterministic violations that no override may wave through on accept: an
+# unattributable character name corrupts the archive rather than expressing an
+# authorial choice. Length-class codes stay overridable on purpose.
+_ACCEPT_BLOCKING_VIOLATIONS = {"empty_body", "unselected_character", "ambiguous_character"}
+
+
+def _violation_summary(violations: list[dict]) -> str:
+    """Fold the deterministic messages into the top-level 409 message.
+
+    Clients that predate the `violations` key still render `message`, so the
+    offending character name has to travel in the sentence itself rather than
+    only in the structured payload.
+    """
+    return "；".join(
+        item["message"] for item in violations if isinstance(item.get("message"), str)
+    )
+
 _CHAPTER_CREATE_RETRIES = 3
 
 
@@ -102,6 +119,33 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
     )
 
 
+def _redacted_checker_result(result: dict | None) -> dict | None:
+    """Strip verbatim excerpts from the JobRun's Checker record before it ships.
+
+    On rejection the visible chapter is rolled back to its baseline, so this
+    record describes a candidate the author never saw. `kind` and `reason`
+    explain the verdict; `draft_evidence` quotes the rejected candidate and
+    `bible_evidence` quotes the Bible passage it was matched against. The full
+    record stays on the server (`chapter_draft_candidates`, `job_runs`) as the
+    audit trail the contract asks for. `visible_checker_result` is not routed
+    through here: it is only produced when the candidate text equals the text
+    currently in the editor, so its evidence is the author's own.
+    """
+    if not isinstance(result, dict):
+        return result
+    issues = result.get("issues")
+    if not isinstance(issues, list):
+        return result
+    redacted = dict(result)
+    redacted["issues"] = [
+        {key: issue[key] for key in ("kind", "reason") if key in issue}
+        if isinstance(issue, dict)
+        else issue
+        for issue in issues
+    ]
+    return redacted
+
+
 def _job_status_from_run(
     chapter: Chapter,
     run: JobRun,
@@ -125,7 +169,7 @@ def _job_status_from_run(
         error_context=run.error_context,
         violations=run.violations,
         memory_context=run.memory_context,
-        checker_result=run.checker_result,
+        checker_result=_redacted_checker_result(run.checker_result),
         visible_checker_result=visible_checker_result,
     )
     if run.phase == "done":
@@ -765,7 +809,7 @@ def _start_archive_job(
         job_id=job_id,
         kind="extract",
         phase="extracting",
-        checker_result=run.checker_result,
+        checker_result=_redacted_checker_result(run.checker_result),
     )
 
 
@@ -797,6 +841,39 @@ def accept_chapter(
     # an explicit user override.
     if candidate is not None and not checker_current and not checker_override:
         raise HTTPException(status_code=409, detail={"code": "checker_override_required", "message": "Bible 检查未通过、失效或不可用；请明确忽略后接受"})
+
+    # A chapter only grows a candidate row once a write job runs or /check gets
+    # past its preflight, so pasting a short draft and accepting it used to skip
+    # every deterministic check on the server. The client hides the accept
+    # action in that state, but that is a client-side rule, and this text
+    # becomes a memory source for every later chapter.
+    #
+    # The two violation classes are not equivalent. Character-whitelist
+    # failures are a correctness matter — unselected names cannot be attributed
+    # by Extractor and silently degrade to chapter-level facts — so they are
+    # refused outright; the recorded way through is to exempt the name. Length
+    # is a product judgement about the author's own manuscript, so a deliberate
+    # short chapter stays possible behind an explicit override.
+    violations = draft_violations(db, chapter, chapter.draft_text, "manual_edit")
+    blocking = [item for item in violations if item["code"] in _ACCEPT_BLOCKING_VIOLATIONS]
+    if blocking:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "accept_preflight_failed",
+                "message": f"正文未通过确定性校验，未接受：{_violation_summary(blocking)}",
+                "violations": blocking,
+            },
+        )
+    if violations and candidate is None and not checker_override:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "accept_override_required",
+                "message": f"正文未通过确定性校验：{_violation_summary(violations)}；请明确忽略后接受",
+                "violations": violations,
+            },
+        )
     was_finalized = chapter.status == "finalized"
     override_applied = not checker_current and checker_override
     return _start_archive_job(

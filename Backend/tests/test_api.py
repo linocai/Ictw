@@ -124,6 +124,54 @@ def test_bearer_token_required(client):
     assert client.get("/api/v1/health").status_code == 401
 
 
+def test_every_route_requires_the_bearer_token(client):
+    # A new router mounted without `dependencies=deps` would otherwise ship
+    # unauthenticated; this walks the real route table instead of a fixed list.
+    from fastapi.routing import APIRoute
+
+    unprotected = []
+    for route in client.app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        method = "GET" if "GET" in route.methods else sorted(route.methods)[0]
+        path = route.path
+        for name in route.param_convertors:
+            path = path.replace("{" + name + "}", "probe")
+        response = client.request(method, path)
+        if response.status_code != 401:
+            unprotected.append((method, route.path, response.status_code))
+    assert unprotected == []
+
+
+def test_non_ascii_authorization_header_is_rejected_not_crashed(client):
+    # Starlette decodes headers as latin-1 and hmac.compare_digest raises
+    # TypeError on non-ASCII str, which used to escape as an unauthenticated
+    # 500 that anyone could trigger from the public entrypoint.
+    # Sent as raw bytes: an httpx str header would be rejected client-side,
+    # while curl puts these bytes on the wire without complaint.
+    response = client.get(
+        "/api/v1/health", headers=[(b"authorization", b"Bearer \xc3\xa9")]
+    )
+    assert response.status_code == 401
+
+
+def test_schema_and_interactive_docs_are_not_exposed(client):
+    for path in ("/openapi.json", "/docs", "/redoc"):
+        assert client.get(path).status_code == 404, path
+
+
+def test_health_requires_the_schema_to_match_the_shipped_head(client, auth_headers):
+    import app.db as db_module
+    from sqlalchemy import text
+
+    assert client.get("/api/v1/health", headers=auth_headers).status_code == 200
+    with db_module.engine.begin() as connection:
+        connection.execute(text("UPDATE alembic_version SET version_num = 'not-the-head'"))
+    stale = client.get("/api/v1/health", headers=auth_headers)
+    assert stale.status_code == 503
+    assert stale.json()["detail"]["code"] == "schema_out_of_date"
+
+
 def test_books_characters_chapters_flow_and_legacy_author_note(client, auth_headers):
     book = client.post(
         "/api/v1/books", headers=auth_headers, json={"title": "云上书", "world_setting": "天穹有两个月亮。"}
@@ -198,7 +246,7 @@ def test_accept_success_and_reaccept_replaces_events(client, auth_headers, wait_
         f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "林夕行动。"}
     ).raise_for_status()
 
-    accepted = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
+    accepted = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True})
     assert accepted.status_code == 200
     assert accepted.json()["phase"] == "extracting"
     assert accepted.json()["job_id"]
@@ -211,7 +259,7 @@ def test_accept_success_and_reaccept_replaces_events(client, auth_headers, wait_
     stale = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
     assert stale["phase"] == "done"
     assert stale["outcome_current"] is False
-    assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 200
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).status_code == 200
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
     events = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"]
     assert len(events) == 1
@@ -259,7 +307,7 @@ def test_extractor_rejects_unknown_character_name_without_partial_writes(client,
         headers=auth_headers,
         json={"draft_text": "林夕完成行动。未知人物完成行动。"},
     )
-    assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 200
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).status_code == 200
     status = wait_for_terminal(client, chapter["id"], auth_headers)
     assert status["phase"] == "failed"
     assert client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()["events"] == []
@@ -290,7 +338,7 @@ def test_malformed_archive_keeps_accepted_prose_and_marks_archive_partial(client
         json={"user_prompt": "行动", "character_links": [{"character_id": character["id"]}]},
     ).json()
     client.post(f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "旧稿"})
-    assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 200
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).status_code == 200
     status = wait_for_terminal(client, chapter["id"], auth_headers)
     assert status["phase"] == "failed"
     assert status["job_id"]
@@ -370,11 +418,21 @@ def test_checker_violation_stays_backend_only_and_does_not_replace_visible_draft
     visible = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert visible["draft_text"] == ""
     assert visible["status"] == "draft"
+    # The verdict and its reasons explain the failure; the verbatim excerpts
+    # quote a candidate the author never saw and must not cross the wire.
+    wire_issue = status["checker_result"]["issues"][0]
+    assert wire_issue == {"kind": "new_plot", "reason": "越界"}
+    job_text = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).text
+    assert "正文证据" not in job_text
+    assert "Bible证据" not in job_text
+
     candidates = stored_candidates(chapter["id"])
     assert len(candidates) == 1
     assert candidates[0]["draft_text"] == "文" * 4000
     assert candidates[0]["checker_result"]["verdict"] == "violation"
     assert candidates[0]["is_current"] is False
+    # The audit trail keeps the full record server-side.
+    assert candidates[0]["checker_result"]["issues"][0]["draft_evidence"] == "正文证据"
     assert client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).status_code == 404
     assert client.post(
         f"/api/v1/chapters/{chapter['id']}/candidates/select",
@@ -782,6 +840,77 @@ def test_content_blocked_failure_is_not_disguised_as_generic_rejection(client, a
     assert status["error_context"]["agent_role"] == "writer"
 
 
+def test_accept_runs_deterministic_checks_without_a_candidate(client, auth_headers, wait_for_terminal):
+    # A candidate row only exists once a write job runs or /check clears its
+    # preflight, so a chapter can reach accept having had nothing verified.
+    # The client hides the action in that state, but that is a client-side
+    # rule and this text becomes a memory source for every later chapter.
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"title": "第一章"}
+    ).json()
+    client.patch(
+        f"/api/v1/chapters/{chapter['id']}", headers=auth_headers, json={"draft_text": "太短。"}
+    ).raise_for_status()
+
+    # /check refuses this text, and does so before creating a candidate.
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers).status_code == 409
+
+    blocked = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "accept_override_required"
+    assert [item["code"] for item in blocked.json()["detail"]["violations"]] == ["minimum_length"]
+    assert client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()["status"] != "finalized"
+
+    # Length is the author's call about their own manuscript, so a deliberate
+    # short chapter stays reachable through an explicit override.
+    allowed = client.post(
+        f"/api/v1/chapters/{chapter['id']}/accept",
+        headers=auth_headers,
+        json={"override_checker": True},
+    )
+    assert allowed.status_code == 200
+    wait_for_terminal(client, chapter["id"], auth_headers)
+
+
+def test_accept_never_waves_through_an_unselected_character(client, auth_headers, wait_for_terminal):
+    # Unlike length, an unattributable name is a correctness failure: Extractor
+    # cannot bind it and silently degrades the fact to chapter level. No
+    # override may pass it; exempting the name is the recorded way through.
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    character = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"title": "第一章"}
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import",
+        headers=auth_headers,
+        json={"draft_text": "林夕" + "文" * 4200},
+    ).raise_for_status()
+
+    for body in ({}, {"override_checker": True}):
+        response = client.post(
+            f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json=body
+        )
+        assert response.status_code == 409, body
+        assert response.json()["detail"]["code"] == "accept_preflight_failed"
+        assert [item["code"] for item in response.json()["detail"]["violations"]] == [
+            "unselected_character"
+        ]
+
+    client.patch(
+        f"/api/v1/chapters/{chapter['id']}",
+        headers=auth_headers,
+        json={"character_links": [{"character_id": character["id"], "chapter_note": ""}]},
+    ).raise_for_status()
+    assert client.post(
+        f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={}
+    ).status_code == 200
+    wait_for_terminal(client, chapter["id"], auth_headers)
+
+
 def test_accept_rejects_live_job(client, auth_headers):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(
@@ -1117,7 +1246,7 @@ def test_delete_finalized_chapter_cascades_events_and_reverts_dynamic_state(clie
     client.post(
         f"/api/v1/chapters/{chapters[1]['id']}/import", headers=auth_headers, json={"draft_text": "林夕行动"}
     )
-    client.post(f"/api/v1/chapters/{chapters[1]['id']}/accept", headers=auth_headers).raise_for_status()
+    client.post(f"/api/v1/chapters/{chapters[1]['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
     assert wait_for_terminal(client, chapters[1]["id"], auth_headers)["phase"] == "done"
 
     client.delete(f"/api/v1/chapters/{chapters[0]['id']}", headers=auth_headers).raise_for_status()

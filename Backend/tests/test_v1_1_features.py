@@ -352,7 +352,7 @@ def _finalize_with_event(client, auth_headers, wait_for_terminal, event_text: st
         json={"user_prompt": "行动", "character_links": [{"character_id": character["id"]}]},
     ).json()
     client.post(f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "林夕行动"})
-    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
     return character
 
