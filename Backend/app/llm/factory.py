@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.llm.openai_compatible import OpenAICompatibleClient
 from app.models import AgentModelBinding, LLMProfile
-from app.services.crypto import decrypt_secret
+from app.services.crypto import SecretUndecryptable, decrypt_secret
 from app.services.model_capabilities import (
     effective_binding_settings,
     requires_bounded_non_thinking,
@@ -41,9 +41,16 @@ def build_llm_client(db: Session, agent_role: str) -> OpenAICompatibleClient:
         if not capabilities.thinking_can_disable:
             raise LLMConfigurationError(f"{agent_role}_thinking_not_disableable", agent_role)
         thinking_enabled, reasoning_effort = False, None
+    try:
+        api_key = decrypt_secret(profile.api_key_encrypted)
+    except SecretUndecryptable as exc:
+        # Same 409 shape as the other configuration failures, so a rotated KEK
+        # or a database restored onto another host is diagnosable instead of
+        # surfacing as an empty 500.
+        raise LLMConfigurationError("api_key_undecryptable", agent_role) from exc
     return OpenAICompatibleClient(
         base_url=profile.base_url,
-        api_key=decrypt_secret(profile.api_key_encrypted),
+        api_key=api_key,
         model_name=profile.model_name,
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,

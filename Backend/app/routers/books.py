@@ -173,6 +173,10 @@ def patch_book(book_id: str, payload: BookPatch, db: Session = Depends(get_db)) 
         raise HTTPException(status_code=404, detail="book not found")
     updates = payload.model_dump(exclude_unset=True)
     for key, value in updates.items():
+        # exclude_unset keeps explicitly-sent nulls, and both columns are NOT
+        # NULL; assigning one used to surface as a 500 at flush time.
+        if value is None:
+            continue
         setattr(book, key, value)
     invalidated = invalidate_writer_inputs(db, chapters_for_book(db, book.id)) if "world_setting" in updates else []
     db.commit()

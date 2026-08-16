@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.common import ORMModel
 
@@ -75,20 +76,44 @@ class BookAgentPersonaRead(BaseModel):
     updated_at: datetime | None
 
 
+def validate_base_url(value: str) -> str:
+    """Accept only an http(s) endpoint with a host.
+
+    The stored API key is sent to whatever this points at, so a value that is
+    empty, uses another scheme, or has no host must never reach the client.
+    """
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("base_url must not be empty")
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("base_url must use http or https")
+    if not parsed.hostname:
+        raise ValueError("base_url must include a host")
+    return candidate
+
+
 class LLMProfileCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=200)
     provider: str = "openai-compatible"
-    base_url: str
-    api_key: str
-    model_name: str
+    base_url: str = Field(min_length=1, max_length=2000)
+    api_key: str = Field(min_length=1, max_length=4000)
+    model_name: str = Field(min_length=1, max_length=200)
+
+    _check_base_url = field_validator("base_url")(validate_base_url)
 
 
 class LLMProfilePatch(BaseModel):
-    name: str | None = None
-    provider: str | None = None
-    base_url: str | None = None
-    api_key: str | None = None
-    model_name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    provider: str | None = Field(default=None, min_length=1, max_length=100)
+    base_url: str | None = Field(default=None, min_length=1, max_length=2000)
+    api_key: str | None = Field(default=None, min_length=1, max_length=4000)
+    model_name: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("base_url")
+    @classmethod
+    def _check_base_url(cls, value: str | None) -> str | None:
+        return None if value is None else validate_base_url(value)
 
 
 class LLMProfileRead(ORMModel):

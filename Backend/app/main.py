@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.auth import require_token
 from app.config import get_settings
@@ -15,6 +15,13 @@ from app.models.entities import utc_now
 from app.llm.factory import LLMConfigurationError
 from app.routers import books, chapters, characters, settings
 from app.services.personas import seed_defaults
+
+# Single source of truth for the number health reports; deployment verification
+# reads it back to confirm the running build. `EXPECTED_ALEMBIC_HEAD` is
+# asserted against the real migration head by the test suite, so it cannot
+# drift silently.
+APP_VERSION = "1.9.3"
+EXPECTED_ALEMBIC_HEAD = "20260814_0012"
 
 
 @asynccontextmanager
@@ -63,12 +70,16 @@ def recover_interrupted_chapters(db) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="LinoI API", version="1.9.3", lifespan=lifespan)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+    # Both clients are native apps, so no browser origin ever needs CORS, and
+    # the schema is not public: the interactive docs and openapi.json used to
+    # be readable without a token.
+    app = FastAPI(
+        title="LinoI API",
+        version=APP_VERSION,
+        lifespan=lifespan,
+        openapi_url=None,
+        docs_url=None,
+        redoc_url=None,
     )
 
     @app.exception_handler(LLMConfigurationError)
@@ -89,7 +100,31 @@ def create_app() -> FastAPI:
 
     @app.get(f"{prefix}/health", dependencies=deps)
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "1.9.3"}
+        # Release gating waits on this endpoint before running the public
+        # checks, so it must actually touch the database it will serve. A
+        # static literal returned 200 for an empty database created against
+        # the wrong working directory, and for a schema that never ran the
+        # pending migration.
+        db = db_module.SessionLocal()
+        try:
+            applied = db.scalar(text("SELECT version_num FROM alembic_version"))
+        except SQLAlchemyError:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "database_unavailable", "message": "数据库不可用或未迁移"},
+            )
+        finally:
+            db.close()
+        if applied != EXPECTED_ALEMBIC_HEAD:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "schema_out_of_date",
+                    "message": "数据库结构与本版本不一致，请先执行 alembic upgrade head",
+                    "details": {"expected": EXPECTED_ALEMBIC_HEAD, "applied": applied},
+                },
+            )
+        return {"status": "ok", "version": APP_VERSION}
 
     app.include_router(books.router, prefix=prefix, dependencies=deps)
     app.include_router(characters.router, prefix=prefix, dependencies=deps)

@@ -20,10 +20,11 @@ from app.llm.factory import (
     get_memory_selector_client,
     get_writer_client,
 )
-from app.main import create_app
+from app.main import EXPECTED_ALEMBIC_HEAD, create_app
 from app.models import AgentModelBinding, AgentPersona
 from app.services.personas import DEFAULT_PERSONAS
 from app.services.write_jobs import write_registry
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -183,6 +184,16 @@ def client() -> Iterator[TestClient]:
     db_module.SessionLocal = TestingSessionLocal
     chapters_router.SessionLocal = TestingSessionLocal
     Base.metadata.create_all(bind=engine)
+    # create_all is fast but leaves no alembic_version row, which the health
+    # endpoint now checks. Stamp the head the ORM metadata corresponds to;
+    # test_schema_matches_alembic_head proves that correspondence holds.
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        connection.execute(text("DELETE FROM alembic_version"))
+        connection.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:head)"),
+            {"head": EXPECTED_ALEMBIC_HEAD},
+        )
 
     db = TestingSessionLocal()
     for role, prompt in DEFAULT_PERSONAS.items():

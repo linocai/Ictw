@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,7 +18,7 @@ from app.schemas.settings import (
     LLMProfilePatch,
     LLMProfileRead,
 )
-from app.services.crypto import decrypt_secret, encrypt_secret
+from app.services.crypto import SecretUndecryptable, decrypt_secret, encrypt_secret
 from app.services.model_capabilities import (
     effective_binding_settings,
     requires_bounded_non_thinking,
@@ -155,7 +156,26 @@ def patch_profile(profile_id: str, payload: LLMProfilePatch, db: Session = Depen
         raise HTTPException(status_code=404, detail="profile not found")
     updates = payload.model_dump(exclude_unset=True)
     api_key = updates.pop("api_key", None)
+    # Retargeting a profile at a different host must not carry the existing
+    # key along: the key is sent to whatever base_url names, so changing the
+    # destination requires re-entering it in the same request.
+    if (
+        "base_url" in updates
+        and updates["base_url"] != profile.base_url
+        and api_key is None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "api_key_required_for_new_base_url",
+                "message": "更换服务地址时必须同时重新填写模型密钥",
+            },
+        )
     for key, value in updates.items():
+        # exclude_unset still keeps explicitly-sent nulls, and every column
+        # here is NOT NULL; writing one used to fail as a 500 at flush time.
+        if value is None:
+            continue
         setattr(profile, key, value)
     if api_key is not None:
         profile.api_key_encrypted = encrypt_secret(api_key)
@@ -179,9 +199,19 @@ def test_profile(profile_id: str, db: Session = Depends(get_db)) -> dict[str, st
     profile = db.get(LLMProfile, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
+    try:
+        api_key = decrypt_secret(profile.api_key_encrypted)
+    except SecretUndecryptable as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "api_key_undecryptable",
+                "message": "该模型密钥无法用当前 KEK_SECRET 解密，请重新填写密钥",
+            },
+        ) from exc
     client = OpenAICompatibleClient(
         base_url=profile.base_url,
-        api_key=decrypt_secret(profile.api_key_encrypted),
+        api_key=api_key,
         model_name=profile.model_name,
     )
     try:
@@ -190,6 +220,13 @@ def test_profile(profile_id: str, db: Session = Depends(get_db)) -> dict[str, st
         raise HTTPException(
             status_code=502,
             detail={"code": exc.code, "message": str(exc), "details": exc.safe_details()},
+        ) from exc
+    except httpx.InvalidURL as exc:
+        # InvalidURL is not an httpx.HTTPError, so neither the client nor the
+        # branch above catches it; a malformed host used to escape as a 500.
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_base_url", "message": "服务地址格式不正确"},
         ) from exc
     return {"status": "ok"}
 
