@@ -27,7 +27,11 @@ from app.schemas.character import (
 from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
 from app.services.character_state_projection import rebuild_book_projection
 from app.services.write_ownership import cancel_local_writer_jobs, chapters_for_character, invalidate_writer_inputs
-from app.services.archive_v2 import invalidate_archive_if_input_changed, invalidate_downstream_archives
+from app.services.archive_v2 import (
+    active_archive_revision,
+    invalidate_archive_if_input_changed,
+    invalidate_downstream_archives,
+)
 
 router = APIRouter(tags=["characters"])
 
@@ -82,7 +86,19 @@ def _character_read(db: Session, character: Character) -> CharacterRead:
             data.dynamic_fields_updated_chapter_index or 0, v2_updated_index
         )
     data.events = []
+    # One memory source per chapter: a chapter that carries an active v2
+    # revision must not also surface its legacy events here. export_memories
+    # already filters this way; the character detail endpoint used to show
+    # both, so the same chapter could contradict itself on screen.
+    legacy_superseded = {
+        chapter_id
+        for chapter_id in {event.chapter_id for event in events}
+        if (chapter := db.get(Chapter, chapter_id)) is not None
+        and active_archive_revision(db, chapter) is not None
+    }
     for event in events:
+        if event.chapter_id in legacy_superseded:
+            continue
         data.events.append(
             CharacterEventRead(
                 id=event.id,

@@ -719,9 +719,11 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             revision.error_code = "archive_input_changed"
             revision.error_message = str(exc)
             revision.finished_at = utc_now()
+            # Mirrors activate_archive_revision: a stale attempt must not strip
+            # the chapter of its surviving memory source. Clearing
+            # legacy_archive_eligible here erased legacy chapters outright
+            # whenever a manual retry raced an edit to an earlier chapter.
             chapter.archive_status = "stale"
-            chapter.active_archive_revision_id = None
-            chapter.legacy_archive_eligible = False
             db.flush()
             _apply_job_phase(
                 db,

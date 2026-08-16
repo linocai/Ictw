@@ -30,6 +30,14 @@ def _changes_for_projection(db: Session, book_id: str, *, before_index: int | No
         active = None
         if chapter.active_archive_revision_id:
             active = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id)
+        # Deliberately fingerprint-free, unlike archive_v2.active_archive_revision:
+        # archive_input_fingerprint() calls back into this projection, so adding
+        # the check here would recurse through every preceding chapter. The
+        # equivalence rests on an invariant the invalidation paths maintain —
+        # a chapter keeps its pointer with is_active/complete only while its
+        # fingerprint is current, because invalidate_archive_if_input_changed
+        # and invalidate_downstream_archives clear both together. Any new path
+        # that stales a revision must clear the pointer in the same transaction.
         if active is not None and active.is_active and active.status == "complete":
             changes.extend(
                 db.scalars(

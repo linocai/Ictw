@@ -423,9 +423,13 @@ def activate_archive_revision(
         revision.error_message = "章节归档生命周期已变更，本次归档不再适用"
         revision.finished_at = utc_now()
         if chapter.status == "finalized":
+            # A failed attempt only invalidates itself. The chapter's own
+            # memory source is untouched: the fingerprint also covers prior
+            # state, so editing an *earlier* chapter lands here without this
+            # chapter's text or whitelist having changed at all. Whoever did
+            # invalidate the source already cleared these two fields via
+            # invalidate_archive_if_input_changed / _downstream_archives.
             chapter.archive_status = "stale"
-            chapter.active_archive_revision_id = None
-            chapter.legacy_archive_eligible = False
         raise ArchiveFingerprintMismatch(revision.error_message)
 
     db.execute(

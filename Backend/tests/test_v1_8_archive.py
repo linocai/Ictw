@@ -428,7 +428,7 @@ def test_invalid_v2_archive_does_not_revoke_accepted_prose_or_feed_selector(
     bad = V2Extractor(invalid_span=True)
     client.app.dependency_overrides[get_extractor_client] = lambda: bad
 
-    started = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
+    started = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True})
     assert started.status_code == 200
     assert client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()["status"] == "finalized"
     terminal = wait_for_terminal(client, chapter["id"], auth_headers)
@@ -455,7 +455,7 @@ def test_reopen_cancels_live_extractor_and_late_result_cannot_activate(client, a
     extractor = BlockingV2Extractor()
     client.app.dependency_overrides[get_extractor_client] = lambda: extractor
 
-    accepted = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).json()
+    accepted = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).json()
     assert accepted["phase"] == "extracting"
     assert extractor.started.wait(timeout=3)
 
@@ -508,6 +508,63 @@ def test_activation_lifecycle_gate_stales_reopened_revision(client, auth_headers
         assert not stored.is_active
 
 
+def test_activation_mismatch_keeps_legacy_memory_source(client, auth_headers):
+    # A stale v2 attempt invalidates only itself. The input fingerprint also
+    # covers prior state, so a manual retry racing an edit to an *earlier*
+    # chapter lands in the mismatch branch without this chapter's own text
+    # having changed — clearing legacy_archive_eligible there erased the only
+    # memory source the chapter had.
+    book, character, chapter_data = _book_character_chapter(client, auth_headers)
+    import app.db as db_module
+
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_data["id"])
+        chapter.status = "finalized"
+        chapter.legacy_archive_eligible = True
+        chapter.active_archive_revision_id = None
+        chapter.archive_status = "legacy"
+        chapter.long_summary = "legacy 摘要"
+        db.add(
+            CharacterEvent(
+                book_id=book["id"],
+                character_id=character["id"],
+                chapter_id=chapter.id,
+                event_type="行动",
+                event_text="legacy 事件",
+            )
+        )
+        revision = ChapterArchiveRevision(
+            chapter_id=chapter.id,
+            revision=1,
+            provenance="manual_retry",
+            input_fingerprint="fingerprint-taken-before-an-earlier-chapter-moved",
+            status="extracting",
+        )
+        db.add(revision)
+        db.commit()
+
+        with pytest.raises(ArchiveFingerprintMismatch):
+            activate_archive_revision(
+                db, chapter, revision, SimpleNamespace(), model_name=None
+            )
+        db.commit()
+        db.expire_all()
+
+        stored_revision = db.get(ChapterArchiveRevision, revision.id)
+        assert stored_revision.status == "stale"
+        assert not stored_revision.is_active
+
+        stored_chapter = db.get(Chapter, chapter.id)
+        assert stored_chapter.legacy_archive_eligible is True
+        assert stored_chapter.active_archive_revision_id is None
+
+        later = Chapter(book_id=book["id"], index=9, title="", user_prompt="", archive_status="stale")
+        db.add(later)
+        db.flush()
+        blocks = memory_candidates(db, later)
+        assert any("legacy 摘要" in block.text for block in blocks)
+
+
 def test_archive_failure_log_is_structured_and_redacted(monkeypatch):
     job = SimpleNamespace(
         chapter_id="chapter-id",
@@ -541,7 +598,7 @@ def test_complete_v2_archive_activates_once_projects_state_and_selector_uses_onl
     book, character, chapter = _book_character_chapter(client, auth_headers)
     extractor = V2Extractor(with_state=True)
     client.app.dependency_overrides[get_extractor_client] = lambda: extractor
-    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
     current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
@@ -574,6 +631,13 @@ def test_complete_v2_archive_activates_once_projects_state_and_selector_uses_onl
         assert {block.memory_type for block in blocks} == {"summary", "canonical_fact", "previous_ending"}
         assert all("legacy duplicate" not in block.text for block in blocks)
 
+    # The character detail endpoint obeys the same one-source-per-chapter rule
+    # as memory export: a chapter with an active v2 revision must not also list
+    # its superseded legacy events.
+    refreshed = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()
+    assert all(event["source"] == "archive_v2" for event in refreshed["events"])
+    assert all("legacy duplicate" not in event["event_text"] for event in refreshed["events"])
+
 
 def test_relationship_delta_activates_with_pair_derived_from_fact(
     client, auth_headers, wait_for_terminal
@@ -582,7 +646,7 @@ def test_relationship_delta_activates_with_pair_derived_from_fact(
     extractor = V2RelationshipExtractor()
     client.app.dependency_overrides[get_extractor_client] = lambda: extractor
 
-    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
     terminal = wait_for_terminal(client, chapter["id"], auth_headers)
     assert terminal["phase"] == "done", {
         key: terminal.get(key)
@@ -602,7 +666,7 @@ def test_editing_accepted_body_stales_v2_and_manual_retry_creates_new_revision(
     _, _, chapter = _book_character_chapter(client, auth_headers)
     extractor = V2Extractor()
     client.app.dependency_overrides[get_extractor_client] = lambda: extractor
-    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
     before = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
@@ -661,12 +725,12 @@ def test_unselected_character_state_change_does_not_stale_independent_later_arch
     client.app.dependency_overrides[get_extractor_client] = lambda: V2Extractor(
         with_state=True, state_location="北境"
     )
-    client.post(f"/api/v1/chapters/{first['id']}/accept", headers=auth_headers).raise_for_status()
+    client.post(f"/api/v1/chapters/{first['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
     assert wait_for_terminal(client, first["id"], auth_headers)["phase"] == "done"
 
     second = create_and_import(second_character, "乙完成自己的行动。")
     client.app.dependency_overrides[get_extractor_client] = lambda: V2Extractor()
-    client.post(f"/api/v1/chapters/{second['id']}/accept", headers=auth_headers).raise_for_status()
+    client.post(f"/api/v1/chapters/{second['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
     assert wait_for_terminal(client, second["id"], auth_headers)["phase"] == "done"
     second_revision = client.get(
         f"/api/v1/chapters/{second['id']}", headers=auth_headers
@@ -691,7 +755,7 @@ def test_selective_reextract_requires_confirmed_report_hash_and_records_provenan
     _, _, chapter = _book_character_chapter(client, auth_headers)
     extractor = V2Extractor()
     client.app.dependency_overrides[get_extractor_client] = lambda: extractor
-    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
     mismatch = client.post(
