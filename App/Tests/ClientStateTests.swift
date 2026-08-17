@@ -707,7 +707,8 @@ private func makeV2DeskSource(
     checkerRefreshing: Bool = false,
     staleSnapshot: CheckedDraftSnapshot? = nil,
     saveState: ChapterSaveState = .synced,
-    connectionInterrupted: Bool = false
+    connectionInterrupted: Bool = false,
+    isLastChapterInBook: Bool = false
 ) -> V2DeskEditorSource {
     V2DeskEditorSource(
         chapter: chapter,
@@ -717,7 +718,8 @@ private func makeV2DeskSource(
         checkerRefreshing: checkerRefreshing,
         staleCheckedSnapshot: staleSnapshot,
         saveState: saveState,
-        connectionInterrupted: connectionInterrupted
+        connectionInterrupted: connectionInterrupted,
+        isLastChapterInBook: isLastChapterInBook
     )
 }
 
@@ -1064,6 +1066,278 @@ private func testV2DeskLocalSaveConnectionAndModelConfiguration() throws {
     try expect(ordinaryLLMFailure.primaryAction == .retryGeneration, "unrelated LLM failures must remain retryable rather than be mislabeled as missing settings")
 }
 
+private func testV2DeskChapterPositionIsLastChapter() throws {
+    let one = try makeChapterSummary(id: "one", index: 1, title: "第一章", status: "finalized")
+    let two = try makeChapterSummary(id: "two", index: 2, title: "第二章", status: "finalized")
+    let three = try makeChapterSummary(id: "three", index: 3, title: "第三章", status: "draft_ready")
+    let chapters = [two, three, one]
+
+    try expect(
+        V2DeskChapterPosition.isLastChapter(three.id, in: chapters),
+        "the chapter holding the highest index must be recognized as last regardless of array order"
+    )
+    try expect(
+        !V2DeskChapterPosition.isLastChapter(one.id, in: chapters),
+        "a chapter that is not the highest index must not be treated as last"
+    )
+    try expect(
+        !V2DeskChapterPosition.isLastChapter(three.id, in: []),
+        "an empty chapter list can never prove a chapter is last"
+    )
+    try expect(
+        !V2DeskChapterPosition.isLastChapter("missing", in: chapters),
+        "an id absent from the list can never prove a chapter is last"
+    )
+    try expect(
+        !V2DeskChapterPosition.isLastChapter(nil, in: chapters),
+        "a missing current chapter id can never prove a chapter is last"
+    )
+}
+
+private func testV2DeskChapterCommandsAvailability() throws {
+    var accepted = try makeChapter(status: "finalized")
+    accepted.draftText = "已经接受的正文。"
+
+    let acceptedLast = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted, isLastChapterInBook: true))
+    try expect(
+        acceptedLast.commands == V2DeskChapterCommands(canRewrite: true, canDelete: true),
+        "an accepted last chapter must allow both rewrite and delete"
+    )
+
+    let acceptedMiddle = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted, isLastChapterInBook: false))
+    try expect(
+        acceptedMiddle.commands == V2DeskChapterCommands(canRewrite: true, canDelete: false),
+        "an accepted non-last chapter may only be rewritten"
+    )
+
+    var unacceptedWithProse = try makeChapter(status: "draft_ready")
+    unacceptedWithProse.draftText = "尚未接受但已有正文。"
+    let unaccepted = V2DeskPresentation.make(makeV2DeskSource(chapter: unacceptedWithProse, isLastChapterInBook: false))
+    try expect(
+        unaccepted.commands.canRewrite,
+        "prose that was never accepted must remain rewritable — this is the exact capability v2 clean-room lost"
+    )
+
+    var blank = try makeChapter()
+    blank.draftText = ""
+    let blankLast = V2DeskPresentation.make(makeV2DeskSource(chapter: blank, isLastChapterInBook: true))
+    try expect(
+        blankLast.commands == V2DeskChapterCommands(canRewrite: false, canDelete: true),
+        "a blank last chapter must be deletable even though it has nothing to rewrite"
+    )
+
+    let generating = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted, writingPhase: .writing, isLastChapterInBook: true))
+    try expect(
+        generating.commands == V2DeskChapterCommands(canRewrite: false, canDelete: false),
+        "an active write must disable both rewrite and delete"
+    )
+
+    let extracting = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted, writingPhase: .extracting, isLastChapterInBook: true))
+    try expect(
+        extracting.commands == V2DeskChapterCommands(canRewrite: false, canDelete: false),
+        "an active extraction must disable both rewrite and delete"
+    )
+
+    let refreshingChecker = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted, checkerRefreshing: true, isLastChapterInBook: true))
+    try expect(!refreshingChecker.commands.canRewrite, "an in-flight recheck must not allow a competing rewrite")
+    try expect(refreshingChecker.commands.canDelete, "an in-flight recheck must not block delete, which never touches the draft")
+}
+
+private func testV2DeskChapterCommandsDoNotAffectPrimaryAction() throws {
+    var accepted = try makeChapter(status: "finalized")
+    accepted.draftText = "已经接受的正文。"
+    let acceptedSnapshot = V2DeskPresentation.make(makeV2DeskSource(chapter: accepted, isLastChapterInBook: true))
+    try expect(
+        acceptedSnapshot.primaryAction == .startNewChapter,
+        "commands must never displace the accepted chapter's primary action"
+    )
+
+    var uncheckedProse = try makeChapter(status: "draft_ready")
+    uncheckedProse.draftText = "尚未检查的正文。"
+    let uncheckedSnapshot = V2DeskPresentation.make(makeV2DeskSource(chapter: uncheckedProse, isLastChapterInBook: true))
+    try expect(
+        uncheckedSnapshot.primaryAction == .rerunChecker,
+        "commands must never displace the recheck primary action"
+    )
+
+    var passedProse = try makeChapter(status: "draft_ready")
+    passedProse.draftText = "已经通过检查的正文。"
+    let passedSnapshot = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: passedProse,
+        checkerResult: checkerResult("passed"),
+        checkerApplies: true,
+        isLastChapterInBook: true
+    ))
+    try expect(
+        passedSnapshot.primaryAction == .accept,
+        "commands must never displace the accept primary action"
+    )
+}
+
+private func testV2DeskRewriteConfirmationMessageCombinations() throws {
+    try expect(V2DeskRewriteConfirmation.title == "重写这一章？", "rewrite confirmation must keep its exact dialog title")
+
+    let affected = [
+        RewriteImpactChapter(id: "chapter-6", index: 6, title: "第六章"),
+        RewriteImpactChapter(id: "chapter-4", index: 4, title: "第四章"),
+    ]
+    let acceptedWithImpact = V2DeskRewriteConfirmation.message(isAccepted: true, affected: affected, previewUnavailable: false)
+    try expect(
+        acceptedWithImpact == """
+        这一章会回到可编辑状态，本章已整理的记忆立即作废。
+        本章意图、标题、出场人物、豁免名单与备注都会保留，只重写正文。
+        新正文要先通过确定性校验与 Bible 检查才会替换当前正文；失败时当前正文原样保留。
+        第 4、6 章的记忆会被标为不再可靠，需要重新整理。
+        """,
+        "accepted rewrite with downstream impact must list exact chapter numbers ascending by index"
+    )
+
+    let acceptedNoImpact = V2DeskRewriteConfirmation.message(isAccepted: true, affected: [], previewUnavailable: false)
+    try expect(
+        acceptedNoImpact == """
+        这一章会回到可编辑状态，本章已整理的记忆立即作废。
+        本章意图、标题、出场人物、豁免名单与备注都会保留，只重写正文。
+        新正文要先通过确定性校验与 Bible 检查才会替换当前正文；失败时当前正文原样保留。
+        """,
+        "accepted rewrite with a confirmed-empty impact must omit the fourth sentence entirely"
+    )
+
+    let unaccepted = V2DeskRewriteConfirmation.message(isAccepted: false, affected: [], previewUnavailable: false)
+    try expect(
+        unaccepted == """
+        本章意图、标题、出场人物、豁免名单与备注都会保留，只重写正文。
+        新正文要先通过确定性校验与 Bible 检查才会替换当前正文；失败时当前正文原样保留。
+        """,
+        "an unaccepted draft has no acceptance to lose, so the reopen sentence must not appear"
+    )
+
+    let previewFailed = V2DeskRewriteConfirmation.message(isAccepted: true, affected: [], previewUnavailable: true)
+    try expect(
+        previewFailed == """
+        这一章会回到可编辑状态，本章已整理的记忆立即作废。
+        本章意图、标题、出场人物、豁免名单与备注都会保留，只重写正文。
+        新正文要先通过确定性校验与 Bible 检查才会替换当前正文；失败时当前正文原样保留。
+        没能取到影响范围；这一章之后的章节记忆可能不再可靠。
+        """,
+        "a failed preview must fall back to a conservative warning instead of silently claiming no impact"
+    )
+
+    try expect(V2DeskDeleteConfirmation.title == "删除这一章？", "delete confirmation must keep its exact dialog title")
+    try expect(
+        V2DeskDeleteConfirmation.message == "这一章的正文、本章意图、标题、出场人物、豁免名单、备注，以及已经整理好的记忆，都会一起删除。此操作无法撤销。",
+        "delete confirmation body must state everything it destroys and that it cannot be undone"
+    )
+}
+
+private func testV2DeskReopenConfirmationMessageCombinations() throws {
+    try expect(V2DeskReopenConfirmation.title == "重新编辑这一章？", "reopen confirmation must keep its exact dialog title")
+
+    let affected = [
+        RewriteImpactChapter(id: "chapter-6", index: 6, title: "第六章"),
+        RewriteImpactChapter(id: "chapter-4", index: 4, title: "第四章"),
+    ]
+    try expect(
+        V2DeskReopenConfirmation.message(affected: affected, previewUnavailable: false) == """
+        正文与本章意图会保留，这一章回到可编辑状态，本章已整理的记忆立即作废。
+        第 4、6 章的记忆会被标为不再可靠，需要重新整理。
+        """,
+        "reopen with downstream impact must list exact chapter numbers ascending by index"
+    )
+
+    try expect(
+        V2DeskReopenConfirmation.message(affected: [], previewUnavailable: false) == """
+        正文与本章意图会保留，这一章回到可编辑状态，本章已整理的记忆立即作废。
+        """,
+        "a confirmed-empty impact must not append any cascade sentence"
+    )
+
+    try expect(
+        V2DeskReopenConfirmation.message(affected: [], previewUnavailable: true) == """
+        正文与本章意图会保留，这一章回到可编辑状态，本章已整理的记忆立即作废。
+        没能取到影响范围；这一章之后的章节记忆可能不再可靠。
+        """,
+        "a failed preview must fall back to the conservative warning rather than imply no impact"
+    )
+
+    // Reopen and rewrite trigger the identical server-side cascade, so they
+    // must report it with the identical sentence. Comparing the two messages'
+    // last lines is what keeps a future edit to one from silently diverging.
+    for previewUnavailable in [true, false] {
+        for impact in [affected, []] {
+            let rewrite = V2DeskRewriteConfirmation.message(
+                isAccepted: true,
+                affected: impact,
+                previewUnavailable: previewUnavailable
+            )
+            let reopen = V2DeskReopenConfirmation.message(
+                affected: impact,
+                previewUnavailable: previewUnavailable
+            )
+            let expectsCascade = !impact.isEmpty || previewUnavailable
+            try expect(
+                (rewrite.split(separator: "\n").count == 4) == expectsCascade,
+                "rewrite copy must carry the cascade sentence exactly when there is impact to report"
+            )
+            guard expectsCascade else { continue }
+            try expect(
+                rewrite.split(separator: "\n").last == reopen.split(separator: "\n").last,
+                "reopen and rewrite must describe the same cascade with the same sentence"
+            )
+        }
+    }
+}
+
+private func testChapterRewriteOutcomeSeparatesPartialFailureFromNoOp() throws {
+    let chapter = try makeChapter(status: "writing")
+
+    try expect(
+        ChapterRewriteOutcome.succeeded(chapter).chapter == chapter,
+        "a successful rewrite must hand the server chapter back to the caller"
+    )
+    try expect(
+        ChapterRewriteOutcome.notStarted.chapter == nil
+            && ChapterRewriteOutcome.reopenedButGenerateFailed.chapter == nil,
+        "only a started write job carries a chapter"
+    )
+
+    // The whole reason this is not `Chapter?`: a reopen that landed has
+    // already voided this chapter's archive and cascaded downstream, so the
+    // visible chapter list is stale even though no new prose is coming.
+    try expect(
+        ChapterRewriteOutcome.reopenedButGenerateFailed.requiresChapterListRefresh,
+        "a reopen that already invalidated archives must still force a chapter list refresh"
+    )
+    try expect(
+        ChapterRewriteOutcome.succeeded(chapter).requiresChapterListRefresh,
+        "a started rewrite changed this chapter's own row and must refresh the list"
+    )
+    try expect(
+        !ChapterRewriteOutcome.notStarted.requiresChapterListRefresh,
+        "nothing was changed on the server, so nothing needs refreshing"
+    )
+
+    try expect(
+        ChapterRewriteOutcome.notStarted != ChapterRewriteOutcome.reopenedButGenerateFailed,
+        "the two failure states must stay distinguishable — collapsing them is the defect this type exists to prevent"
+    )
+}
+
+private func testRewriteImpactPreviewDecodesSnakeCase() throws {
+    let data = try JSONSerialization.data(withJSONObject: [
+        "chapter_id": "chapter-3",
+        "index": 3,
+        "affected_chapters": [
+            ["id": "chapter-4", "index": 4, "title": "第四章"],
+            ["id": "chapter-6", "index": 6, "title": "第六章"],
+        ],
+    ])
+    let preview = try JSONDecoder().decode(RewriteImpactPreview.self, from: data)
+    try expect(preview.chapterId == "chapter-3", "rewrite preview chapter id must decode from its snake_case wire key")
+    try expect(preview.index == 3, "rewrite preview index must decode")
+    try expect(preview.affectedChapters.map(\.index) == [4, 6], "affected chapters must decode in the order the server returned them")
+    try expect(preview.affectedChapters.first?.title == "第四章", "affected chapter title must decode")
+}
+
 @main
 private struct ClientStateTestRunner {
     static func main() throws {
@@ -1099,6 +1373,13 @@ private struct ClientStateTestRunner {
         try testV2DeskAcceptedArchiveIsolationAndAttention()
         try testV2DeskReadingOrderSeparatesNavigationFromCreation()
         try testV2DeskLocalSaveConnectionAndModelConfiguration()
+        try testV2DeskChapterPositionIsLastChapter()
+        try testV2DeskChapterCommandsAvailability()
+        try testV2DeskChapterCommandsDoNotAffectPrimaryAction()
+        try testV2DeskRewriteConfirmationMessageCombinations()
+        try testV2DeskReopenConfirmationMessageCombinations()
+        try testChapterRewriteOutcomeSeparatesPartialFailureFromNoOp()
+        try testRewriteImpactPreviewDecodesSnakeCase()
         try runV202NoticeLifecycleTests()
         print("Client state tests passed")
     }

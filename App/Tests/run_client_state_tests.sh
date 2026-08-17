@@ -119,6 +119,79 @@ for notice_host in \
     -F '.v2IOSNoticeOverlay()' "$notice_host"
 done
 
+# Rewrite and delete were both absent from the entire v2 UI until v2.0.4: the
+# store methods and the backend endpoints existed the whole time and simply had
+# no caller. That is a failure mode no compiler catches, so the entry points are
+# pinned here.
+require "Shared layer must expose the chapter command availability" \
+  -F 'commands: V2DeskChapterCommands' "$app_dir/LinoI/V2Shared/V2DeskPresentation.swift"
+for command_host in \
+  "$app_dir/LinoIMac/V2/V2MacDeskEditor.swift" \
+  "$app_dir/LinoI/V2IOS/V2IOSChapterDeskView.swift"; do
+  require "Rewrite entry must stay wired on both platforms: $command_host" \
+    -F 'commands.canRewrite' "$command_host"
+  require "Delete entry must stay wired on both platforms: $command_host" \
+    -F 'commands.canDelete' "$command_host"
+  # Reading the availability flag only proves the symbol is referenced. The
+  # way these two commands vanished the first time was a present-and-correct
+  # `if` around a button that no longer existed, so pin the labels too.
+  require "Rewrite must stay a visible, labelled control: $command_host" \
+    -F '"重写本章"' "$command_host"
+  require "Delete must stay a visible, labelled control: $command_host" \
+    -F '"删除这一章"' "$command_host"
+done
+
+# Confirmation copy for a destructive action is a cross-platform contract, and
+# the message is the only place the cascade impact is disclosed. A platform
+# that hand-writes its own sentence escapes the copy tests entirely — which is
+# how the reopen dialogs drifted apart before v2.0.4.
+for confirmation_host in \
+  "$app_dir/LinoIMac/V2/V2MacDeskRoot.swift" \
+  "$app_dir/LinoI/V2IOS/V2IOSChapterDeskView.swift"; do
+  require "Rewrite confirmation copy must come from the shared layer: $confirmation_host" \
+    -F 'V2DeskRewriteConfirmation.message(' "$confirmation_host"
+  require "Reopen confirmation copy must come from the shared layer: $confirmation_host" \
+    -F 'V2DeskReopenConfirmation.message(' "$confirmation_host"
+  # A labelled button wired to nothing looks identical in a screenshot and in
+  # a grep for the label. These are the two store calls that make the entries
+  # real.
+  require "Rewrite entry must actually reach the store: $confirmation_host" \
+    -F 'editor.rewrite()' "$confirmation_host"
+  require "Delete entry must actually reach the store: $confirmation_host" \
+    -F 'editor.deleteCurrentChapter()' "$confirmation_host"
+done
+
+# Both platforms must compute the chapter's position themselves. The initialiser
+# deliberately has no default, but a future call site could still hard-code
+# `false` and quietly withhold delete forever.
+for position_host in \
+  "$app_dir/LinoIMac/V2/V2MacDeskRoot.swift" \
+  "$app_dir/LinoI/V2IOS/V2IOSChapterDeskView.swift"; do
+  require "Last-chapter state must come from the shared helper: $position_host" \
+    -F 'V2DeskChapterPosition.isLastChapter' "$position_host"
+done
+# Whitespace-tolerant: a default written as `Bool=false` is the same defect
+# and must not slip past on formatting alone.
+forbid "V2DeskEditorSource.isLastChapterInBook must not regain a default" \
+  -E 'isLastChapterInBook:[[:space:]]*Bool[[:space:]]*=' "$app_dir/LinoI/V2Shared/V2DeskPresentation.swift"
+
+# Narrow by construction: this rejects exactly one literal shape, the client
+# blanking the draft through `editString`. Hard rule 35's real enforcement
+# point is server-side promotion timing (new prose replaces the old only after
+# the deterministic checks and Checker both pass); this guard only stops the
+# client from pre-emptying the body it is supposed to keep showing.
+forbid "Rewrite must not clear the draft through editString" \
+  -rE 'editString\(\\\.draftText, value: ""\)' "$app_dir/LinoI" "$app_dir/LinoIMac"
+
+# The preview is a network round trip and the user can leave during it. Both
+# platforms must re-check chapter identity before raising the dialog.
+for race_host in \
+  "$app_dir/LinoIMac/V2/V2MacDeskRoot.swift" \
+  "$app_dir/LinoI/V2IOS/V2IOSChapterDeskView.swift"; do
+  require "Rewrite preview must re-check chapter identity after awaiting: $race_host" \
+    -F 'editor.currentChapter?.id == chapterID' "$race_host"
+done
+
 xcrun swiftc -parse-as-library \
   "$app_dir/LinoI/LinoModels.swift" \
   "$app_dir/LinoI/LinoAPI.swift" \
