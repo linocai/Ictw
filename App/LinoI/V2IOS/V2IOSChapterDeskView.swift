@@ -69,12 +69,9 @@ struct V2IOSChapterDestinationView: View {
 /// variation of the writing desk. Its only primary navigation is the real
 /// ordered next chapter supplied by the shared policy.
 struct V2IOSChapterReaderView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var workspace: WorkspaceStore
-    @State private var showingExport = false
-    @State private var showingReopen = false
     @State private var isMoving = false
 
     let summary: ChapterSummary
@@ -106,35 +103,13 @@ struct V2IOSChapterReaderView: View {
         .navigationTitle(displayTitle(chapter))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("重新编辑这一章", role: .destructive) { showingReopen = true }
-                    Button("导出") { showingExport = true }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityLabel("更多章节操作")
-            }
-        }
-        .sheet(isPresented: $showingExport) {
-            V2IOSExportSheet(currentChapterID: chapter.id)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
-        }
-        .confirmationDialog("重新编辑这一章？", isPresented: $showingReopen, titleVisibility: .visible) {
-            Button("重新编辑", role: .destructive) {
-                Task {
-                    if let reopened = await editor.reopen() {
-                        workspace.upsert(reopened)
-                    }
-                }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("正文与本章意图会保留；本章之后的归档记忆可能不再可靠，并会在章节轨中标记出来。")
-        }
+        .v2IOSChapterActions(
+            chapterID: chapter.id,
+            bookID: summary.bookId,
+            commands: commands,
+            isAccepted: chapter.status == "finalized",
+            onSave: nil
+        )
     }
 
     private var chapter: Chapter {
@@ -142,6 +117,22 @@ struct V2IOSChapterReaderView: View {
         // load. The fallback avoids a transient crash while SwiftUI replaces a
         // route after a reopen.
         editor.currentChapter?.id == summary.id ? editor.currentChapter! : resolvedChapter
+    }
+
+    private var commands: V2DeskChapterCommands {
+        V2DeskPresentation.make(
+            V2DeskEditorSource(
+                chapter: chapter,
+                writingPhase: editor.writingPhase,
+                checkerResult: editor.checkerResult,
+                checkerAppliesToVisibleDraft: editor.checkerAppliesToVisibleDraft,
+                checkerRefreshing: editor.checkerRefreshing,
+                staleCheckedSnapshot: editor.staleCheckedSnapshot,
+                saveState: editor.saveState,
+                connectionInterrupted: editor.pollingConnectionInterrupted,
+                isLastChapterInBook: V2DeskChapterPosition.isLastChapter(chapter.id, in: workspace.chapters)
+            )
+        ).commands
     }
 
     @ViewBuilder private var readerDock: some View {
@@ -213,9 +204,7 @@ struct V2IOSChapterDeskView: View {
     @EnvironmentObject private var inspiration: InspirationCreatorStore
     @State private var face: V2DeskChapterFace = .intent
     @State private var showingInspiration = false
-    @State private var showingExport = false
     @State private var showingSettings = false
-    @State private var showingReopen = false
     @State private var showingAcceptWarning = false
 
     let summary: ChapterSummary
@@ -256,28 +245,19 @@ struct V2IOSChapterDeskView: View {
         .navigationTitle(snapshot.title.v2IOSTrimmed.isEmpty ? "第 \(summary.index) 章" : snapshot.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    if snapshot.chapterState == .accepted {
-                        Button("重开这一章", role: .destructive) { showingReopen = true }
-                        Button("导出") { showingExport = true }
-                    } else {
-                        Button("保存到服务器") {
-                            Task {
-                                if let chapter = await editor.save() {
-                                    workspace.upsert(chapter)
-                                }
-                            }
-                        }
-                        Button("导出") { showingExport = true }
+        .v2IOSChapterActions(
+            chapterID: summary.id,
+            bookID: summary.bookId,
+            commands: snapshot.commands,
+            isAccepted: snapshot.chapterState == .accepted,
+            onSave: {
+                Task {
+                    if let chapter = await editor.save() {
+                        workspace.upsert(chapter)
                     }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
                 }
-                .accessibilityLabel("更多章节操作")
             }
-        }
+        )
         .task(id: summary.id) {
             inspiration.clearIfChapterChanged(to: summary.id)
             if editor.currentChapter?.id != summary.id {
@@ -294,12 +274,6 @@ struct V2IOSChapterDeskView: View {
                 .presentationDetents([.medium, .large])
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
-        .sheet(isPresented: $showingExport) {
-            V2IOSExportSheet(currentChapterID: editor.currentChapter?.id)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
-        }
         .sheet(isPresented: $showingSettings) {
             V2IOSSettingsView()
                 .presentationDetents([.large])
@@ -312,17 +286,6 @@ struct V2IOSChapterDeskView: View {
         } message: {
             Text("检查发现的问题不会再提醒你；正文和本章意图会保留，随后会单独整理记忆。")
         }
-        .confirmationDialog("重新编辑这一章？", isPresented: $showingReopen, titleVisibility: .visible) {
-            Button("重新编辑", role: .destructive) {
-                Task {
-                    if let chapter = await editor.reopen() { workspace.upsert(chapter) }
-                    dismiss()
-                }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("正文与本章意图会保留；本章之后的归档记忆可能不再可靠，并会在章节轨中标记出来。")
-        }
     }
 
     private var source: V2DeskEditorSource {
@@ -334,7 +297,8 @@ struct V2IOSChapterDeskView: View {
             checkerRefreshing: editor.checkerRefreshing,
             staleCheckedSnapshot: editor.staleCheckedSnapshot,
             saveState: editor.saveState,
-            connectionInterrupted: editor.pollingConnectionInterrupted
+            connectionInterrupted: editor.pollingConnectionInterrupted,
+            isLastChapterInBook: V2DeskChapterPosition.isLastChapter(editor.currentChapter?.id, in: workspace.chapters)
         )
     }
 
@@ -365,6 +329,210 @@ struct V2IOSChapterDeskView: View {
     }
 
     private func perform(_ action: V2DeskPrimaryAction) { tapPrimary(action) }
+}
+
+extension View {
+    /// Attaches the whole chapter-action surface — trigger, menu items,
+    /// export sheet and all three confirmation dialogs — to a chapter screen.
+    func v2IOSChapterActions(
+        chapterID: String,
+        bookID: String,
+        commands: V2DeskChapterCommands,
+        isAccepted: Bool,
+        onSave: (() -> Void)?
+    ) -> some View {
+        modifier(V2IOSChapterActions(
+            chapterID: chapterID,
+            bookID: bookID,
+            commands: commands,
+            isAccepted: isAccepted,
+            onSave: onSave
+        ))
+    }
+}
+
+/// Shared by the reader and the desk so the two surfaces can never grow
+/// divergent chapter actions. The menu label carries visible text alongside
+/// the icon: a bare `ellipsis.circle` was the direct reason "重写本章" could
+/// not be found. The dialogs live here too rather than in each host — keeping
+/// them per-host is what let the two surfaces drift apart in the first place,
+/// and it is also what made the shared in-flight gate impossible to enforce.
+private struct V2IOSChapterActions: ViewModifier {
+    let chapterID: String
+    let bookID: String
+    let commands: V2DeskChapterCommands
+    let isAccepted: Bool
+    let onSave: (() -> Void)?
+
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @State private var showingExport = false
+    @State private var showingReopen = false
+    @State private var showingRewrite = false
+    @State private var showingDelete = false
+    /// One gate for every chapter-scope action. Rewrite and reopen each wait
+    /// on a `rewrite-preview` round trip before their dialog appears; with a
+    /// gate per flow, tapping one and then the other on a slow network raised
+    /// both dialogs at once. Delete opens instantly and joins the same gate so
+    /// it cannot stack on top of an in-flight preview either.
+    @State private var preparingChapterAction = false
+    /// `nil` means the preview failed, not "not yet fetched" — no dialog is
+    /// raised until the fetch has resolved one way or the other.
+    @State private var pendingImpact: RewriteImpactPreview?
+
+    func body(content: Content) -> some View {
+        content
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { menu }
+            }
+            .sheet(isPresented: $showingExport) {
+                V2IOSExportSheet(currentChapterID: chapterID)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+            }
+            .confirmationDialog(
+                V2DeskReopenConfirmation.title,
+                isPresented: $showingReopen,
+                titleVisibility: .visible
+            ) {
+                Button("重新编辑", role: .destructive) { confirmReopen() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(V2DeskReopenConfirmation.message(
+                    affected: pendingImpact?.affectedChapters ?? [],
+                    previewUnavailable: pendingImpact == nil
+                ))
+            }
+            .confirmationDialog(
+                V2DeskRewriteConfirmation.title,
+                isPresented: $showingRewrite,
+                titleVisibility: .visible
+            ) {
+                Button("重写", role: .destructive) { confirmRewrite() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(V2DeskRewriteConfirmation.message(
+                    isAccepted: isAccepted,
+                    affected: pendingImpact?.affectedChapters ?? [],
+                    previewUnavailable: pendingImpact == nil
+                ))
+            }
+            .confirmationDialog(
+                V2DeskDeleteConfirmation.title,
+                isPresented: $showingDelete,
+                titleVisibility: .visible
+            ) {
+                Button("删除", role: .destructive) { confirmDelete() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(V2DeskDeleteConfirmation.message)
+            }
+    }
+
+    /// The waiting label is the only feedback available here: tapping an item
+    /// closes the menu, so a disabled state alone would be invisible until the
+    /// author reopens the menu — which is exactly the moment they need to see
+    /// that the first tap did register.
+    private var menu: some View {
+        Menu {
+            if commands.canRewrite {
+                Button(preparingChapterAction ? "重写本章（正在读取影响范围）" : "重写本章") { startRewriteFlow() }
+                    .disabled(preparingChapterAction)
+            }
+            if isAccepted {
+                Button(
+                    preparingChapterAction ? "重新编辑这一章（正在读取影响范围）" : "重新编辑这一章",
+                    role: .destructive
+                ) { startReopenFlow() }
+                    .disabled(preparingChapterAction)
+            } else if let onSave {
+                Button("保存到服务器", action: onSave)
+            }
+            Button("导出这一章") { showingExport = true }
+            if commands.canDelete {
+                Divider()
+                Button("删除这一章", role: .destructive) { showingDelete = true }
+                    .disabled(preparingChapterAction)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text("更多")
+                Image(systemName: "ellipsis.circle")
+            }
+        }
+        .accessibilityLabel("更多章节操作")
+    }
+
+    private func startRewriteFlow() {
+        guard !preparingChapterAction, editor.currentChapter?.id == chapterID else { return }
+        preparingChapterAction = true
+        Task {
+            defer { preparingChapterAction = false }
+            pendingImpact = await editor.loadRewriteImpact()
+            // The preview is a network round trip and the edge-swipe stays
+            // live throughout it. Leaving during that window must not raise a
+            // dialog describing the chapter we left about the chapter we are
+            // now on -- confirming it would rewrite the wrong chapter.
+            guard editor.currentChapter?.id == chapterID else { return }
+            showingRewrite = true
+        }
+    }
+
+    /// Reopen fires the identical server-side cascade a rewrite's first step
+    /// does, so it takes the identical preview and the identical copy.
+    private func startReopenFlow() {
+        guard !preparingChapterAction, editor.currentChapter?.id == chapterID else { return }
+        preparingChapterAction = true
+        Task {
+            defer { preparingChapterAction = false }
+            pendingImpact = await editor.loadRewriteImpact()
+            guard editor.currentChapter?.id == chapterID else { return }
+            showingReopen = true
+        }
+    }
+
+    /// Refreshes the chapter list whenever the reopen landed — which includes
+    /// the case where the write job then failed to start. The confirmation
+    /// promised those downstream chapters would be marked unreliable, and that
+    /// promise falls due even when no new prose is coming. `refreshChapters`
+    /// rather than `load`: the author stays on this chapter to watch the
+    /// generation instead of being thrown back to the rail.
+    private func confirmRewrite() {
+        guard editor.currentChapter?.id == chapterID else { return }
+        Task {
+            let outcome = await editor.rewrite()
+            if let chapter = outcome.chapter { workspace.upsert(chapter) }
+            guard outcome.requiresChapterListRefresh else { return }
+            await workspace.refreshChapters(bookId: bookID)
+        }
+    }
+
+    private func confirmReopen() {
+        guard editor.currentChapter?.id == chapterID else { return }
+        Task {
+            guard let reopened = await editor.reopen() else { return }
+            workspace.upsert(reopened)
+            await workspace.refreshChapters(bookId: bookID)
+        }
+    }
+
+    /// A rejected delete must cost the author nothing: the refresh corrects
+    /// the stale "this is the last chapter" belief that produced the 409 while
+    /// leaving `chapterPath` — and therefore their place in the book —
+    /// untouched. Only a delete that actually happened uses `load`, whose
+    /// clearing of `chapterPath` is what returns them to the rail.
+    private func confirmDelete() {
+        guard editor.currentChapter?.id == chapterID else { return }
+        Task {
+            guard await editor.deleteCurrentChapter() else {
+                await workspace.refreshChapters(bookId: bookID)
+                return
+            }
+            workspace.removeChapter(id: chapterID)
+            await workspace.load(bookId: bookID)
+        }
+    }
 }
 
 private struct V2IOSTaskBanner: View {

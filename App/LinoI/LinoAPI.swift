@@ -99,6 +99,13 @@ struct APIClient {
         try await request("/chapters/\(chapterId)/write/cancel", method: "POST")
     }
 
+    /// Read-only dry-run: mirrors exactly what a reopen's cascade would
+    /// invalidate, so the client never has to guess which later chapters go
+    /// stale. Safe to call while prose is still visible and unmodified.
+    func rewritePreview(chapterId: String) async throws -> RewriteImpactPreview {
+        try await request("/chapters/\(chapterId)/rewrite-preview")
+    }
+
     /// Extracts a `{code, message, details.names}` structured error payload
     /// (the shape used by preflight/job failures) when present.
     static func structuredError(from data: Data) -> (code: String, message: String, names: [String])? {

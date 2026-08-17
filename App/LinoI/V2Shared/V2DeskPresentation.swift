@@ -215,6 +215,97 @@ enum V2DeskChapterState: Equatable, Sendable {
     case failed
 }
 
+/// Secondary chapter-scope commands. Deliberately excluded from
+/// `primaryAction`: v2.0.1 collapsed the primary chain to review → accept,
+/// and rewrite/delete must never compete with it for that slot.
+struct V2DeskChapterCommands: Equatable, Sendable {
+    let canRewrite: Bool
+    let canDelete: Bool
+}
+
+/// Pure last-chapter policy shared by iOS and macOS so neither platform
+/// computes "is this the last chapter" on its own.
+enum V2DeskChapterPosition {
+    /// An empty list, or an id absent from it, always returns `false`: if it
+    /// cannot be proven last, the delete command must not be offered.
+    static func isLastChapter(_ chapterID: String?, in chapters: [ChapterSummary]) -> Bool {
+        guard let chapterID, let maxIndex = chapters.map(\.index).max() else { return false }
+        guard let chapter = chapters.first(where: { $0.id == chapterID }) else { return false }
+        return chapter.index == maxIndex
+    }
+}
+
+/// The one sentence that reports downstream cascade impact. Reopen and
+/// rewrite both trigger the identical server-side cascade, so they must
+/// describe it with the identical sentence; keeping it here means neither
+/// confirmation can be edited without the other following.
+private enum V2DeskCascadeSentence {
+    /// `nil` when the preview came back and confirmed nothing downstream is
+    /// affected — silence is the honest answer there, and a reassuring
+    /// sentence would be indistinguishable from the failed-preview case.
+    static func make(affected: [RewriteImpactChapter], previewUnavailable: Bool) -> String? {
+        if !affected.isEmpty {
+            let numbers = affected.sorted { $0.index < $1.index }.map { String($0.index) }.joined(separator: "、")
+            return "第 \(numbers) 章的记忆会被标为不再可靠，需要重新整理。"
+        }
+        if previewUnavailable {
+            return "没能取到影响范围；这一章之后的章节记忆可能不再可靠。"
+        }
+        return nil
+    }
+}
+
+/// Confirmation copy for "重写本章", shared verbatim by both platforms so a
+/// destructive-sounding action is explained identically everywhere it
+/// appears. `message` is a pure function of what the backend preview found;
+/// it never guesses at cascade impact the client cannot compute on its own.
+enum V2DeskRewriteConfirmation {
+    static let title = "重写这一章？"
+
+    static func message(
+        isAccepted: Bool,
+        affected: [RewriteImpactChapter],
+        previewUnavailable: Bool
+    ) -> String {
+        var sentences: [String] = []
+        if isAccepted {
+            sentences.append("这一章会回到可编辑状态，本章已整理的记忆立即作废。")
+        }
+        sentences.append("本章意图、标题、出场人物、豁免名单与备注都会保留，只重写正文。")
+        sentences.append("新正文要先通过确定性校验与 Bible 检查才会替换当前正文；失败时当前正文原样保留。")
+        if let cascade = V2DeskCascadeSentence.make(affected: affected, previewUnavailable: previewUnavailable) {
+            sentences.append(cascade)
+        }
+        return sentences.joined(separator: "\n")
+    }
+}
+
+/// Confirmation copy for "重新编辑" (reopen without regenerating). This used to
+/// be hand-written inside the macOS view while iOS carried a hard-coded older
+/// sentence, so the two platforms described the same destructive action
+/// differently and only one of them was covered by the copy tests. Reopen
+/// keeps the prose, so it deliberately omits the rewrite copy's sentences
+/// about overwriting the draft.
+enum V2DeskReopenConfirmation {
+    static let title = "重新编辑这一章？"
+
+    static func message(affected: [RewriteImpactChapter], previewUnavailable: Bool) -> String {
+        var sentences = ["正文与本章意图会保留，这一章回到可编辑状态，本章已整理的记忆立即作废。"]
+        if let cascade = V2DeskCascadeSentence.make(affected: affected, previewUnavailable: previewUnavailable) {
+            sentences.append(cascade)
+        }
+        return sentences.joined(separator: "\n")
+    }
+}
+
+/// Confirmation copy for "删除这一章". The body is static because the outcome
+/// is unconditional: every author-owned field on the chapter is removed, so
+/// there is no partial-loss variant left to describe.
+enum V2DeskDeleteConfirmation {
+    static let title = "删除这一章？"
+    static let message = "这一章的正文、本章意图、标题、出场人物、豁免名单、备注，以及已经整理好的记忆，都会一起删除。此操作无法撤销。"
+}
+
 /// A deliberately narrow, read-only bridge. Platform views assemble it from
 /// the existing ChapterEditorStore; this layer neither owns a store nor starts
 /// requests, so it cannot drift from the backend task contract.
@@ -227,6 +318,15 @@ struct V2DeskEditorSource {
     let staleCheckedSnapshot: CheckedDraftSnapshot?
     let saveState: ChapterSaveState
     let connectionInterrupted: Bool
+    /// Computed by each platform from its own `workspace.chapters` via
+    /// `V2DeskChapterPosition.isLastChapter` — never derived in here.
+    ///
+    /// Deliberately has no default. A default of `false` would compile at a
+    /// call site that forgot it and silently withhold the delete action
+    /// forever, which is exactly how the chapter actions went missing in the
+    /// v2 rewrite. Every construction site must state its answer, even the
+    /// ones that only read `evidence` and never look at `commands`.
+    let isLastChapterInBook: Bool
 
     init(
         chapter: Chapter?,
@@ -236,7 +336,8 @@ struct V2DeskEditorSource {
         checkerRefreshing: Bool,
         staleCheckedSnapshot: CheckedDraftSnapshot?,
         saveState: ChapterSaveState,
-        connectionInterrupted: Bool
+        connectionInterrupted: Bool,
+        isLastChapterInBook: Bool
     ) {
         self.chapter = chapter
         self.writingPhase = writingPhase
@@ -246,6 +347,7 @@ struct V2DeskEditorSource {
         self.staleCheckedSnapshot = staleCheckedSnapshot
         self.saveState = saveState
         self.connectionInterrupted = connectionInterrupted
+        self.isLastChapterInBook = isLastChapterInBook
     }
 }
 
@@ -256,6 +358,9 @@ struct V2DeskSnapshot: Equatable, Sendable {
     let chapterState: V2DeskChapterState
     let marker: V2DeskMarker
     let primaryAction: V2DeskPrimaryAction
+    /// Secondary commands (rewrite/delete). Must never be read as an
+    /// alternative to `primaryAction`, and must never influence it.
+    let commands: V2DeskChapterCommands
     let taskBanner: V2DeskTaskBanner?
     let evidence: V2DeskEvidenceState
     let archive: V2DeskArchiveState
@@ -301,6 +406,7 @@ enum V2DeskPresentation {
             hasCurrentChecker: hasCurrentChecker,
             currentVerdict: currentVerdict
         )
+        let commands = makeCommands(source: source, hasDraft: hasDraft)
         let taskBanner = makeBanner(
             source: source,
             hasDraft: hasDraft,
@@ -324,6 +430,7 @@ enum V2DeskPresentation {
             chapterState: chapterState,
             marker: marker(for: chapterState),
             primaryAction: primaryAction,
+            commands: commands,
             taskBanner: taskBanner,
             evidence: evidence,
             archive: archive,
@@ -409,6 +516,27 @@ enum V2DeskPresentation {
         case .suspect, .violation: return .acceptWithWarning
         case .unavailable: return .rerunChecker
         }
+    }
+
+    /// The only place `canRewrite`/`canDelete` are computed. Accepted and
+    /// unaccepted chapters with prose are both rewritable — a draft that was
+    /// never accepted must not lose the ability to be rewritten just because
+    /// it already has text (that gap is exactly the capability v2 clean-room
+    /// lost). Delete never requires prose: an accidentally created blank
+    /// final chapter must still be removable.
+    private static func makeCommands(
+        source: V2DeskEditorSource,
+        hasDraft: Bool
+    ) -> V2DeskChapterCommands {
+        V2DeskChapterCommands(
+            canRewrite: source.chapter != nil
+                && hasDraft
+                && !source.writingPhase.isActive
+                && !source.checkerRefreshing,
+            canDelete: source.chapter != nil
+                && source.isLastChapterInBook
+                && !source.writingPhase.isActive
+        )
     }
 
     private static func makeBanner(

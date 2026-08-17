@@ -126,8 +126,20 @@ final class WorkspaceStore: ObservableObject {
         self.session = session
     }
 
+    /// Opens a book's chapter list. Clearing `chapterPath` is part of the
+    /// contract here: it unwinds any pushed chapter destination, which is what
+    /// makes this the right call after the visible chapter has been deleted.
     func load(bookId: String) async {
         chapterPath = []
+        await refreshChapters(bookId: bookId)
+    }
+
+    /// Re-reads the chapter list **without** touching `chapterPath`. Callers
+    /// that only need the rail's rows and staleness markers brought up to date
+    /// must use this: `load(bookId:)` would additionally pop the author out of
+    /// the chapter they are standing in, which turns "refresh the markers I
+    /// just promised you" or "your delete was rejected" into a loss of place.
+    func refreshChapters(bookId: String) async {
         isLoading = true
         defer { isLoading = false }
         do {
@@ -578,7 +590,12 @@ final class ChapterEditorStore: ObservableObject {
     func generate() async -> Chapter? {
         guard let chapter = currentChapter, !writingPhase.isActive else { return nil }
         guard chapter.status != "finalized" else {
-            session.notices.publish("请先选择“重新编辑本章”，再生成正文。")
+            // Kept as an internal invariant: normal UI flow reaches a
+            // finalized chapter only through `rewrite()`, which reopens it
+            // first. This message only fires if some other call site skips
+            // that step, so it must point at the real path rather than the
+            // dead-end "重新编辑本章" instruction v2.0.4 retired.
+            session.notices.publish("请改用「重写本章」生成正文。")
             return nil
         }
         let replace = !chapter.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || chapter.status == "writing"
@@ -721,6 +738,50 @@ final class ChapterEditorStore: ObservableObject {
             session.notices.publish(error)
             return nil
         }
+    }
+
+    /// Rewrites the visible chapter: on a finalized chapter this first
+    /// reopens it (archives cascade-invalidate server-side, `draftText`
+    /// survives), then starts a fresh write job. `generate()` computes
+    /// `replace == true` from that surviving text, so the prose is
+    /// overwritten in place rather than cleared up front — the old body
+    /// stays visible until a new one has passed both deterministic
+    /// validation and Checker (hard rule 35).
+    ///
+    /// This is two network calls; a failure between them is reported
+    /// honestly rather than papered over. If `generate()` fails after a
+    /// successful reopen, the chapter is left exactly where the two calls put
+    /// it — reopened, prose intact, archive already invalidated — with
+    /// `writingPhase` carrying the failure. Nothing here rolls the status
+    /// back to finalized or swallows the error.
+    ///
+    /// That middle state is why this returns `ChapterRewriteOutcome` rather
+    /// than `Chapter?`: a reopen that landed has already destroyed archives on
+    /// the server, and a caller that cannot tell it apart from "nothing
+    /// happened" will leave the author looking at a chapter list that still
+    /// claims those memories are good.
+    func rewrite() async -> ChapterRewriteOutcome {
+        guard let chapter = currentChapter, !writingPhase.isActive else { return .notStarted }
+        var didReopen = false
+        if chapter.status == "finalized" {
+            // 失败已 publish 通知，直接停：nothing was invalidated.
+            guard await reopen() != nil else { return .notStarted }
+            didReopen = true
+        }
+        // generate() 内部 replace 计算为 true，正文被覆盖而非清空
+        guard let rewritten = await generate() else {
+            return didReopen ? .reopenedButGenerateFailed : .notStarted
+        }
+        return .succeeded(rewritten)
+    }
+
+    /// Read-only dry-run of which later chapters a rewrite's reopen would
+    /// cascade-stale. A failure here must never block the rewrite itself —
+    /// callers fall back to a conservative confirmation message when this
+    /// returns `nil`, so no notice is published for it.
+    func loadRewriteImpact() async -> RewriteImpactPreview? {
+        guard let chapter = currentChapter else { return nil }
+        return try? await session.api.rewritePreview(chapterId: chapter.id)
     }
 
     func cancelWriting() async -> Chapter? {

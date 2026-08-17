@@ -276,9 +276,27 @@ struct V2MacWorkspaceDesk: View {
     @State private var sheet: V2MacDeskSheet?
     @State private var showReopenConfirmation = false
     @State private var showAcceptWarning = false
+    @State private var showRewriteConfirmation = false
+    @State private var showDeleteConfirmation = false
     @State private var showReader = false
     @State private var chapterLoadID: String?
     @State private var creatingChapter = false
+    /// One gate for every chapter-scope confirmation, not one per flow.
+    /// Separate gates left the two preview-backed buttons able to run at the
+    /// same time: on a slow network "重新编辑" neither dimmed nor reacted, so a
+    /// second tap on "重写本章" started its own fetch and both dialogs' bindings
+    /// ended up true at once. Delete joins the same gate — its dialog opens
+    /// instantly, which would otherwise let it stack on top of an in-flight
+    /// preview.
+    @State private var preparingChapterAction = false
+    /// Populated just before a confirmation dialog is shown. `nil` means the
+    /// preview call failed, not "not yet attempted" — the dialog only appears
+    /// after the fetch resolves either way.
+    @State private var pendingImpact: RewriteImpactPreview?
+    /// The chapter each dialog was raised for, re-checked on confirm so a
+    /// selection change during the dialog's lifetime can never redirect a
+    /// destructive action onto a different chapter.
+    @State private var pendingChapterID: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -312,7 +330,10 @@ struct V2MacWorkspaceDesk: View {
                         onStartNewChapter: createChapter,
                         performAction: runAction,
                         onPrimary: runPrimaryAction,
-                        onReopen: { showReopenConfirmation = true }
+                        onReopen: { startReopenFlow() },
+                        onRewrite: { startRewriteFlow() },
+                        onDelete: { startDeleteFlow() },
+                        chapterActionInFlight: preparingChapterAction
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     if usesInlineContext && contextOpen {
@@ -360,17 +381,36 @@ struct V2MacWorkspaceDesk: View {
             createChapter()
         }
         .sheet(item: $sheet) { V2MacDeskSheetHost(sheet: $0, currentChapterID: selectedChapterID) }
-        .confirmationDialog("重新编辑这一章？", isPresented: $showReopenConfirmation, titleVisibility: .visible) {
+        .confirmationDialog(V2DeskReopenConfirmation.title, isPresented: $showReopenConfirmation, titleVisibility: .visible) {
             Button("保留正文并重新编辑", role: .destructive) { reopen() }
             Button("取消", role: .cancel) {}
         } message: {
-            reopenConfirmationMessage
+            Text(V2DeskReopenConfirmation.message(
+                affected: pendingImpact?.affectedChapters ?? [],
+                previewUnavailable: pendingImpact == nil
+            ))
         }
         .confirmationDialog("仍然接受这一章？", isPresented: $showAcceptWarning, titleVisibility: .visible) {
             Button("接受这一章", role: .destructive) { accept(overrideChecker: true) }
             Button("取消", role: .cancel) {}
         } message: {
             Text("这一章会被记为完成；当前检查提出的问题将不再提醒你。")
+        }
+        .confirmationDialog(V2DeskRewriteConfirmation.title, isPresented: $showRewriteConfirmation, titleVisibility: .visible) {
+            Button("重写", role: .destructive) { rewrite() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(V2DeskRewriteConfirmation.message(
+                isAccepted: editor.currentChapter?.status == "finalized",
+                affected: pendingImpact?.affectedChapters ?? [],
+                previewUnavailable: pendingImpact == nil
+            ))
+        }
+        .confirmationDialog(V2DeskDeleteConfirmation.title, isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+            Button("删除", role: .destructive) { deleteChapter() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(V2DeskDeleteConfirmation.message)
         }
         .sheet(isPresented: $showReader) {
             V2MacReaderSheet(
@@ -399,20 +439,9 @@ struct V2MacWorkspaceDesk: View {
             checkerRefreshing: editor.checkerRefreshing,
             staleCheckedSnapshot: editor.staleCheckedSnapshot,
             saveState: editor.saveState,
-            connectionInterrupted: editor.pollingConnectionInterrupted
+            connectionInterrupted: editor.pollingConnectionInterrupted,
+            isLastChapterInBook: V2DeskChapterPosition.isLastChapter(editor.currentChapter?.id, in: workspace.chapters)
         ))
-    }
-
-    private var reopenMessage: String {
-        guard let current = editor.currentChapter else { return "正文与本章意图会保留。" }
-        let downstream = workspace.chapters.filter { $0.index > current.index }.map { "第 \($0.index) 章" }
-        return downstream.isEmpty
-            ? "正文与本章意图会保留。这一章的归档将失效。"
-            : "正文与本章意图会保留；\(downstream.joined(separator: "、")) 的记忆会标为不再可靠。"
-    }
-
-    private var reopenConfirmationMessage: Text {
-        Text(reopenMessage)
     }
 
     private func loadBook() async {
@@ -485,11 +514,99 @@ struct V2MacWorkspaceDesk: View {
         Task { if let chapter = await editor.accept(overrideChecker: overrideChecker) { workspace.upsert(chapter) } }
     }
 
+    /// Fetches the read-only reopen preview before showing the confirmation
+    /// dialog, mirroring `startRewriteFlow()` below. A failed preview must
+    /// not block the dialog — `V2DeskReopenConfirmation.message` falls back to
+    /// a conservative sentence when `pendingImpact` stays `nil`. Re-checks the
+    /// chapter id after the await (same defensive shape as `rerunChecker()` in
+    /// `LinoStores.swift`) so a rail selection made during the fetch cannot
+    /// surface a confirmation naming the wrong chapter's impact.
+    private func startReopenFlow() {
+        guard !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
+        preparingChapterAction = true
+        Task {
+            defer { preparingChapterAction = false }
+            let impact = await editor.loadRewriteImpact()
+            guard editor.currentChapter?.id == chapterID else { return }
+            pendingImpact = impact
+            pendingChapterID = chapterID
+            showReopenConfirmation = true
+        }
+    }
+
+    /// The reopen has already cascaded downstream by the time it returns, so
+    /// the rail's staleness markers are refreshed — with `refreshChapters`,
+    /// which leaves the author standing where they are.
     private func reopen() {
+        guard let chapterID = pendingChapterID, editor.currentChapter?.id == chapterID else { return }
         Task {
             if let chapter = await editor.reopen() {
                 workspace.upsert(chapter)
-                if let bookID = session.currentBook?.id { await workspace.load(bookId: bookID) }
+                if let bookID = session.currentBook?.id { await workspace.refreshChapters(bookId: bookID) }
+            }
+        }
+    }
+
+    /// Same preview-first shape as `startReopenFlow()`, including the
+    /// post-await chapter-id re-check; the underlying `GET
+    /// .../rewrite-preview` call is identical because the cascade is driven
+    /// entirely by the reopen step `rewrite()` performs internally, not by
+    /// whether a regeneration follows it.
+    private func startRewriteFlow() {
+        guard !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
+        preparingChapterAction = true
+        Task {
+            defer { preparingChapterAction = false }
+            let impact = await editor.loadRewriteImpact()
+            guard editor.currentChapter?.id == chapterID else { return }
+            pendingImpact = impact
+            pendingChapterID = chapterID
+            showRewriteConfirmation = true
+        }
+    }
+
+    /// The chapter list is refreshed whenever the reopen landed, which
+    /// includes the case where the write job then failed to start: the
+    /// confirmation promised those downstream chapters would be marked, and
+    /// that promise comes due even when no new prose is coming. Only
+    /// `.notStarted` — where the server was never changed — skips it.
+    private func rewrite() {
+        guard let chapterID = pendingChapterID, editor.currentChapter?.id == chapterID else { return }
+        Task {
+            let outcome = await editor.rewrite()
+            if let chapter = outcome.chapter { workspace.upsert(chapter) }
+            guard outcome.requiresChapterListRefresh, let bookID = session.currentBook?.id else { return }
+            await workspace.refreshChapters(bookId: bookID)
+        }
+    }
+
+    /// Failure still reloads the chapter list: a 409 here means this client's
+    /// local "is this the last chapter" view was stale (another client or
+    /// session created a later chapter), and the reload corrects it so the
+    /// delete command's availability reflects the server immediately. A
+    /// rejected delete must not cost the author anything else, so it refreshes
+    /// without disturbing navigation.
+    private func startDeleteFlow() {
+        guard !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
+        pendingChapterID = chapterID
+        showDeleteConfirmation = true
+    }
+
+    private func deleteChapter() {
+        guard let deletedID = pendingChapterID,
+              editor.currentChapter?.id == deletedID,
+              let bookID = session.currentBook?.id else { return }
+        Task {
+            guard await editor.deleteCurrentChapter() else {
+                await workspace.refreshChapters(bookId: bookID)
+                return
+            }
+            workspace.removeChapter(id: deletedID)
+            await workspace.refreshChapters(bookId: bookID)
+            if let last = workspace.chapters.max(by: { $0.index < $1.index }) {
+                await navigate(to: last)
+            } else {
+                selectedChapterID = nil
             }
         }
     }

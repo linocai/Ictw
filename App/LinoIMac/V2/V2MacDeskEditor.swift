@@ -12,6 +12,9 @@ struct V2MacManuscriptDesk: View {
     let performAction: (V2DeskPrimaryAction) -> Void
     let onPrimary: () -> Void
     let onReopen: () -> Void
+    let onRewrite: () -> Void
+    let onDelete: () -> Void
+    let chapterActionInFlight: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -38,7 +41,16 @@ struct V2MacManuscriptDesk: View {
                 }
                 .frame(minWidth: V2DeskMetric.manuscriptMinimum + 32)
             }
-            V2MacDeskActionBar(snapshot: snapshot, onOpenContext: onOpenContext, onOpenReader: onOpenReader, onPrimary: onPrimary, onReopen: onReopen)
+            V2MacDeskActionBar(
+                snapshot: snapshot,
+                onOpenContext: onOpenContext,
+                onOpenReader: onOpenReader,
+                onPrimary: onPrimary,
+                onReopen: onReopen,
+                onRewrite: onRewrite,
+                onDelete: onDelete,
+                chapterActionInFlight: chapterActionInFlight
+            )
         }
         .background(snapshot.chapterState == .accepted ? V2DeskPalette.color(.acceptedPaper, scheme: colorScheme) : V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
     }
@@ -201,6 +213,9 @@ private struct V2MacDeskActionBar: View {
     let onOpenReader: () -> Void
     let onPrimary: () -> Void
     let onReopen: () -> Void
+    let onRewrite: () -> Void
+    let onDelete: () -> Void
+    let chapterActionInFlight: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -210,7 +225,29 @@ private struct V2MacDeskActionBar: View {
             Spacer()
             if snapshot.chapterState == .accepted {
                 Button("阅读", action: onOpenReader).buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
-                Button("重新编辑", action: onReopen).buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                // Both of these now wait on a `rewrite-preview` round trip
+                // before their dialog can appear. Without the disabled state
+                // the button looked broken on a slow network and invited the
+                // repeat taps that used to stack two dialogs.
+                Button(chapterActionInFlight ? "重新编辑…" : "重新编辑", action: onReopen)
+                    .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                    .disabled(chapterActionInFlight)
+            }
+            if snapshot.commands.canRewrite {
+                Button(chapterActionInFlight ? "重写本章…" : "重写本章", action: onRewrite)
+                    .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                    .disabled(chapterActionInFlight)
+            }
+            if snapshot.commands.canDelete {
+                Menu {
+                    Button("删除这一章", role: .destructive, action: onDelete)
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .buttonStyle(V2MacDeskButton(kind: .quiet, compact: true))
+                .disabled(chapterActionInFlight)
+                .help("更多章节操作")
+                .accessibilityLabel("更多章节操作")
             }
             if snapshot.primaryAction != .none {
                 primaryButton
@@ -399,7 +436,11 @@ private struct V2MacEvidenceFace: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var snapshot: V2DeskSnapshot {
-        V2DeskPresentation.make(V2DeskEditorSource(chapter: editor.currentChapter, writingPhase: editor.writingPhase, checkerResult: editor.checkerResult, checkerAppliesToVisibleDraft: editor.checkerAppliesToVisibleDraft, checkerRefreshing: editor.checkerRefreshing, staleCheckedSnapshot: editor.staleCheckedSnapshot, saveState: editor.saveState, connectionInterrupted: editor.pollingConnectionInterrupted))
+        // This face renders `evidence` only and never reads `commands`, so the
+        // chapter's position is genuinely irrelevant here. Stated explicitly
+        // because the initialiser has no default -- see the note on
+        // `V2DeskEditorSource.isLastChapterInBook`.
+        V2DeskPresentation.make(V2DeskEditorSource(chapter: editor.currentChapter, writingPhase: editor.writingPhase, checkerResult: editor.checkerResult, checkerAppliesToVisibleDraft: editor.checkerAppliesToVisibleDraft, checkerRefreshing: editor.checkerRefreshing, staleCheckedSnapshot: editor.staleCheckedSnapshot, saveState: editor.saveState, connectionInterrupted: editor.pollingConnectionInterrupted, isLastChapterInBook: false))
     }
 
     var body: some View {

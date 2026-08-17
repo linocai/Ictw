@@ -291,7 +291,13 @@ enum LinoErrorPresenter {
 
         // 预检 / 并发（409 结构化 detail）
         case "chapter_finalized":
-            return Entry(reason: "本章已完成，需先重新编辑", suggestion: "请先点击「重新编辑本章」")
+            // The reason must not prescribe a different route than the
+            // suggestion: composed together they read as one sentence, and
+            // "需先重新编辑" contradicted the 「重写本章」 the suggestion sends
+            // the author to.
+            return Entry(reason: "本章已完成，正文不能直接生成", suggestion: "请改用「重写本章」")
+        case "chapter_not_last":
+            return Entry(reason: "只能删除全书最后一章", suggestion: "请先删除它后面的章节，或改用「重写本章」")
         case "write_running":
             return Entry(reason: "写作正在进行中", suggestion: "请等待当前任务完成后再试")
         case "unselected_characters_in_bible":

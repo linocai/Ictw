@@ -330,6 +330,70 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// Read-only dry-run response for `GET /chapters/{id}/rewrite-preview`. Lists
+/// exactly the chapters a rewrite's reopen cascade would actually invalidate
+/// — never a client-side guess — so the confirmation dialog can name them.
+struct RewriteImpactChapter: Codable, Hashable, Sendable {
+    var id: String
+    var index: Int
+    var title: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, index, title
+    }
+}
+
+struct RewriteImpactPreview: Codable, Hashable, Sendable {
+    var chapterId: String
+    var index: Int
+    var affectedChapters: [RewriteImpactChapter]
+
+    enum CodingKeys: String, CodingKey {
+        case index
+        case chapterId = "chapter_id"
+        case affectedChapters = "affected_chapters"
+    }
+}
+
+/// Result of `ChapterEditorStore.rewrite()`. A rewrite on an accepted chapter
+/// is two server calls, and the state between them is real and visible: once
+/// the reopen lands the server has *already* voided this chapter's archive and
+/// cascaded staleness onto every downstream chapter that depended on it. A
+/// plain optional cannot express that — "nothing was attempted" and "the
+/// archives are already gone but no new prose is coming" would both arrive as
+/// `nil`, and the UI would tell the author nothing happened while the rail's
+/// staleness markers silently went out of date.
+enum ChapterRewriteOutcome: Equatable, Sendable {
+    /// No archive was voided. Covers the guard rejecting the call, the reopen
+    /// itself failing, and a never-accepted draft whose write job failed to
+    /// start — in all of them the chapter stands exactly as the author left
+    /// it. Any error was already published as a notice by the failing step.
+    case notStarted
+
+    /// The reopen landed; the write job did not start. The chapter is
+    /// editable again, the previous prose is untouched (hard rule 35), and
+    /// this chapter's archive plus its downstream cascade are already invalid
+    /// on the server. The failure notice is published by `generate()`; the
+    /// caller still owes the author a refreshed chapter list.
+    case reopenedButGenerateFailed
+
+    /// The write job is running. The payload is the server's chapter as of
+    /// the moment the job was accepted; the prose in it is still the old one.
+    case succeeded(Chapter)
+
+    /// The chapter to feed back into the workspace, when there is one.
+    var chapter: Chapter? {
+        if case .succeeded(let chapter) = self { return chapter }
+        return nil
+    }
+
+    /// Whether the on-screen chapter list is now out of date. True for both
+    /// non-`notStarted` cases: a successful rewrite changed this chapter's own
+    /// row, and a half-completed one changed the downstream staleness markers
+    /// the confirmation dialog explicitly promised would appear.
+    var requiresChapterListRefresh: Bool { self != .notStarted }
+}
+
 /// Finalized prose is immutable until the Backend has accepted an explicit
 /// reopen. Keep this policy shared so UI affordances and Store mutations agree.
 enum ChapterEditingPolicy {
