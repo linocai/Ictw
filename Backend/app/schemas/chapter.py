@@ -73,6 +73,26 @@ class ChapterSummary(ORMModel):
     archive_latest_attempt_status: str | None = None
 
 
+class RewriteImpactChapter(BaseModel):
+    id: str
+    index: int
+    title: str
+
+
+class RewriteImpactPreview(BaseModel):
+    """Which later chapters a rewrite of this one would make stale.
+
+    The clients cannot derive this: staleness depends on each later chapter's
+    `prior_state` fingerprint, which covers only that chapter's own selected
+    characters and ignores the chapter index. A client without the projection
+    could only report "everything after this one", which over-reports.
+    """
+
+    chapter_id: str
+    index: int
+    affected_chapters: list[RewriteImpactChapter]
+
+
 class ArchiveFactRead(BaseModel):
     id: str
     type: str

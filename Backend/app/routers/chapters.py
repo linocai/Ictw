@@ -35,6 +35,8 @@ from app.schemas.chapter import (
     CheckerRunRead,
     InspirationRequest,
     InspirationResponse,
+    RewriteImpactChapter,
+    RewriteImpactPreview,
     WriteJobStatus,
     WriteRequest,
 )
@@ -414,18 +416,55 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
 
 @router.delete("/chapters/{chapter_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
+    # Order matters. Lookup first, then the gate, and only then any side
+    # effect: an earlier build cancelled the live write job before checking
+    # anything, so a request that was about to be refused still killed the
+    # author's running generation.
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        # Deleting an already-deleted chapter stays idempotent, so this has to
+        # precede the gate: a client retrying a successful delete must not be
+        # told the (now absent) chapter is not the last one.
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    book_id = chapter.book_id
+    old_index = chapter.index
+    # Only the final chapter of a book may be deleted. This is a product guard
+    # against destroying the wrong chapter; nothing below is allowed to lean on
+    # it for correctness. Asking whether a later chapter exists is equivalent to
+    # comparing against max(index) -- uq_chapters_book_index rules out
+    # duplicates within a book -- but it stops at the first hit on the index and
+    # skips the aggregate on the way through.
+    has_following = db.scalar(
+        select(Chapter.id)
+        .where(Chapter.book_id == book_id, Chapter.index > old_index)
+        .limit(1)
+    )
+    if has_following is not None:
+        last_index = db.scalar(
+            select(func.max(Chapter.index)).where(Chapter.book_id == book_id)
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "chapter_not_last",
+                "message": "只能删除全书最后一章",
+                "details": {"index": old_index, "last_index": last_index},
+            },
+        )
+    # Past the gate the request is committed, so cancelling the live write job
+    # is now a consequence of an accepted delete rather than of a rejected one.
     job = write_registry.get_live(chapter_id)
     if job is not None:
         write_registry.cancel(job, discard=True)
         if job.thread is not None:
             job.thread.join(timeout=8)
-    chapter = db.get(Chapter, chapter_id)
-    if chapter is None:
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-    book_id = chapter.book_id
-    old_index = chapter.index
     db.delete(chapter)
     db.flush()
+    # On the normal path the gate above leaves this empty, but "normally" is not
+    # "never": the gate's SELECT runs outside any transaction, because pysqlite
+    # opens one only at the first DML statement. A chapter created by another
+    # session in the window between the gate and the `db.delete` above is
+    # therefore real, and this loop really renumbers it.
     following = db.scalars(
         select(Chapter)
         .where(Chapter.book_id == book_id, Chapter.index > old_index)
@@ -434,9 +473,17 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
     for item in following:
         item.index -= 1
         db.flush()
+    # M6 (audit), fixed here rather than argued away: a renumbered chapter can
+    # still hold an in-flight write job keyed to its pre-reindex position. The
+    # gate makes that rare, not impossible -- see the race described above -- so
+    # this follows the same shape as `import_chapter`: advance the persistent
+    # generation inside this transaction, prompt the local registry only after
+    # it commits.
+    invalidated = invalidate_writer_inputs(db, following)
     invalidate_downstream_archives(db, book_id, after_index=old_index - 1)
     rebuild_book_projection(db, book_id)
     db.commit()
+    cancel_local_writer_jobs(invalidated)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -917,6 +964,81 @@ def retry_chapter_archive(
         extractor_client,
         provenance=payload.provenance,
         draft_check_fingerprint=draft_fingerprint(chapter, chapter.draft_text),
+    )
+
+
+@router.get("/chapters/{chapter_id}/rewrite-preview", response_model=RewriteImpactPreview)
+def rewrite_preview(chapter_id: str, db: Session = Depends(get_db)) -> RewriteImpactPreview:
+    """Dry-run the archive cascade a rewrite of this chapter would cause.
+
+    This deliberately runs the real `invalidate_archive_if_input_changed` +
+    `invalidate_downstream_archives` and throws the transaction away, rather
+    than reimplementing the staleness rule. A second copy of that rule is the
+    exact failure this endpoint exists to prevent: the answer depends on each
+    later chapter's `prior_state` fingerprint, so an independent story line
+    that shares no characters with this chapter must not be reported.
+
+    The price of reusing them is that a read-only request briefly takes SQLite's
+    write lock, because `invalidate_downstream_archives` flushes. If that
+    contention ever becomes a real problem, the fix is to split that function
+    into a "decide" half and a "persist" half and let both callers share the
+    decide half -- never to grow a second copy of the decision in here.
+
+    Read-only is enforced by construction: the function never commits, and the
+    `finally` rolls back whatever the two real functions wrote.
+    """
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    chapter_index = chapter.index
+    book_id = chapter.book_id
+    try:
+        previous_archive_fingerprint = archive_input_fingerprint(chapter)
+        # `force=True` mirrors reopen: a rewrite discards this chapter's own
+        # archive whether or not its inputs happen to have changed already.
+        invalidate_archive_if_input_changed(
+            db, chapter, previous_fingerprint=previous_archive_fingerprint, force=True
+        )
+        invalidated_ids = invalidate_downstream_archives(
+            db, book_id, after_index=chapter_index
+        )
+        # Read the answer out as plain values *before* the rollback; rolling
+        # back expires every ORM object these functions touched.
+        affected: list[RewriteImpactChapter] = []
+        if invalidated_ids:
+            rows = db.scalars(
+                select(Chapter)
+                .where(Chapter.id.in_(invalidated_ids))
+                .order_by(Chapter.index, Chapter.id)
+            ).all()
+            affected = [
+                RewriteImpactChapter(id=row.id, index=row.index, title=row.title) for row in rows
+            ]
+    except OperationalError as exc:
+        if not _is_sqlite_busy(exc):
+            raise
+        # The flush inside the cascade wants SQLite's write lock, which a live
+        # Writer or Extractor commit can be holding. Report that in the same
+        # structured shape `create_chapter` uses for the same collision instead
+        # of a bare 500: the clients fall back to the conservative confirmation
+        # wording, and a preview failure must stay diagnosable.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "rewrite_preview_busy",
+                "message": "数据库正忙，暂时取不到影响范围，请稍后重试",
+                "details": {},
+            },
+        ) from exc
+    finally:
+        # No commit anywhere above, and `get_db` only closes, so this undoes
+        # the whole dry run; the rollback also expires every ORM object the two
+        # functions touched. `stale_archives_for_reopen` (JobRun bookkeeping)
+        # and `rebuild_book_projection` (pure write) are intentionally skipped:
+        # neither changes which chapters come back as affected.
+        db.rollback()
+    return RewriteImpactPreview(
+        chapter_id=chapter_id, index=chapter_index, affected_chapters=affected
     )
 
 

@@ -72,21 +72,31 @@ def test_delete_reverts_preexisting_and_introduced_keys(client, auth_headers, wa
     assert _fields(client, auth_headers, character["id"]) == {}
 
 
-def test_delete_middle_chapter_stales_dependent_archive_until_retry(client, auth_headers, wait_for_terminal):
+def test_reopening_an_earlier_chapter_stales_dependent_archive_until_retry(client, auth_headers, wait_for_terminal):
     book, character = _setup_book(client, auth_headers)
     first = _new_chapter(client, auth_headers, book["id"], character["id"])
     second = _new_chapter(client, auth_headers, book["id"], character["id"])
     _accept_with_patch(client, auth_headers, wait_for_terminal, first["id"], character["id"], {"当前位置": "北境"})
     _accept_with_patch(client, auth_headers, wait_for_terminal, second["id"], character["id"], {"当前位置": "南港"})
 
-    client.delete(f"/api/v1/chapters/{first['id']}", headers=auth_headers).raise_for_status()
-    # The later v2 archive was extracted with the deleted chapter's projected
+    # v2.0.4 moved this coverage off DELETE, which now refuses anything but the
+    # last chapter. Reopening an earlier chapter drives the same
+    # `prior_state_changed` cascade, and this is the only test that exercises it.
+    rejected = client.delete(f"/api/v1/chapters/{first['id']}", headers=auth_headers)
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "chapter_not_last"
+    client.post(f"/api/v1/chapters/{first['id']}/reopen", headers=auth_headers).raise_for_status()
+    # The later v2 archive was extracted with the reopened chapter's projected
     # state in its input fingerprint. It must stop contributing until a fresh
     # one-call retry validates the same accepted prose against the new prior
     # state; silently keeping its old delta would mix incompatible ledgers.
     second_read = client.get(f"/api/v1/chapters/{second['id']}", headers=auth_headers).json()
     assert second_read["status"] == "finalized"
     assert second_read["archive"]["status"] == "stale"
+    # The reason has to be the cascade one. `stale` alone would also be true if
+    # this chapter's own inputs had changed, which would hide a regression that
+    # swapped the cascade for a blanket invalidation.
+    assert second_read["archive"]["error_code"] == "prior_state_changed"
     assert second_read["archive"]["can_retry"] is True
     assert _fields(client, auth_headers, character["id"]) == {}
 

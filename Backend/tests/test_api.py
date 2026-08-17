@@ -687,16 +687,27 @@ def test_checker_fingerprint_requires_recheck_after_world_or_selected_character_
     assert character_recheck.json()["draft_fingerprint"] != world_recheck.json()["draft_fingerprint"]
 
 
-def test_delete_middle_chapter_reindexes_and_is_idempotent(client, auth_headers):
+def test_delete_only_removes_the_last_chapter_and_stays_idempotent(client, auth_headers):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapters = [
         client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"title": str(i)}).json()
         for i in range(3)
     ]
-    assert client.delete(f"/api/v1/chapters/{chapters[1]['id']}", headers=auth_headers).status_code == 204
+    rejected = client.delete(f"/api/v1/chapters/{chapters[1]['id']}", headers=auth_headers)
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "chapter_not_last"
+    assert rejected.json()["detail"]["details"] == {"index": 2, "last_index": 3}
+    # A refused delete leaves the book exactly as it was, chapter and all.
+    listed = client.get(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers).json()
+    assert [item["index"] for item in listed] == [1, 2, 3]
+    assert client.get(f"/api/v1/chapters/{chapters[1]['id']}", headers=auth_headers).status_code == 200
+
+    assert client.delete(f"/api/v1/chapters/{chapters[2]['id']}", headers=auth_headers).status_code == 204
     listed = client.get(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers).json()
     assert [item["index"] for item in listed] == [1, 2]
-    assert client.delete(f"/api/v1/chapters/{chapters[1]['id']}", headers=auth_headers).status_code == 204
+    # Idempotence outranks the gate: a retried delete of an id that is already
+    # gone must not come back as "not the last chapter".
+    assert client.delete(f"/api/v1/chapters/{chapters[2]['id']}", headers=auth_headers).status_code == 204
 
 
 def test_duplicate_character_name_is_an_explicit_preflight_error(client, auth_headers):
@@ -1229,6 +1240,44 @@ def test_non_prompt_book_and_unlinked_character_edits_do_not_cancel_writer(clien
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
 
+class SnapshotExtractor:
+    """v2 Extractor stub whose fact carries a real ending-state delta.
+
+    The shared `FakeExtractor` returns `end_state_delta: []`, so a chapter
+    accepted under it never populates `dynamic_fields` and any "the delete
+    reverted it" assertion would pass without the revert existing.
+    """
+
+    def __init__(self, name: str, slot: str, value: str) -> None:
+        self.name, self.slot, self.value = name, slot, value
+
+    def complete_json(self, *, user: str, **kwargs):
+        import re
+
+        span_id = re.search(r"\[(P\d{4}-S\d{2})\]", user).group(1)
+        return {
+            "summary": "梗概。",
+            "facts": [{
+                "fact_ref": "F1",
+                "type": "状态",
+                "importance": 3,
+                "text": f"{self.name}的章末状态发生变化。",
+                "participant_names": [self.name],
+                "start_id": span_id,
+                "end_id": span_id,
+            }],
+            "end_state_delta": [{
+                "fact_ref": "F1",
+                "character_name": self.name,
+                "other_character_name": None,
+                "scope": "snapshot",
+                "slot": self.slot,
+                "operation": "set",
+                "value": self.value,
+            }],
+        }
+
+
 def test_delete_finalized_chapter_cascades_events_and_reverts_dynamic_state(client, auth_headers, wait_for_terminal):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     character = client.post(
@@ -1243,20 +1292,31 @@ def test_delete_finalized_chapter_cascades_events_and_reverts_dynamic_state(clie
         ).json()
         for index in range(3)
     ]
-    client.post(
-        f"/api/v1/chapters/{chapters[1]['id']}/import", headers=auth_headers, json={"draft_text": "林夕行动"}
+    # v2.0.4: only the last chapter is deletable, so the finalized chapter
+    # under test is the last one rather than the middle one.
+    client.app.dependency_overrides[get_extractor_client] = lambda: SnapshotExtractor(
+        "林夕", "当前位置", "废城"
     )
-    client.post(f"/api/v1/chapters/{chapters[1]['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
-    assert wait_for_terminal(client, chapters[1]["id"], auth_headers)["phase"] == "done"
+    client.post(
+        f"/api/v1/chapters/{chapters[2]['id']}/import", headers=auth_headers, json={"draft_text": "林夕行动"}
+    )
+    client.post(f"/api/v1/chapters/{chapters[2]['id']}/accept", headers=auth_headers, json={"override_checker": True}).raise_for_status()
+    assert wait_for_terminal(client, chapters[2]["id"], auth_headers)["phase"] == "done"
 
-    client.delete(f"/api/v1/chapters/{chapters[0]['id']}", headers=auth_headers).raise_for_status()
-    client.delete(f"/api/v1/chapters/{chapters[1]['id']}", headers=auth_headers).raise_for_status()
+    # The v2 archive creates one character event for its single fact and one
+    # projected dynamic field for its single delta; the deletion below is what
+    # has to take both away again.
+    before = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()
+    assert before["events"] != []
+    assert before["dynamic_fields"] == {"当前位置": "废城"}
+
+    client.delete(f"/api/v1/chapters/{chapters[2]['id']}", headers=auth_headers).raise_for_status()
     detail = client.get(f"/api/v1/characters/{character['id']}", headers=auth_headers).json()
     assert detail["events"] == []
     # v1.1.2: the chapter introduced this key, so deleting the chapter removes it.
-    assert "current_status" not in detail["dynamic_fields"]
+    assert detail["dynamic_fields"] == {}
     listed = client.get(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers).json()
-    assert [(item["id"], item["index"]) for item in listed] == [(chapters[2]["id"], 1)]
+    assert [item["index"] for item in listed] == [1, 2]
 
 
 def test_memories_export_contains_headlines_summaries_and_character_memory(client, auth_headers):
