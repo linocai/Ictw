@@ -861,6 +861,44 @@ Sky Computer Use native pipe closed before response
 
 ---
 
+## [ERR-20260830-013] gh-release-view-islatest-field
+
+**Logged**: 2026-08-30T21:10:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+GitHub Release 创建成功后，元数据复核请求了当前 `gh` 版本不支持的 `isLatest` JSON 字段。
+
+### Error
+
+```
+Unknown JSON field: "isLatest"
+```
+
+### Context
+
+- `v2.1.0` Release 与 macOS 附件已经成功创建。
+- 失败仅发生在随后读取展示字段时。
+
+### Suggested Fix
+
+只请求 `gh release view` 明确列出的兼容字段，并通过重新下载附件完成独立哈希与签名复核。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T21:10:00+08:00
+- **Notes**: 改用 `url`、`name`、`tagName`、`isDraft`、`isPrerelease`、`assets` 等可用字段。
+
+---
+
 ## [ERR-20260830-012] remote-sha-awk-quoting
 
 **Logged**: 2026-08-30T21:06:00+08:00
