@@ -72,6 +72,9 @@ def _sqlite_database_path(connection) -> Path:
 
 
 def _assert_sqlite_backup_healthy(path: Path) -> None:
+    wal_path = Path(f"{path}-wal")
+    if wal_path.exists() and wal_path.stat().st_size:
+        raise RuntimeError("destructive downgrade backup must be checkpointed with no WAL")
     try:
         connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
     except sqlite3.Error as exc:
