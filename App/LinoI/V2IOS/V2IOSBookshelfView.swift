@@ -5,6 +5,8 @@ struct V2IOSBookshelfView: View {
     @EnvironmentObject private var bookshelf: BookshelfStore
     @State private var showingNewBook = false
     @State private var showingSettings = false
+    @State private var showingSearch = false
+    @State private var showingProjectPackage = false
 
     var body: some View {
         ScrollView {
@@ -41,6 +43,18 @@ struct V2IOSBookshelfView: View {
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
+        .sheet(isPresented: $showingSearch) {
+            V2IOSSearchSheet()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
+        .sheet(isPresented: $showingProjectPackage) {
+            V2IOSProjectPackageSheet()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
     }
 
     private var header: some View {
@@ -53,6 +67,14 @@ struct V2IOSBookshelfView: View {
                     .foregroundStyle(Color.secondary)
             }
             Spacer()
+            Button {
+                showingSearch = true
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("搜索全部书籍")
             Button("设置") { showingSettings = true }
                 .font(V2DeskType.control(12.5, weight: .medium))
                 .frame(minWidth: 44, minHeight: 44)
@@ -65,6 +87,9 @@ struct V2IOSBookshelfView: View {
         }
         .padding(.top, 18)
         .padding(.bottom, 18)
+        .contextMenu {
+            Button("备份或恢复项目") { showingProjectPackage = true }
+        }
     }
 }
 
@@ -108,7 +133,7 @@ private struct V2IOSBookShelfRow: View {
                 .font(V2DeskType.control(11))
                 .foregroundStyle(V2DeskPalette.color(.accent, scheme: colorScheme))
         } else {
-            Text(book.updatedAt)
+            Text(BookUpdatedAtPresentation.label(book.updatedAt))
                 .font(V2DeskType.control(11))
                 .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
                 .lineLimit(1)

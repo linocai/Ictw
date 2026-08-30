@@ -662,7 +662,12 @@ def test_schema_matches_alembic_head(tmp_path, monkeypatch) -> None:
     migrated_inspector = inspect(migrated)
     orm_inspector = inspect(orm)
 
-    migrated_tables = set(migrated_inspector.get_table_names()) - {"alembic_version"}
+    all_migrated_tables = set(migrated_inspector.get_table_names())
+    assert "search_documents_fts" in all_migrated_tables
+    migrated_tables = {
+        table for table in all_migrated_tables
+        if table != "alembic_version" and not table.startswith("search_documents_fts")
+    }
     orm_tables = set(orm_inspector.get_table_names())
     assert migrated_tables == orm_tables
 

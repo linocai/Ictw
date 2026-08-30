@@ -59,6 +59,9 @@ struct V2IOSChapterDestinationView: View {
             workspace.upsert(chapter)
             resolvedChapter = chapter
         }
+        // Keep the notice inside the destination so its top safe-area inset
+        // begins below the system navigation bar instead of covering it.
+        .v2IOSNoticeOverlay()
         .navigationTitle(summary.title.v2IOSTrimmed.isEmpty ? "第 \(summary.index) 章" : summary.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -202,8 +205,10 @@ struct V2IOSChapterDeskView: View {
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var inspiration: InspirationCreatorStore
+    @EnvironmentObject private var sync: ClientSyncStore
     @State private var face: V2DeskChapterFace = .intent
     @State private var showingInspiration = false
+    @State private var inspirationDetent: PresentationDetent = V2IOSInspirationPresentation.compactDetent
     @State private var showingSettings = false
     @State private var showingAcceptWarning = false
 
@@ -212,8 +217,13 @@ struct V2IOSChapterDeskView: View {
     var body: some View {
         let snapshot = V2DeskPresentation.make(source)
         VStack(spacing: 0) {
+            if !sync.networkActionsAvailable {
+                V2DeskOfflineExplanation()
+                    .padding(.horizontal, 20).padding(.vertical, 8)
+                    .background(V2DeskPalette.color(.taskWarning, scheme: colorScheme))
+            }
             if let banner = snapshot.taskBanner {
-                V2IOSTaskBanner(banner: banner, primaryAction: snapshot.primaryAction, perform: perform)
+                V2IOSTaskBanner(banner: banner, primaryAction: snapshot.primaryAction, perform: perform, networkActionsAvailable: sync.networkActionsAvailable)
             }
             if editor.isLoading && editor.currentChapter?.id != summary.id {
                 Spacer(); ProgressView("读取章节"); Spacer()
@@ -229,8 +239,12 @@ struct V2IOSChapterDeskView: View {
                     face: $face,
                     primary: snapshot.primaryAction,
                     primaryAction: { tapPrimary(snapshot.primaryAction) },
-                    inspirationAction: { showingInspiration = true },
-                    inspirationDisabled: snapshot.chapterState == .accepted
+                    inspirationAction: {
+                        inspirationDetent = V2IOSInspirationPresentation.compactDetent
+                        showingInspiration = true
+                    },
+                    inspirationDisabled: snapshot.chapterState == .accepted,
+                    networkActionsAvailable: sync.networkActionsAvailable
                 )
             } else {
                 VStack(spacing: 12) {
@@ -270,8 +284,12 @@ struct V2IOSChapterDeskView: View {
         }
         .onDisappear { editor.persistLocalDraftIfNeeded() }
         .sheet(isPresented: $showingInspiration) {
-            V2IOSInspirationSheet()
-                .presentationDetents([.medium, .large])
+            V2IOSInspirationSheet(selectedDetent: $inspirationDetent)
+                .presentationDetents(
+                    [V2IOSInspirationPresentation.compactDetent, .large],
+                    selection: $inspirationDetent
+                )
+                .presentationDragIndicator(.visible)
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
         .sheet(isPresented: $showingSettings) {
@@ -315,6 +333,7 @@ struct V2IOSChapterDeskView: View {
     }
 
     private func tapPrimary(_ action: V2DeskPrimaryAction) {
+        guard sync.networkActionsAvailable else { return }
         switch action {
         case .generate, .retryGeneration: Task { if let chapter = await editor.generate() { workspace.upsert(chapter) } }
         case .cancelGeneration: Task { if let chapter = await editor.cancelWriting() { workspace.upsert(chapter) } }
@@ -366,6 +385,7 @@ private struct V2IOSChapterActions: ViewModifier {
 
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var sync: ClientSyncStore
     @State private var showingExport = false
     @State private var showingReopen = false
     @State private var showingRewrite = false
@@ -387,7 +407,7 @@ private struct V2IOSChapterActions: ViewModifier {
             }
             .sheet(isPresented: $showingExport) {
                 V2IOSExportSheet(currentChapterID: chapterID)
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
             }
@@ -461,6 +481,8 @@ private struct V2IOSChapterActions: ViewModifier {
                 Image(systemName: "ellipsis.circle")
             }
         }
+        .disabled(!sync.networkActionsAvailable)
+        .accessibilityHint(sync.networkActionsAvailable ? "" : "离线时不可用；已打开内容仍可阅读和编辑")
         .accessibilityLabel("更多章节操作")
     }
 
@@ -539,6 +561,7 @@ private struct V2IOSTaskBanner: View {
     let banner: V2DeskTaskBanner
     let primaryAction: V2DeskPrimaryAction
     let perform: (V2DeskPrimaryAction) -> Void
+    let networkActionsAvailable: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -552,6 +575,7 @@ private struct V2IOSTaskBanner: View {
                     .foregroundStyle(banner.tone == .danger ? V2DeskPalette.color(.danger, scheme: colorScheme) : V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
                     .frame(minWidth: 44, minHeight: 32)
                     .buttonStyle(.plain)
+                    .disabled(!networkActionsAvailable)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 9)
@@ -570,6 +594,7 @@ private struct V2IOSActionDock: View {
     let primaryAction: () -> Void
     let inspirationAction: () -> Void
     let inspirationDisabled: Bool
+    let networkActionsAvailable: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -581,13 +606,14 @@ private struct V2IOSActionDock: View {
                     .frame(width: 48, height: 48)
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
             }.buttonStyle(.plain).accessibilityLabel("查看\(alternateFace.title)")
-            V2IOSPrimaryButton(title: primary.title, disabled: primary == .none, action: primaryAction)
+            V2IOSPrimaryButton(title: primary.title, disabled: primary == .none || !networkActionsAvailable, action: primaryAction)
             Button(action: inspirationAction) {
                 Text("✦").font(.system(size: 17)).foregroundStyle(V2DeskPalette.color(.accent, scheme: colorScheme)).frame(width: 48, height: 48).overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
             }
             .buttonStyle(.plain)
-            .disabled(inspirationDisabled)
+            .disabled(inspirationDisabled || !networkActionsAvailable)
             .accessibilityLabel("找方向")
+            .accessibilityHint(networkActionsAvailable ? "" : "离线时不可用")
         }
         .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 8)
         .background(V2DeskPalette.color(.rail, scheme: colorScheme))

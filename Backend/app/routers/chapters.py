@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, object_session
@@ -67,6 +67,8 @@ from app.services.archive_v2 import (
     invalidate_archive_if_input_changed,
     stale_archives_for_reopen,
 )
+from app.services.content_revisions import bump_content_revision, require_matching_revision
+from app.services.search_index import rebuild_book_search_index
 
 router = APIRouter(tags=["chapters"])
 
@@ -86,6 +88,30 @@ def _violation_summary(violations: list[dict]) -> str:
     return "；".join(
         item["message"] for item in violations if isinstance(item.get("message"), str)
     )
+
+
+def _require_task_revision(
+    chapter_id: str,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    db: Session = Depends(get_db),
+) -> None:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    require_matching_revision(
+        chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db
+    )
+
+
+def _model_snapshot(client) -> dict[str, object]:
+    """Persist only effective, non-secret runtime configuration."""
+    return {
+        "model_name": str(getattr(client, "model_name", "") or ""),
+        "thinking_enabled": getattr(client, "thinking_enabled", None),
+        "reasoning_effort": getattr(client, "reasoning_effort", None),
+        "temperature": getattr(client, "temperature_override", None),
+        "capability_family": getattr(client, "capability_family", None),
+    }
 
 _CHAPTER_CREATE_RETRIES = 3
 
@@ -116,6 +142,7 @@ def _chapter_read(chapter: Chapter) -> ChapterRead:
         source=chapter.source,
         created_at=chapter.created_at,
         updated_at=chapter.updated_at,
+        content_revision=chapter.content_revision,
         character_links=[{"character_id": link.character_id, "chapter_note": ""} for link in chapter.character_links],
         archive=archive_read_model(session, chapter) if session is not None else None,
     )
@@ -249,6 +276,7 @@ def create_chapter(book_id: str, payload: ChapterCreate, db: Session = Depends(g
             db.add(chapter)
             db.flush()
             _replace_links(db, chapter, payload.character_links)
+            rebuild_book_search_index(db, book_id)
             db.commit()
             db.refresh(chapter)
             return _chapter_read(chapter)
@@ -363,10 +391,16 @@ def create_inspirations(
 
 
 @router.patch("/chapters/{chapter_id}", response_model=ChapterRead)
-def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(get_db)) -> ChapterRead:
+def patch_chapter(
+    chapter_id: str,
+    payload: ChapterPatch,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> ChapterRead:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
     previous_archive_fingerprint = archive_input_fingerprint(chapter)
     updates = payload.model_dump(
         exclude_unset=True,
@@ -404,8 +438,15 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
         db, chapter, previous_fingerprint=previous_archive_fingerprint
     )
     if archive_invalidated:
-        invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+        invalidated_downstream = invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+        for downstream_id in invalidated_downstream:
+            downstream = db.get(Chapter, downstream_id)
+            if downstream is not None:
+                bump_content_revision(downstream)
         rebuild_book_projection(db, chapter.book_id)
+    if payload.model_fields_set:
+        bump_content_revision(chapter)
+    rebuild_book_search_index(db, chapter.book_id)
     db.commit()
     if payload.model_fields_set:
         cancel_local_writer_jobs(invalidated)
@@ -415,7 +456,11 @@ def patch_chapter(chapter_id: str, payload: ChapterPatch, db: Session = Depends(
 
 
 @router.delete("/chapters/{chapter_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
+def delete_chapter(
+    chapter_id: str,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> Response:
     # Order matters. Lookup first, then the gate, and only then any side
     # effect: an earlier build cancelled the live write job before checking
     # anything, so a request that was about to be refused still killed the
@@ -426,6 +471,7 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
         # precede the gate: a client retrying a successful delete must not be
         # told the (now absent) chapter is not the last one.
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
     book_id = chapter.book_id
     old_index = chapter.index
     # Only the final chapter of a book may be deleted. This is a product guard
@@ -482,16 +528,23 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> Response:
     invalidated = invalidate_writer_inputs(db, following)
     invalidate_downstream_archives(db, book_id, after_index=old_index - 1)
     rebuild_book_projection(db, book_id)
+    rebuild_book_search_index(db, book_id)
     db.commit()
     cancel_local_writer_jobs(invalidated)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/chapters/{chapter_id}/import", response_model=ChapterRead)
-def import_chapter(chapter_id: str, payload: ChapterImportRequest, db: Session = Depends(get_db)) -> ChapterRead:
+def import_chapter(
+    chapter_id: str,
+    payload: ChapterImportRequest,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> ChapterRead:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
     previous_archive_fingerprint = archive_input_fingerprint(chapter)
     chapter.draft_text = payload.draft_text
     chapter.source = "imported"
@@ -509,8 +562,14 @@ def import_chapter(chapter_id: str, payload: ChapterImportRequest, db: Session =
         db, chapter, previous_fingerprint=previous_archive_fingerprint
     )
     if archive_invalidated:
-        invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+        invalidated_downstream = invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+        for downstream_id in invalidated_downstream:
+            downstream = db.get(Chapter, downstream_id)
+            if downstream is not None:
+                bump_content_revision(downstream)
         rebuild_book_projection(db, chapter.book_id)
+    bump_content_revision(chapter)
+    rebuild_book_search_index(db, chapter.book_id)
     db.commit()
     cancel_local_writer_jobs(invalidated)
     db.refresh(chapter)
@@ -522,6 +581,7 @@ def write_chapter(
     chapter_id: str,
     payload: WriteRequest = WriteRequest(),
     db: Session = Depends(get_db),
+    _revision_checked: None = Depends(_require_task_revision),
     memory_selector_client=Depends(get_memory_selector_client),
     writer_client=Depends(get_writer_client),
     checker_client=Depends(get_checker_client),
@@ -568,6 +628,11 @@ def write_chapter(
         phase="selecting_memory",
         bible_sha256=bible_sha256,
         chapter_write_generation=chapter.write_generation,
+        model_binding_snapshot={
+            "memory_selector": _model_snapshot(memory_selector_client),
+            "writer": _model_snapshot(writer_client),
+            "checker": _model_snapshot(checker_client),
+        },
     )
     db.add(run)
     job = WriteJob(
@@ -594,6 +659,7 @@ def write_chapter(
         db.rollback()
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行"})
     chapter.status = "writing"
+    bump_content_revision(chapter)
     db.commit()
     write_registry.launch(job, SessionLocal)
     return WriteJobStatus(chapter_id=chapter.id, job_id=job_id, kind="write", phase="selecting_memory")
@@ -643,6 +709,7 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
         raise HTTPException(status_code=404, detail="chapter not found")
     if job is not None and job.kind == "write":
         invalidated = invalidate_writer_inputs(db, [chapter])
+        bump_content_revision(chapter)
         db.commit()
         db.refresh(chapter)
         cancel_local_writer_jobs(invalidated)
@@ -654,10 +721,12 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
             revision.error_message = "归档任务已取消"
             revision.finished_at = utc_now()
             chapter.archive_status = "complete" if chapter.active_archive_revision_id else "failed"
+            bump_content_revision(chapter)
             db.commit()
             db.refresh(chapter)
     if chapter.status in ("writing", "extracting"):
         chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
+        bump_content_revision(chapter)
         db.commit()
         db.refresh(chapter)
     # Record the terminal row only after the chapter has reached its restored
@@ -747,7 +816,12 @@ def _has_current_checker_override(
 
 
 @router.post("/chapters/{chapter_id}/check", response_model=CheckerRunRead)
-def rerun_checker(chapter_id: str, db: Session = Depends(get_db), checker_client=Depends(get_checker_client)) -> CheckerRunRead:
+def rerun_checker(
+    chapter_id: str,
+    db: Session = Depends(get_db),
+    _revision_checked: None = Depends(_require_task_revision),
+    checker_client=Depends(get_checker_client),
+) -> CheckerRunRead:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
@@ -832,6 +906,7 @@ def _start_archive_job(
         bible_sha256=hashlib.sha256(chapter.user_prompt.encode()).hexdigest(),
         draft_fingerprint=draft_check_fingerprint,
         archive_revision_id=revision.id,
+        model_binding_snapshot={"extractor": _model_snapshot(extractor_client)},
     )
     db.add(run)
     job = WriteJob(
@@ -849,6 +924,7 @@ def _start_archive_job(
         db.rollback()
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
     chapter.status = "finalized"
+    bump_content_revision(chapter)
     db.commit()
     write_registry.launch(job, SessionLocal)
     return WriteJobStatus(
@@ -862,7 +938,10 @@ def _start_archive_job(
 
 @router.post("/chapters/{chapter_id}/accept", response_model=WriteJobStatus)
 def accept_chapter(
-    chapter_id: str, payload: CheckerAcceptRequest = CheckerAcceptRequest(), db: Session = Depends(get_db), extractor_client=Depends(get_extractor_client)
+    chapter_id: str, payload: CheckerAcceptRequest = CheckerAcceptRequest(),
+    db: Session = Depends(get_db),
+    _revision_checked: None = Depends(_require_task_revision),
+    extractor_client=Depends(get_extractor_client),
 ) -> WriteJobStatus:
     if write_registry.get_live(chapter_id) is not None:
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行，不能接受旧草稿"})
@@ -938,6 +1017,7 @@ def retry_chapter_archive(
     chapter_id: str,
     payload: ArchiveRetryRequest = ArchiveRetryRequest(),
     db: Session = Depends(get_db),
+    _revision_checked: None = Depends(_require_task_revision),
     extractor_client=Depends(get_extractor_client),
 ) -> WriteJobStatus:
     chapter = db.get(Chapter, chapter_id)
@@ -1043,10 +1123,15 @@ def rewrite_preview(chapter_id: str, db: Session = Depends(get_db)) -> RewriteIm
 
 
 @router.post("/chapters/{chapter_id}/reopen", response_model=ChapterRead)
-def reopen_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
+def reopen_chapter(
+    chapter_id: str,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> ChapterRead:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
+    require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
     previous_archive_fingerprint = archive_input_fingerprint(chapter)
     stale_archives_for_reopen(db, chapter)
     chapter.status = "draft_ready"
@@ -1054,8 +1139,14 @@ def reopen_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRea
     invalidate_archive_if_input_changed(
         db, chapter, previous_fingerprint=previous_archive_fingerprint, force=True
     )
-    invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+    invalidated_downstream = invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+    for downstream_id in invalidated_downstream:
+        downstream = db.get(Chapter, downstream_id)
+        if downstream is not None:
+            bump_content_revision(downstream)
     rebuild_book_projection(db, chapter.book_id)
+    bump_content_revision(chapter)
+    rebuild_book_search_index(db, chapter.book_id)
     db.commit()
     live_job = write_registry.get_live(chapter.id)
     if live_job is not None and live_job.kind == "extract":

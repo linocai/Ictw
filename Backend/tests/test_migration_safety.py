@@ -155,6 +155,7 @@ def test_every_existing_logical_data_loss_downgrade_uses_the_guard() -> None:
         "20260805_0010_archive_v2_ledger.py",
         "20260809_0011_writer_generation.py",
         "20260814_0012_book_agent_personas.py",
+        "20260830_0013_reliable_sync_search_models.py",
     }
     for filename in protected:
         source = (versions / filename).read_text(encoding="utf-8")

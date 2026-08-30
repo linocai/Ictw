@@ -3,15 +3,57 @@ import AppKit
 import UniformTypeIdentifiers
 
 /// macOS 全书导出：走 `NSSavePanel` 存 `.txt`（替代 iOS 的 `ActivityView`
-/// 系统分享面板）。正文数据取 `GET /books/{id}/export.txt`（`session.api
-/// .rawRequest`，与 iOS `LinoIBookSettingsPane.exportBook` 同一后端路径）。
+/// 系统分享面板）。富正文导出只取 Backend 的单次聚合资料，不能逐章请求。
 /// 沙盒下 `com.apple.security.files.user-selected.read-write` entitlement 使
 /// 用户在存盘面板选定的位置可写。取消存盘（点 Cancel / 关面板）视为 no-op，
 /// 不当错误处理。
 enum MacExportSaver {
+    /// Project packages are a separate, round-trippable backup channel.  They
+    /// intentionally use a native save/open panel rather than the ordinary
+    /// manuscript exporter, because an import always creates a new book.
+    @MainActor
+    static func exportProject(_ book: Book, session: AppSession, bookshelf: BookshelfStore) async {
+        if let data = await bookshelf.exportProject(book) {
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "\(safeFilename(book.title)).ictwbook"
+            panel.canCreateDirectories = true
+            panel.isExtensionHidden = false
+            panel.allowedContentTypes = [.ictwProjectPackage]
+            panel.title = "备份完整项目"
+            panel.prompt = "备份"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            do {
+                try data.write(to: url, options: .atomic)
+                session.notices.publish("项目备份已写入文件。")
+            } catch {
+                session.notices.publish("写入文件失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    @MainActor
+    static func importProject(session: AppSession, bookshelf: BookshelfStore) async {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.ictwProjectPackage]
+        panel.title = "恢复完整项目"
+        panel.prompt = "恢复为新书"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let fileData = try Data(contentsOf: url)
+            guard let imported = await bookshelf.importProject(fileData) else { return }
+            let warning = imported.warnings.isEmpty ? "" : "\n\(imported.warnings.map(\.message).joined(separator: "\n"))"
+            session.notices.publish("已恢复《\(imported.title)》为新书。\(warning)")
+        } catch {
+            session.notices.publish(error)
+        }
+    }
+
     @MainActor
     static func exportComposed(
-        book: Book, session: AppSession, chapterSummaries: [ChapterSummary], characters: [Character],
+        book: Book, session: AppSession, bookshelf: BookshelfStore,
         scope: ExportScope, currentChapterID: String?, format: ExportFormat,
         includeWorld: Bool, includeCharacters: Bool, separateChapters: Bool
     ) async {
@@ -19,18 +61,11 @@ enum MacExportSaver {
             session.notices.publish("请先选择一章，再选择“本章”导出。")
             return
         }
-        do {
-            let details: [Chapter] = try await withThrowingTaskGroup(of: Chapter.self) { group in
-                for summary in chapterSummaries { group.addTask { try await session.api.request("/chapters/\(summary.id)") } }
-                var result: [Chapter] = []
-                for try await chapter in group { result.append(chapter) }
-                return result
-            }
-            let selected = ExportComposer.chapters(for: scope, chapters: details, currentID: currentChapterID)
-            guard !selected.isEmpty else { session.notices.publish("所选范围没有可导出的正文。"); return }
-            let files = ExportComposer.compose(book: book, chapters: selected, characters: characters, format: format, includeWorld: includeWorld, includeCharacters: includeCharacters, separateChapters: separateChapters)
-            save(files: files, session: session, panelTitle: "导出正文")
-        } catch { session.notices.publish(error) }
+        guard let data = await bookshelf.exportData(book) else { return }
+        let selected = V2DeskExportComposer.chapters(for: scope, in: data, currentID: currentChapterID)
+        guard !selected.isEmpty else { session.notices.publish("所选范围没有可导出的正文。"); return }
+        let files = V2DeskExportComposer.compose(data: data, chapters: selected, format: format, includeWorld: includeWorld, includeCharacters: includeCharacters, separateChapters: separateChapters)
+        save(files: files, session: session, panelTitle: "导出正文")
     }
     /// 拉取全书导出文本并弹出存盘面板。失败经 `NoticeBus` 弹 Toast。
     @MainActor
@@ -112,4 +147,13 @@ enum MacExportSaver {
             try data.write(to: firstURL, options: .atomic)
         } catch { session.notices.publish("写入文件失败：\(error.localizedDescription)") }
     }
+
+    private static func safeFilename(_ value: String) -> String {
+        let title = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (title.isEmpty ? "ICTW-项目备份" : title).replacingOccurrences(of: "/", with: "-")
+    }
+}
+
+private extension UTType {
+    static let ictwProjectPackage = UTType(filenameExtension: "ictwbook") ?? .zip
 }

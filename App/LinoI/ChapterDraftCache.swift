@@ -75,6 +75,8 @@ enum CheckedDraftSentenceDiff {
 }
 
 struct LocalChapterDraft: Codable {
+    static let currentVersion = 2
+    var version: Int
     var chapterId: String
     var title: String
     var userPrompt: String
@@ -82,23 +84,29 @@ struct LocalChapterDraft: Codable {
     var authorNote: String
     var draftText: String
     var characterLinks: [ChapterLink]
+    var exemptedCharacterNames: [String]
     var dirty: Bool
+    /// Server-issued baseline for this edit. Device time is deliberately not
+    /// used for cross-device ordering: clocks cannot prove which content won.
+    var baseRevision: Int?
     var updatedAt: Date
-    var cleanBaselineAt: Date?
 
     var shouldRestore: Bool {
-        guard dirty else { return false }
-        guard let cleanBaselineAt else { return true }
-        return updatedAt > cleanBaselineAt
+        dirty
     }
 
     func shouldRestore(over remote: Chapter) -> Bool {
         guard shouldRestore else { return false }
-        guard let remoteUpdatedAt = Self.parseRemoteDate(remote.updatedAt) else { return true }
-        return updatedAt > remoteUpdatedAt
+        // Legacy drafts with no baseline remain usable only against the old
+        // Backend response that also lacks a revision. Once a v2.1 server has
+        // supplied a revision we refuse an automatic restore rather than risk
+        // turning an unknown old local copy into a blind overwrite.
+        guard let baseRevision else { return remote.contentRevision == 0 }
+        return remote.contentRevision == 0 || baseRevision == remote.contentRevision
     }
 
-    init(chapter: Chapter, dirty: Bool, cleanBaselineAt: Date?) {
+    init(chapter: Chapter, dirty: Bool) {
+        version = Self.currentVersion
         self.chapterId = chapter.id
         self.title = chapter.title
         self.userPrompt = chapter.userPrompt
@@ -106,9 +114,10 @@ struct LocalChapterDraft: Codable {
         self.authorNote = chapter.authorNote
         self.draftText = chapter.draftText
         self.characterLinks = chapter.characterLinks
+        self.exemptedCharacterNames = chapter.exemptedCharacterNames
         self.dirty = dirty
+        baseRevision = chapter.contentRevision > 0 ? chapter.contentRevision : nil
         self.updatedAt = Date()
-        self.cleanBaselineAt = cleanBaselineAt
     }
 
     func apply(to chapter: Chapter) -> Chapter {
@@ -119,17 +128,19 @@ struct LocalChapterDraft: Codable {
         copy.authorNote = authorNote
         copy.draftText = draftText
         copy.characterLinks = characterLinks
+        copy.exemptedCharacterNames = exemptedCharacterNames
         return copy
     }
 
     enum CodingKeys: String, CodingKey {
-        case chapterId, title, userPrompt, targetWordCount, authorNote, draftText, characterLinks
+        case version, chapterId, title, userPrompt, targetWordCount, authorNote, draftText, characterLinks, exemptedCharacterNames
         case legacyChapterStyle = "chapterStyle"
-        case dirty, updatedAt, cleanBaselineAt
+        case dirty, baseRevision, updatedAt, cleanBaselineAt
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
         chapterId = try container.decode(String.self, forKey: .chapterId)
         title = try container.decode(String.self, forKey: .title)
         userPrompt = try container.decode(String.self, forKey: .userPrompt)
@@ -139,27 +150,26 @@ struct LocalChapterDraft: Codable {
             ?? ""
         draftText = try container.decode(String.self, forKey: .draftText)
         characterLinks = try container.decodeIfPresent([ChapterLink].self, forKey: .characterLinks) ?? []
+        exemptedCharacterNames = try container.decodeIfPresent([String].self, forKey: .exemptedCharacterNames) ?? []
         dirty = try container.decode(Bool.self, forKey: .dirty)
+        baseRevision = try container.decodeIfPresent(Int.self, forKey: .baseRevision)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-        cleanBaselineAt = try container.decodeIfPresent(Date.self, forKey: .cleanBaselineAt)
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
         try container.encode(chapterId, forKey: .chapterId)
         try container.encode(title, forKey: .title)
         try container.encode(userPrompt, forKey: .userPrompt)
-        // v1.6 local drafts deliberately stop persisting retired writing inputs.
-        // The decoder above still reads old cache files for a safe restore.
+        try container.encode(targetWordCount, forKey: .targetWordCount)
+        try container.encode(authorNote, forKey: .authorNote)
         try container.encode(draftText, forKey: .draftText)
         try container.encode(characterLinks, forKey: .characterLinks)
+        try container.encode(exemptedCharacterNames, forKey: .exemptedCharacterNames)
         try container.encode(dirty, forKey: .dirty)
+        try container.encodeIfPresent(baseRevision, forKey: .baseRevision)
         try container.encode(updatedAt, forKey: .updatedAt)
-        try container.encodeIfPresent(cleanBaselineAt, forKey: .cleanBaselineAt)
-    }
-
-    private static func parseRemoteDate(_ raw: String) -> Date? {
-        raw.linoBackendDate
     }
 }
 
@@ -182,18 +192,13 @@ final class ChapterDraftCache {
 
     @discardableResult
     func saveClean(_ chapter: Chapter) -> Bool {
-        let draft = LocalChapterDraft(chapter: chapter, dirty: false, cleanBaselineAt: Date())
+        let draft = LocalChapterDraft(chapter: chapter, dirty: false)
         return save(draft)
     }
 
     @discardableResult
     func saveDirty(_ chapter: Chapter) -> Bool {
-        let existing = load(chapterId: chapter.id)
-        let draft = LocalChapterDraft(
-            chapter: chapter,
-            dirty: true,
-            cleanBaselineAt: existing?.cleanBaselineAt
-        )
+        let draft = LocalChapterDraft(chapter: chapter, dirty: true)
         return save(draft)
     }
 

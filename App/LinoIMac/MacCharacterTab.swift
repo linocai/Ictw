@@ -287,8 +287,9 @@ private struct MacCharacterEventRow: View {
                         .onHover { pointer($0) }
                         Button("保存") {
                             Task {
-                                await characters.updateEvent(event, text: draftText)
-                                isEditing = false
+                                if await characters.updateEvent(event, text: draftText) {
+                                    isEditing = false
+                                }
                             }
                         }
                         .buttonStyle(LinoIPrimaryButtonStyle(compact: true))

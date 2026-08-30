@@ -7,6 +7,12 @@ import AppKit
 struct V2MacDeskRoot: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var notices: NoticeBus
+    @EnvironmentObject private var sync: ClientSyncStore
+    @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var agents: AgentSettingsStore
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -24,6 +30,233 @@ struct V2MacDeskRoot: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(V2MacDeskSurface(token: .desk) { Color.clear })
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await flushPendingAndRefresh() }
+        }
+    }
+
+    private func flushPendingAndRefresh() async {
+        let applied = await sync.flush(using: session.api)
+        await V2DeskConflictRefresh.run(
+            applied, session: session, bookshelf: bookshelf,
+            workspace: workspace, editor: editor,
+            characters: characters, agents: agents
+        )
+    }
+}
+
+private struct V2MacSyncStatusButton: View {
+    @EnvironmentObject private var sync: ClientSyncStore
+    let openCenter: () -> Void
+
+    var body: some View {
+        if let state {
+            Button(action: openCenter) { V2DeskSyncPill(state: state, compact: true) }
+                .buttonStyle(.plain)
+                .help("查看同步与冲突")
+        }
+    }
+
+    private var state: V2DeskSyncPill.State? {
+        if sync.hasPersistentSyncFailure { return .persistenceFailed }
+        if !sync.conflicts.isEmpty { return .conflict(sync.conflicts.count) }
+        if !sync.isOnline { return .offline }
+        if sync.isFlushing { return .refreshing }
+        if sync.pendingCount > 0 { return .pending(sync.pendingCount) }
+        return nil
+    }
+}
+
+private struct V2MacSyncCenter: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var sync: ClientSyncStore
+    @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var agents: AgentSettingsStore
+    @EnvironmentObject private var notices: NoticeBus
+    @State private var serverDecision: ContentConflict?
+    @State private var localDecision: ContentConflict?
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        V2MacSheetFrame(title: "同步与冲突", width: 700) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    V2DeskSyncPill(state: state)
+                    Spacer()
+                    if sync.isOnline, sync.pendingCount > 0 {
+                        Button(sync.isFlushing ? "正在同步" : "立即尝试同步") { Task { await flushPendingAndRefresh() } }
+                            .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                            .disabled(sync.isFlushing)
+                    }
+                }
+                if !sync.isOnline { V2DeskOfflineExplanation() }
+                if let failure = sync.persistenceFailure {
+                    Text(failure)
+                        .font(V2DeskType.control(12, weight: .medium))
+                        .foregroundStyle(V2DeskPalette.color(.danger, scheme: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if sync.pendingCount > 0, !sync.hasPersistentSyncFailure {
+                    Text("\(sync.pendingCount) 项本机修改会在恢复连接后按原始编辑基线安全提交。")
+                        .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                }
+                if sync.conflicts.isEmpty {
+                    Spacer()
+                    Text("没有需要决定的冲突。")
+                        .font(V2DeskType.prose(16)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                        .frame(maxWidth: .infinity)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            ForEach(sync.conflicts) { conflict in
+                                V2MacConflictCard(
+                                    conflict: conflict,
+                                    useServer: { serverDecision = conflict },
+                                    keepLocal: { localDecision = conflict },
+                                    queueMerge: { refreshAfterSubmit(conflict) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(22)
+            .frame(minHeight: 430)
+        }
+        .confirmationDialog("采用服务器版本？", isPresented: Binding(get: { serverDecision != nil }, set: { if !$0 { serverDecision = nil } })) {
+            Button("采用服务器版本", role: .destructive) {
+                if let conflict = serverDecision {
+                    sync.keepServer(conflict)
+                    refreshFromServer(conflict)
+                }
+                serverDecision = nil
+            }
+            Button("取消", role: .cancel) { serverDecision = nil }
+        } message: { Text("本机未同步的这项修改会被移除，服务器版本会成为新的基线。") }
+        .confirmationDialog("保留本机版本并重新提交？", isPresented: Binding(get: { localDecision != nil }, set: { if !$0 { localDecision = nil } })) {
+            Button("保留本机并重新提交") {
+                if let conflict = localDecision {
+                    guard sync.keepLocal(conflict) else {
+                        notices.publish("本机未能安全保存待同步内容，请保留当前页面后重试。", critical: true)
+                        localDecision = nil
+                        return
+                    }
+                    refreshAfterSubmit(conflict)
+                }
+                localDecision = nil
+            }
+            Button("取消", role: .cancel) { localDecision = nil }
+        } message: { Text("你已查看本机、服务器和共同基线。系统会使用服务器刚返回的版本作为前提重新提交，不会强制覆盖。") }
+    }
+
+    private var state: V2DeskSyncPill.State {
+        if sync.hasPersistentSyncFailure { return .persistenceFailed }
+        if !sync.conflicts.isEmpty { return .conflict(sync.conflicts.count) }
+        if !sync.isOnline { return .offline }
+        if sync.isFlushing { return .refreshing }
+        if sync.pendingCount > 0 { return .pending(sync.pendingCount) }
+        return .synced
+    }
+
+    private func flushPendingAndRefresh() async {
+        let applied = await sync.flush(using: session.api)
+        await V2DeskConflictRefresh.run(
+            applied, session: session, bookshelf: bookshelf,
+            workspace: workspace, editor: editor,
+            characters: characters, agents: agents
+        )
+    }
+
+    private func refreshAfterSubmit(_ conflict: ContentConflict) {
+        Task {
+            await sync.flush(using: session.api)
+            await refresh(conflict)
+        }
+    }
+
+    private func refreshFromServer(_ conflict: ContentConflict) {
+        Task { await refresh(conflict) }
+    }
+
+    private func refresh(_ conflict: ContentConflict) async {
+        await V2DeskConflictRefresh.run(
+            conflict,
+            session: session,
+            bookshelf: bookshelf,
+            workspace: workspace,
+            editor: editor,
+            characters: characters,
+            agents: agents
+        )
+    }
+}
+
+private struct V2MacConflictCard: View {
+    let conflict: ContentConflict
+    let useServer: () -> Void
+    let keepLocal: () -> Void
+    let queueMerge: () -> Void
+    @State private var selection = "本机"
+    @EnvironmentObject private var sync: ClientSyncStore
+    @EnvironmentObject private var notices: NoticeBus
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            V2DeskConflictDecisionCard(
+                title: "\(conflict.resourceLabel)已在另一设备更新",
+                detail: "本机基线版本 \(conflict.submittedRevision)，服务器当前版本 \(conflict.currentRevision)。请先对比三份内容，再明确决定。",
+                useServer: useServer,
+                keepLocal: keepLocal,
+                requiresSecretReentry: conflict.requiresSecretReentry
+            )
+            if sync.automaticMergeCandidate(for: conflict) != nil {
+                Button("合并不重叠的修改") {
+                    guard sync.queueAutomaticMerge(for: conflict) else {
+                        notices.publish("本机未能安全保存合并结果，请保留当前页面后重试。", critical: true)
+                        return
+                    }
+                    queueMerge()
+                }
+                .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                .help("本机与服务器修改的是不同字段，可安全合并后再提交")
+            }
+            Picker("比较内容", selection: $selection) {
+                Text("共同基线").tag("基线")
+                Text("本机修改").tag("本机")
+                Text("服务器版本").tag("服务器")
+            }
+            .pickerStyle(.segmented)
+            ScrollView {
+                Text(prettyJSON(data(for: selection)))
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .frame(height: 170)
+            .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme), in: RoundedRectangle(cornerRadius: 7))
+        }
+    }
+
+    private func data(for choice: String) -> Data {
+        switch choice {
+        case "基线": conflict.baseSnapshot
+        case "服务器": conflict.serverSnapshot
+        default: conflict.localPayload
+        }
+    }
+
+    private func prettyJSON(_ data: Data) -> String {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let formatted = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: formatted, encoding: .utf8) else { return "无法读取这份比较内容。" }
+        return text
     }
 }
 
@@ -152,6 +385,7 @@ private struct V2MacBookshelf: View {
     @EnvironmentObject private var bookshelf: BookshelfStore
     @EnvironmentObject private var commandBus: MacCommandBus
     @State private var sheet: V2MacDeskSheet?
+    @State private var showingSyncCenter = false
     @State private var deleteTarget: Book?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -161,6 +395,9 @@ private struct V2MacBookshelf: View {
                 Text("ICTW")
                     .font(V2DeskType.prose(18, weight: .semibold))
                 Spacer()
+                V2MacSyncStatusButton(openCenter: { showingSyncCenter = true })
+                V2MacDeskIconButton(symbol: "magnifyingglass", label: "搜索全部书籍") { sheet = .search }
+                V2MacDeskIconButton(symbol: "archivebox", label: "备份或恢复项目") { sheet = .projectPackage }
                 V2MacDeskIconButton(symbol: "gearshape", label: "设置") { sheet = .settings }
                 Button("新建一本") { sheet = .newBook }
                     .buttonStyle(V2MacDeskButton(kind: .primary))
@@ -191,6 +428,7 @@ private struct V2MacBookshelf: View {
             }
         }
         .task { await bookshelf.load() }
+        .sheet(isPresented: $showingSyncCenter) { V2MacSyncCenter() }
         .onChange(of: commandBus.showNewBook) { _, requested in
             guard requested else { return }
             commandBus.showNewBook = false
@@ -268,12 +506,14 @@ struct V2MacWorkspaceDesk: View {
     @EnvironmentObject private var inspiration: InspirationCreatorStore
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var commandBus: MacCommandBus
+    @EnvironmentObject private var sync: ClientSyncStore
 
     @State private var selectedChapterID: String?
     @State private var contextOpen = false
     @State private var railCollapsed = false
     @State private var contextFace: V2MacContextFace = .intent
     @State private var sheet: V2MacDeskSheet?
+    @State private var showingSyncCenter = false
     @State private var showReopenConfirmation = false
     @State private var showAcceptWarning = false
     @State private var showRewriteConfirmation = false
@@ -381,6 +621,7 @@ struct V2MacWorkspaceDesk: View {
             createChapter()
         }
         .sheet(item: $sheet) { V2MacDeskSheetHost(sheet: $0, currentChapterID: selectedChapterID) }
+        .sheet(isPresented: $showingSyncCenter) { V2MacSyncCenter() }
         .confirmationDialog(V2DeskReopenConfirmation.title, isPresented: $showReopenConfirmation, titleVisibility: .visible) {
             Button("保留正文并重新编辑", role: .destructive) { reopen() }
             Button("取消", role: .cancel) {}
@@ -482,7 +723,7 @@ struct V2MacWorkspaceDesk: View {
     }
 
     private func createChapter() {
-        guard !creatingChapter, chapterLoadID == nil else { return }
+        guard sync.networkActionsAvailable, !creatingChapter, chapterLoadID == nil else { return }
         creatingChapter = true
         Task {
             defer { creatingChapter = false }
@@ -493,6 +734,7 @@ struct V2MacWorkspaceDesk: View {
     }
 
     private func runPrimaryAction() {
+        guard sync.networkActionsAvailable else { return }
         runAction(snapshot.primaryAction)
     }
 
@@ -522,7 +764,7 @@ struct V2MacWorkspaceDesk: View {
     /// `LinoStores.swift`) so a rail selection made during the fetch cannot
     /// surface a confirmation naming the wrong chapter's impact.
     private func startReopenFlow() {
-        guard !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
+        guard sync.networkActionsAvailable, !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
         preparingChapterAction = true
         Task {
             defer { preparingChapterAction = false }
@@ -553,7 +795,7 @@ struct V2MacWorkspaceDesk: View {
     /// entirely by the reopen step `rewrite()` performs internally, not by
     /// whether a regeneration follows it.
     private func startRewriteFlow() {
-        guard !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
+        guard sync.networkActionsAvailable, !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
         preparingChapterAction = true
         Task {
             defer { preparingChapterAction = false }
@@ -587,7 +829,7 @@ struct V2MacWorkspaceDesk: View {
     /// rejected delete must not cost the author anything else, so it refreshes
     /// without disturbing navigation.
     private func startDeleteFlow() {
-        guard !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
+        guard sync.networkActionsAvailable, !preparingChapterAction, let chapterID = editor.currentChapter?.id else { return }
         pendingChapterID = chapterID
         showDeleteConfirmation = true
     }
@@ -628,6 +870,9 @@ struct V2MacWorkspaceDesk: View {
                     .font(V2DeskType.control(10.5))
                     .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
             }
+            V2MacSyncStatusButton(openCenter: { showingSyncCenter = true })
+            V2MacDeskIconButton(symbol: "magnifyingglass", label: "搜索全部书籍") { sheet = .search }
+            V2MacDeskIconButton(symbol: "archivebox", label: "备份或恢复项目") { sheet = .projectPackage }
             V2MacDeskIconButton(symbol: "square.and.arrow.down", label: "导出") { sheet = .export }
             V2MacDeskIconButton(symbol: "gearshape", label: "设置") { sheet = .settings }
             if !usesInlineContext {
@@ -650,10 +895,10 @@ enum V2MacContextFace: String, CaseIterable, Identifiable {
 }
 
 enum V2MacDeskSheet: Identifiable {
-    case newBook, world, people, inspiration, settings, export
+    case newBook, world, people, inspiration, settings, export, search, projectPackage
     var id: String {
         switch self {
-        case .newBook: "newBook"; case .world: "world"; case .people: "people"; case .inspiration: "inspiration"; case .settings: "settings"; case .export: "export"
+        case .newBook: "newBook"; case .world: "world"; case .people: "people"; case .inspiration: "inspiration"; case .settings: "settings"; case .export: "export"; case .search: "search"; case .projectPackage: "projectPackage"
         }
     }
 }
@@ -664,6 +909,7 @@ private struct V2MacChapterRail: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var sync: ClientSyncStore
     let selectedID: String?
     let collapsed: Bool
     let onOpenSheet: (V2MacDeskSheet) -> Void
@@ -700,6 +946,8 @@ private struct V2MacChapterRail: View {
                             .padding(.horizontal, collapsed ? 10 : 10)
                         }
                         .buttonStyle(.plain)
+                        .disabled(!sync.networkActionsAvailable)
+                        .help(sync.networkActionsAvailable ? "开始新一章" : "离线时不能新建章节")
                     }
                 }
                 .scrollIndicators(.hidden)
@@ -783,9 +1031,14 @@ private struct V2MacChapterRailRow: View {
                         if let label = archiveRailState.label {
                             Text(label)
                                 .font(V2DeskType.control(9.5))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.82)
+                                .allowsTightening(true)
+                                .truncationMode(.tail)
                                 .foregroundStyle(archiveRailState == .attention ? V2DeskPalette.color(.danger, scheme: colorScheme) : V2DeskPalette.color(.metadataInk, scheme: colorScheme))
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .font(V2DeskType.control(selected ? 12 : 11.5, weight: selected ? .medium : .regular))

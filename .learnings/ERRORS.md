@@ -182,6 +182,7 @@ rm -f style commands are not permitted. Use a safer approach
 
 - **Resolved**: 2026-08-14T14:51:00+08:00
 - **Notes**: 改用显式源、目标路径移动至废纸篓，并在移动前后核对路径。
+- **Recurrence**: 2026-08-30 收尾时对仓库内测试生成的 `.build/` 提交精确 `rm -rf` 仍被同一策略拒绝；目录保留，不影响交付。后续不再把非必要生成物清理纳入最终门禁命令。
 
 ## [ERR-20260814-004] cross-file-patch-context-mismatch
 
@@ -656,3 +657,553 @@ Inspiration UI must not generate on open
 
 - **Resolved**: 2026-08-14T18:53:45+08:00
 - **Notes**: 将离开协调器方法改名为 `register`，不放宽灵感产品门禁。
+
+## [ERR-20260830-001] pytest-node-selection
+
+**Logged**: 2026-08-30T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+Used a nonexistent pytest node name while attempting a targeted health check.
+
+### Error
+
+`ERROR: not found: ...test_v1_1_features.py::test_health`
+
+### Suggested Fix
+
+Use `pytest --collect-only` or run the containing test module when the exact test name has not been verified.
+
+### Resolution
+
+- **Resolved**: 2026-08-30T00:00:00+08:00
+- **Notes**: 已改为运行已核对的测试文件；后续清理命令末尾误拼解释器路径也以同一原则用干净命令重跑确认。
+
+## [ERR-20260830-002] alembic-wrong-working-directory
+
+**Logged**: 2026-08-30T17:16:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+在仓库根目录执行 Alembic head 检查，未读到 `Backend/alembic.ini`。
+
+### Error
+
+```
+FAILED: No 'script_location' key found in configuration.
+```
+
+### Context
+
+- 执行了 `Backend/.venv/bin/python -m alembic heads`，但当前目录是仓库根目录。
+- 代码和迁移文件未受影响。
+
+### Suggested Fix
+
+遵循项目验证命令，先进入 `Backend/` 再运行 Alembic，或显式指定其配置文件。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: `Backend/alembic.ini`
+
+### Resolution
+
+- **Resolved**: 2026-08-30T17:16:00+08:00
+- **Notes**: 按项目规定的 `cd Backend && .venv/bin/python -m alembic heads` 重跑。
+
+## [ERR-20260830-003] simctl-launch-option-name
+
+**Logged**: 2026-08-30T19:22:13+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+使用了不存在的 `simctl launch --terminate-running` 缩写选项。
+
+### Error
+
+```
+Invalid device: --terminate-running
+```
+
+### Context
+
+- 目标是为已安装的 Debug App 传入临时环境并重启。
+- 新版 `simctl` 支持的完整选项名为 `--terminate-running-process`。
+
+### Suggested Fix
+
+对不确定的 `simctl` 选项先运行 `xcrun simctl help <subcommand>` 核对。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T19:22:13+08:00
+- **Notes**: 改用文档明确支持的 `--terminate-running-process`。
+
+## [ERR-20260830-004] node-repl-block-scoped-image-helpers
+
+**Logged**: 2026-08-30T19:48:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+在后续 Computer Use 调用中复用了只在前一次条件块内建立的图片读取变量，导致变量不可见。
+
+### Error
+
+```
+fs is not defined
+```
+
+### Context
+
+- 目标是读取 Simulator 的最新截图。
+- `node_repl` 会保留顶层绑定，但不应假定条件块内的临时绑定在后续调用可用。
+
+### Suggested Fix
+
+将 `node:fs/promises` 与 `node:url` 的导入明确写入每次需要截图的调用，或在无条件顶层建立稳定的全局绑定。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T19:48:00+08:00
+- **Notes**: 后续截图调用会在同一段代码内重新导入所需模块，不再依赖条件块中的旧变量。
+
+## [ERR-20260830-005] simulator-drag-started-on-bezel
+
+**Logged**: 2026-08-30T19:52:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+模拟 iOS 边缘返回手势时从设备黑色边框起手，Computer Use 将该点判定为窗口外。
+
+### Error
+
+```
+Computer Use server error -10005: windowNotFoundAtPosition
+```
+
+### Context
+
+- Simulator 截图包含窗口工具栏、设备边框和实际屏幕内容。
+- 手势起点落在黑色设备边框，而不是 App 的左侧内容边缘。
+
+### Suggested Fix
+
+坐标手势应先按最新截图确认实际屏幕边界，从屏幕内容区左缘内侧约 10–20 点起手。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T19:52:00+08:00
+- **Notes**: 后续改用屏幕内容区内侧坐标执行边缘返回手势。
+
+## [ERR-20260830-006] computer-use-native-pipe-closed-on-drag
+
+**Logged**: 2026-08-30T20:04:01+08:00
+**Priority**: low
+**Status**: pending
+**Area**: tests
+
+### Summary
+
+在 Simulator 中执行 iOS 边缘返回拖动时，Computer Use 原生通信通道在返回结果前关闭。
+
+### Error
+
+```
+Sky Computer Use native pipe closed before response
+```
+
+### Context
+
+- 目标是从 App 内容区左缘向右拖动，验证系统原生边缘返回手势。
+- 拖动坐标位于模拟器屏幕内容区内，调用前 Simulator 页面可正常读取。
+- 需要重新连接 Computer Use 后读取实际页面，区分手势是否已执行与控制通道故障。
+
+### Suggested Fix
+
+重新建立 Computer Use 会话并先读取 Simulator 状态；若通道持续中断，改用无副作用的系统返回按钮完成其余视觉复审，并将边缘手势标为未能自动化确认。
+
+### Metadata
+
+- Reproducible: unknown
+- Related Files: none
+- See Also: ERR-20260830-005
+
+---
+
+## [ERR-20260830-015] computer-use-swiftui-post-sheet-ax-failure
+
+**Logged**: 2026-08-30T20:46:25+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+关闭 SwiftUI sheet 后在同一次 Computer Use 调用里立即点击主窗口按钮，偶发 AXError.failure。
+
+### Error
+
+```
+Accessibility error: AXError.failure
+```
+
+### Context
+
+- 先关闭“找方向”弹层，再读取主窗口并立即尝试打开“意图与证据”。
+- App 本身未崩溃，属于 sheet 层级切换后的辅助功能瞬时失败。
+
+### Suggested Fix
+
+关闭 macOS SwiftUI sheet 后把“重新读取主窗口状态”和“下一次点击”拆成两个调用，避免在层级切换期间连续操作。
+
+### Metadata
+
+- Reproducible: intermittent
+- Related Files: none
+- See Also: ERR-20260830-007
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:46:25+08:00
+- **Notes**: 重新读取主窗口后分步继续。
+
+---
+
+## [ERR-20260830-014] computer-use-app-path-change-guard
+
+**Logged**: 2026-08-30T20:45:05+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+macOS 候选包进入全屏后，Computer Use 的 App 路径变更保护要求在下一次动作前重新读取状态。
+
+### Error
+
+```
+The user changed '.../ICTW.app'. Re-query the latest state with get_app_state before sending more actions.
+```
+
+### Context
+
+- 候选包没有被重新构建或替换。
+- 进入全屏后尝试立即发送 Escape；工具将窗口/应用状态变化视为需要重新确认。
+
+### Suggested Fix
+
+macOS 全屏、窗口层级或应用状态发生变化后，先重新调用 `get_app_state`，再发送退出全屏等后续动作。
+
+### Metadata
+
+- Reproducible: unknown
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:45:05+08:00
+- **Notes**: 重新读取全屏状态后继续。
+
+---
+
+## [ERR-20260830-013] computer-use-paste-without-element
+
+**Logged**: 2026-08-30T20:43:45+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+在 macOS SwiftUI 搜索弹层中，仅依赖当前焦点调用 Computer Use `paste` 返回参数错误。
+
+### Error
+
+```
+Invalid params
+```
+
+### Context
+
+- 搜索框在 AX 状态中显示为已聚焦。
+- 调用只提供 App 和文本，没有显式目标元素。
+
+### Suggested Fix
+
+SwiftUI 表单自动化应优先对最新 AX 树中的文本框使用 `set_value` 和明确的 `element_index`，不依赖隐式焦点粘贴。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:43:45+08:00
+- **Notes**: 改用带元素索引的 set_value 继续验证。
+
+---
+
+## [ERR-20260830-012] computer-use-scrollbar-set-value
+
+**Logged**: 2026-08-30T20:41:25+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+Computer Use 的通用 `set_value` 不能直接用数值设置 macOS AXScrollBar。
+
+### Error
+
+```
+Invalid params
+```
+
+### Context
+
+- 设置模型页的滚轮动作未产生位移，尝试把可设置滚动条的值直接改为 `1`。
+- 该接口适合表单值，不接受这类滚动条数值参数。
+
+### Suggested Fix
+
+滚动区无响应时改用指针位于内容区的坐标滚动或拖动滚动条，不用 `set_value` 操作 AXScrollBar。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:41:25+08:00
+- **Notes**: 不再使用 set_value 控制滚动条。
+
+---
+
+## [ERR-20260830-011] computer-use-macos-end-key
+
+**Logged**: 2026-08-30T20:40:20+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+Computer Use 的 macOS 键盘接口不接受 `END` 作为页面滚动按键名。
+
+### Error
+
+```
+Computer Use server error -10005: keyNotFound("END")
+```
+
+### Context
+
+- 目标是查看设置页可滚动内容的底部。
+- 页面本身和 App 状态均正常。
+
+### Suggested Fix
+
+长页面视觉审核直接使用 `scroll` 动作，不依赖平台相关的 End 键名。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:40:20+08:00
+- **Notes**: 改用滚轮滚动继续审核。
+
+---
+
+## [ERR-20260830-010] computer-use-screenshot-direct-emit
+
+**Logged**: 2026-08-30T20:37:10+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+Computer Use 返回的 app-state screenshot 不能在当前会话中直接交给 `emitImage`。
+
+### Error
+
+```
+nodeRepl.emitImage received an unsupported value
+```
+
+### Context
+
+- 通过候选 `.app` 绝对路径已成功定位窗口。
+- 读取状态后直接传递 `state.screenshot` 触发类型错误。
+
+### Suggested Fix
+
+先检查状态对象的 screenshot 字段类型；需要展示时使用工具返回的可支持图像对象，或把截图保存为 PNG 后再读取。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:37:10+08:00
+- **Notes**: 后续先读取语义状态，截图改走落盘后显示的稳定路径。
+
+---
+
+## [ERR-20260830-009] macos-computer-use-ambiguous-bundle-id
+
+**Logged**: 2026-08-30T20:36:30+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+macOS 视觉审核时，同一 Bundle ID 存在已安装包和多个 DerivedData 构建，Computer Use 无法仅凭 Bundle ID 选择目标 App。
+
+### Error
+
+```
+Ambiguous app identifier 'com.lino.linoi.mac'. Multiple apps share this bundle identifier.
+```
+
+### Context
+
+- 审核目标是本次 `.build/DerivedData-macOS-visual` 内的当前源码候选包。
+- 机器上同时保留 `/Applications/ICTW.app` 和多个历史 Debug 构建。
+
+### Suggested Fix
+
+对 macOS 候选构建做视觉审核时，启动并传给 Computer Use 的都应是该候选 `.app` 的绝对路径，避免误审旧安装包。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:36:30+08:00
+- **Notes**: 改用本次构建产物的绝对路径继续审核。
+
+---
+
+## [ERR-20260830-007] simulator-window-transient-control-errors
+
+**Logged**: 2026-08-30T20:12:11+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+双 Simulator 窗口切换和设备自动关停期间，Computer Use 的坐标动作与连续页面操作出现瞬时窗口不可用或超时。
+
+### Error
+
+```
+Computer Use server error -10005: noWindowsAvailable
+Computer Use server error -10005: timeoutReached
+Computer Use server error -10005: keyNotFound("[")
+```
+
+### Context
+
+- 视觉复审先后操作 iPhone 17 Pro 与 iPhone 13 两个现有模拟器窗口。
+- 坐标返回动作偶发找不到窗口；连续关闭弹层并打开下一页时偶发超时。
+- xdotool 风格按键名不接受 `super+[`，但接受 `super+bracketleft`。
+
+### Suggested Fix
+
+每次窗口切换后重新读取完整 Simulator 状态；返回快捷键使用 `super+bracketleft`；设备关停时用现有 UDID 重新启动并分步操作，避免把多个页面跳转塞进一次调用。
+
+### Metadata
+
+- Reproducible: intermittent
+- Related Files: none
+- See Also: ERR-20260830-005, ERR-20260830-006
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:12:11+08:00
+- **Notes**: 重新启动现有 iPhone 13、按步骤重新读取状态，并用正确快捷键完成剩余复审。
+
+---
+
+## [ERR-20260830-008] nested-swift-source-guard-regex
+
+**Logged**: 2026-08-30T20:19:59+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+为 SwiftUI 视图新增的多行源码门禁试图用正则识别完整嵌套 `List`，被内部闭合大括号提前截断并产生误报。
+
+### Error
+
+```
+Book-settings notices must stay below the navigation bar
+```
+
+### Context
+
+- App 代码已将 `.v2IOSNoticeOverlay()` 放到书设置列表内部并紧邻 `.navigationTitle("书设置")`。
+- 初版 Perl 模式使用 `List {.*?}` 推断 Swift 嵌套结构；非贪婪匹配在首个 Section 内部大括号处结束。
+
+### Suggested Fix
+
+源码门禁只断言与缺陷直接相关且稳定的相邻标记，不用正则解析 Swift 语法树。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: App/Tests/run_client_state_tests.sh
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:19:59+08:00
+- **Notes**: 改为断言通知修饰器紧邻唯一的书设置导航标题。
+
+---

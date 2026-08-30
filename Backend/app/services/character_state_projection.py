@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from sqlalchemy import select, update
@@ -18,6 +19,89 @@ from app.models import (
 
 SNAPSHOT_SLOTS = ("当前位置", "当前行动", "情绪状态")
 PERSISTENT_SLOTS = ("身体状态", "当前目标", "秘密状态")
+
+
+@dataclass
+class StateProjectionCursor:
+    """Incremental equivalent of :func:`project_state_changes`.
+
+    Archive list pages need the state immediately before every chapter.  The
+    old implementation rebuilt that entire prefix for each row.  Keeping the
+    replay cursor public lets list-oriented callers advance once per source
+    row while the strict detail path remains unchanged.
+    """
+
+    fields: dict[str, dict[str, str]]
+    names: dict[str, str]
+    stable_relationship_keys: bool = False
+    relations: dict[tuple[str, str], str] = field(default_factory=dict)
+    latest: dict[tuple[str, str, str | None], str] = field(default_factory=dict)
+    snapshot_seen: set[tuple[str, str]] = field(default_factory=set)
+
+    @classmethod
+    def for_characters(
+        cls,
+        characters: Iterable[Character],
+        *,
+        stable_relationship_keys: bool = False,
+    ) -> "StateProjectionCursor":
+        rows = list(characters)
+        return cls(
+            fields={character.id: {} for character in rows},
+            names={character.id: character.name for character in rows},
+            stable_relationship_keys=stable_relationship_keys,
+        )
+
+    def apply(self, change: CharacterStateChange | ChapterArchiveStateDelta) -> None:
+        """Apply one source row using the exact existing projection rules."""
+        if change.scope == "snapshot":
+            batch_key = (change.character_id, change.batch_id)
+            if batch_key not in self.snapshot_seen:
+                self.snapshot_seen.add(batch_key)
+                # Keep the legacy/v2 distinction and batch semantics exactly
+                # aligned with project_state_changes().
+                if isinstance(change, CharacterStateChange):
+                    for slot in SNAPSHOT_SLOTS:
+                        self.fields.setdefault(change.character_id, {}).pop(slot, None)
+            key = (change.character_id, change.slot, None)
+            if change.operation == "set" and change.value:
+                self.fields.setdefault(change.character_id, {})[change.slot] = change.value
+            else:
+                self.fields.setdefault(change.character_id, {}).pop(change.slot, None)
+            self.latest[key] = change.id
+            return
+        if change.scope == "persistent":
+            key = (change.character_id, change.slot, None)
+            if change.operation == "set" and change.value:
+                self.fields.setdefault(change.character_id, {})[change.slot] = change.value
+            else:
+                self.fields.setdefault(change.character_id, {}).pop(change.slot, None)
+            self.latest[key] = change.id
+            return
+        if change.scope == "relationship" and change.other_character_id:
+            pair = tuple(sorted((change.character_id, change.other_character_id)))
+            key = (pair[0], "relationship", pair[1])
+            if change.operation == "set" and change.value:
+                self.relations[pair] = change.value
+            else:
+                self.relations.pop(pair, None)
+            self.latest[key] = change.id
+
+    def materialize_fields(self) -> dict[str, dict[str, str]]:
+        """Return a detached rendering so callers cannot mutate the cursor."""
+        rendered = {character_id: dict(values) for character_id, values in self.fields.items()}
+        for (left, right), value in self.relations.items():
+            if self.stable_relationship_keys:
+                if left in rendered:
+                    rendered[left][f"relationship:{right}"] = value
+                if right in rendered:
+                    rendered[right][f"relationship:{left}"] = value
+            else:
+                if left in rendered and right in self.names:
+                    rendered[left][f"与{self.names[right]}关系"] = value
+                if right in rendered and left in self.names:
+                    rendered[right][f"与{self.names[left]}关系"] = value
+        return rendered
 
 
 def _changes_for_projection(db: Session, book_id: str, *, before_index: int | None = None) -> list:
@@ -69,55 +153,12 @@ def project_state_changes(
     stable_relationship_keys: bool = False,
 ) -> tuple[dict[str, dict[str, str]], set[str]]:
     """Pure replay.  Returns materialized fields and the latest source row IDs."""
-    fields: dict[str, dict[str, str]] = {character.id: {} for character in characters}
-    names = {character.id: character.name for character in characters}
-    relations: dict[tuple[str, str], str] = {}
-    latest: dict[tuple[str, str, str | None], str] = {}
-    snapshot_seen: set[tuple[str, str]] = set()
+    cursor = StateProjectionCursor.for_characters(
+        characters, stable_relationship_keys=stable_relationship_keys
+    )
     for change in changes:
-        if change.scope == "snapshot":
-            batch_key = (change.character_id, change.batch_id)
-            if batch_key not in snapshot_seen:
-                snapshot_seen.add(batch_key)
-                # Legacy snapshots are complete three-slot replacements.  v2
-                # ledger deltas are intentionally sparse: an omitted volatile
-                # slot means unchanged, not cleared.
-                if isinstance(change, CharacterStateChange):
-                    for slot in SNAPSHOT_SLOTS:
-                        fields.setdefault(change.character_id, {}).pop(slot, None)
-            key = (change.character_id, change.slot, None)
-            if change.operation == "set" and change.value:
-                fields.setdefault(change.character_id, {})[change.slot] = change.value
-            else:
-                fields.setdefault(change.character_id, {}).pop(change.slot, None)
-            latest[key] = change.id
-        elif change.scope == "persistent":
-            key = (change.character_id, change.slot, None)
-            if change.operation == "set" and change.value:
-                fields.setdefault(change.character_id, {})[change.slot] = change.value
-            else:
-                fields.setdefault(change.character_id, {}).pop(change.slot, None)
-            latest[key] = change.id
-        elif change.scope == "relationship" and change.other_character_id:
-            pair = tuple(sorted((change.character_id, change.other_character_id)))
-            key = (pair[0], "relationship", pair[1])
-            if change.operation == "set" and change.value:
-                relations[pair] = change.value
-            else:
-                relations.pop(pair, None)
-            latest[key] = change.id
-    for (left, right), value in relations.items():
-        if stable_relationship_keys:
-            if left in fields:
-                fields[left][f"relationship:{right}"] = value
-            if right in fields:
-                fields[right][f"relationship:{left}"] = value
-        else:
-            if left in fields and right in names:
-                fields[left][f"与{names[right]}关系"] = value
-            if right in fields and left in names:
-                fields[right][f"与{names[left]}关系"] = value
-    return fields, set(latest.values())
+        cursor.apply(change)
+    return cursor.materialize_fields(), set(cursor.latest.values())
 
 
 def projected_fields_before_chapter(

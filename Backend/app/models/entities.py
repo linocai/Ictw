@@ -29,10 +29,15 @@ class Book(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     last_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Server-issued, monotonic edit baseline.  It intentionally differs from
+    # updated_at: timestamps are presentation only and cannot safely compare
+    # edits made by devices with different clocks.
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
     chapters = relationship("Chapter", back_populates="book", cascade="all, delete-orphan")
     characters = relationship("Character", back_populates="book", cascade="all, delete-orphan")
     agent_personas = relationship("BookAgentPersona", back_populates="book", cascade="all, delete-orphan")
+    agent_model_bindings = relationship("BookAgentModelBinding", back_populates="book", cascade="all, delete-orphan")
 
 
 class Character(Base):
@@ -46,6 +51,7 @@ class Character(Base):
     dynamic_fields: Mapped[dict[str, Any]] = mapped_column(MutableDict.as_mutable(JSON), default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
     book = relationship("Book", back_populates="characters")
     chapter_links = relationship("ChapterCharacter", back_populates="character", cascade="all, delete-orphan")
@@ -95,6 +101,7 @@ class Chapter(Base):
     source: Mapped[str] = mapped_column(String(32), default="agent", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
     book = relationship("Book", back_populates="chapters")
     character_links = relationship("ChapterCharacter", back_populates="chapter", cascade="all, delete-orphan")
@@ -126,6 +133,7 @@ class CharacterEvent(Base):
     event_text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
     character = relationship("Character", back_populates="events")
     chapter = relationship("Chapter", back_populates="events")
@@ -391,6 +399,7 @@ class AgentPersona(Base):
     agent_role: Mapped[str] = mapped_column(String(32), primary_key=True)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
 
 class BookAgentPersona(Base):
@@ -409,6 +418,7 @@ class BookAgentPersona(Base):
     editable_persona: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
     book = relationship("Book", back_populates="agent_personas")
 
@@ -424,6 +434,7 @@ class LLMProfile(Base):
     model_name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
 
 class AgentModelBinding(Base):
@@ -434,6 +445,53 @@ class AgentModelBinding(Base):
     thinking_enabled: Mapped[bool | None] = mapped_column(nullable=True)
     reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
     temperature: Mapped[float | None] = mapped_column(nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+
+
+class BookAgentModelBinding(Base):
+    """A complete per-book model binding override.
+
+    There is no field-level inheritance: no row means follow the global
+    binding, and a row contains every user-configurable binding field.
+    """
+
+    __tablename__ = "book_agent_model_bindings"
+    __table_args__ = (UniqueConstraint("book_id", "agent_role", name="uq_book_agent_model_binding_role"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    book_id: Mapped[str] = mapped_column(String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    agent_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    # SET NULL preserves the author's per-book choice for inspection if a
+    # global profile is removed; resolution safely falls back to global.
+    llm_profile_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("llm_profiles.id", ondelete="SET NULL"))
+    thinking_enabled: Mapped[bool | None] = mapped_column(nullable=True)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    temperature: Mapped[float | None] = mapped_column(nullable=True)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    book = relationship("Book", back_populates="agent_model_bindings")
+
+
+class SearchDocument(Base):
+    """Rebuildable, user-visible search projection; never stores candidates."""
+
+    __tablename__ = "search_documents"
+    __table_args__ = (
+        Index("ix_search_documents_book_type", "book_id", "result_type"),
+        Index("ix_search_documents_chapter", "chapter_id"),
+        Index("ix_search_documents_character", "character_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    book_id: Mapped[str] = mapped_column(String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    chapter_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=True)
+    character_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("characters.id", ondelete="CASCADE"), nullable=True)
+    result_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    title: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
@@ -455,6 +513,9 @@ class JobRun(Base):
     added_event_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     memory_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     checker_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # No endpoint/key is retained here. This documents the exact effective
+    # model settings captured when an in-flight task was started.
+    model_binding_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     bible_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     draft_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Logical audit link.  Kept without a database FK so the additive SQLite

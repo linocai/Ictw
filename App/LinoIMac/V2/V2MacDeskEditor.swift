@@ -5,6 +5,7 @@ import SwiftUI
 struct V2MacManuscriptDesk: View {
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var sync: ClientSyncStore
     let snapshot: V2DeskSnapshot
     let onOpenContext: () -> Void
     let onOpenReader: () -> Void
@@ -19,11 +20,22 @@ struct V2MacManuscriptDesk: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if !sync.networkActionsAvailable {
+                V2DeskOfflineExplanation()
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 8)
+                    .background(V2DeskPalette.color(.taskWarning, scheme: colorScheme))
+            }
             if let banner = snapshot.taskBanner {
                 V2MacDeskTaskBanner(banner: banner, primaryAction: snapshot.primaryAction, perform: performAction)
             }
             if editor.currentChapter == nil {
-                V2MacDeskEmptyPrompt(title: "选择一章，或开始新一章。", actionTitle: "开始新一章", action: onStartNewChapter)
+                V2MacDeskEmptyPrompt(
+                    title: "选择一章，或开始新一章。",
+                    actionTitle: "开始新一章",
+                    action: onStartNewChapter,
+                    actionDisabled: !sync.networkActionsAvailable
+                )
             } else {
                 GeometryReader { proxy in
                     let layout = V2MacManuscriptMeasure(availableWidth: proxy.size.width)
@@ -176,6 +188,7 @@ private struct V2MacDeskTaskBanner: View {
     let banner: V2DeskTaskBanner
     let primaryAction: V2DeskPrimaryAction
     let perform: (V2DeskPrimaryAction) -> Void
+    @EnvironmentObject private var sync: ClientSyncStore
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -188,6 +201,7 @@ private struct V2MacDeskTaskBanner: View {
             if let action = banner.action, action != primaryAction {
                 Button(action.title) { perform(action) }
                     .buttonStyle(V2MacDeskButton(kind: banner.tone == .danger ? .secondary : .quiet, compact: true))
+                    .disabled(!sync.networkActionsAvailable)
             }
         }
         .padding(.horizontal, 24).padding(.vertical, 9)
@@ -216,6 +230,7 @@ private struct V2MacDeskActionBar: View {
     let onRewrite: () -> Void
     let onDelete: () -> Void
     let chapterActionInFlight: Bool
+    @EnvironmentObject private var sync: ClientSyncStore
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -231,12 +246,12 @@ private struct V2MacDeskActionBar: View {
                 // repeat taps that used to stack two dialogs.
                 Button(chapterActionInFlight ? "重新编辑…" : "重新编辑", action: onReopen)
                     .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
-                    .disabled(chapterActionInFlight)
+                    .disabled(chapterActionInFlight || !sync.networkActionsAvailable)
             }
             if snapshot.commands.canRewrite {
                 Button(chapterActionInFlight ? "重写本章…" : "重写本章", action: onRewrite)
                     .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
-                    .disabled(chapterActionInFlight)
+                    .disabled(chapterActionInFlight || !sync.networkActionsAvailable)
             }
             if snapshot.commands.canDelete {
                 Menu {
@@ -245,7 +260,7 @@ private struct V2MacDeskActionBar: View {
                     Image(systemName: "ellipsis")
                 }
                 .buttonStyle(V2MacDeskButton(kind: .quiet, compact: true))
-                .disabled(chapterActionInFlight)
+                .disabled(chapterActionInFlight || !sync.networkActionsAvailable)
                 .help("更多章节操作")
                 .accessibilityLabel("更多章节操作")
             }
@@ -262,13 +277,13 @@ private struct V2MacDeskActionBar: View {
     @ViewBuilder private var primaryButton: some View {
         switch snapshot.primaryAction {
         case .generate:
-            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).keyboardShortcut(.return, modifiers: [.command])
+            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).keyboardShortcut(.return, modifiers: [.command]).disabled(!sync.networkActionsAvailable)
         case .rerunChecker:
-            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).keyboardShortcut("r", modifiers: [.command])
+            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).keyboardShortcut("r", modifiers: [.command]).disabled(!sync.networkActionsAvailable)
         case .accept, .acceptWithWarning:
-            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).keyboardShortcut("a", modifiers: [.command, .shift])
+            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).keyboardShortcut("a", modifiers: [.command, .shift]).disabled(!sync.networkActionsAvailable)
         default:
-            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary))
+            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).disabled(!sync.networkActionsAvailable)
         }
     }
 }

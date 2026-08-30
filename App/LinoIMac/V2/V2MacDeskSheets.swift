@@ -14,11 +14,13 @@ struct V2MacDeskSheetHost: View {
         case .inspiration: V2MacInspirationSheet()
         case .settings: V2MacSettingsSheet()
         case .export: V2MacExportSheet(currentChapterID: currentChapterID)
+        case .search: V2MacSearchSheet()
+        case .projectPackage: V2MacProjectPackageSheet()
         }
     }
 }
 
-private struct V2MacSheetFrame<Content: View>: View {
+struct V2MacSheetFrame<Content: View>: View {
     let title: String
     var width: CGFloat = 520
     @ViewBuilder var content: Content
@@ -380,7 +382,10 @@ private struct V2MacSettingsSheet: View {
         }
         .task {
             await agents.load()
-            if let id = session.currentBook?.id { _ = await agents.loadBookPersonas(bookID: id) }
+            if let id = session.currentBook?.id {
+                _ = await agents.loadBookPersonas(bookID: id)
+                _ = await agents.loadBookModelBindings(bookID: id)
+            }
         }
     }
 }
@@ -470,6 +475,8 @@ private struct V2MacModelSettings: View {
             }
             V2MacDeskHairline()
             ForEach(roles, id: \.self) { role in V2MacBindingRow(role: role) }
+            V2MacDeskHairline()
+            V2MacBookModelSettings()
         }
         .sheet(isPresented: $addProfile) { V2MacNewProfileSheet() }
     }
@@ -497,6 +504,115 @@ private struct V2MacBindingRow: View {
             .labelsHidden().pickerStyle(.menu).frame(width: 150)
         }
         .padding(.vertical, 5)
+    }
+}
+
+private struct V2MacBookModelSettings: View {
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var agents: AgentSettingsStore
+    @EnvironmentObject private var sync: ClientSyncStore
+    @State private var selectedRole = "writer"
+    @State private var profileID = ""
+    @State private var thinking = false
+    @State private var effort = ""
+    @State private var temperature = 1.0
+    @State private var saving = false
+    @State private var confirmRestore = false
+    @Environment(\.colorScheme) private var colorScheme
+    private let roles = ["memory_selector", "writer", "checker", "extractor", "inspiration_creator"]
+
+    private var row: BookAgentModelBinding? { agents.bookModelBindings.first { $0.agentRole == selectedRole } }
+    private var bounded: Bool { selectedRole == "extractor" || selectedRole == "inspiration_creator" }
+    private var effectiveName: String {
+        guard let id = row?.effectiveBinding?.llmProfileId,
+              let profile = agents.profiles.first(where: { $0.id == id }) else { return "未绑定" }
+        return "\(profile.name) · \(profile.modelName)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            V2MacDeskSectionLabel(text: "本书模型覆盖")
+            Text("缺省时完整跟随全局；这里保存的是一整份本书配置，而不是字段拼接。")
+                .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+            Picker("角色", selection: $selectedRole) { ForEach(roles, id: \.self) { Text($0.v2AgentLabel).tag($0) } }
+                .pickerStyle(.segmented)
+            HStack {
+                Text(row?.source == "book" ? "本书覆盖" : "跟随全局").font(V2DeskType.control(11.5, weight: .medium))
+                Spacer()
+                Text("实际：\(effectiveName)").font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)).lineLimit(1)
+            }
+            Picker("模型", selection: $profileID) {
+                Text("未绑定").tag("")
+                ForEach(agents.profiles) { profile in Text("\(profile.name) · \(profile.modelName)").tag(profile.id) }
+            }
+            HStack {
+                Toggle("启用思考", isOn: $thinking)
+                    .disabled(bounded || !(row?.capabilities.thinkingToggleSupported ?? false))
+                if bounded { Text("服务端固定关闭").font(V2DeskType.control(10.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)) }
+            }
+            if !bounded, let levels = row?.capabilities.reasoningEffortLevels, !levels.isEmpty {
+                Picker("思考强度", selection: $effort) {
+                    Text("模型默认").tag("")
+                    ForEach(levels, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(!thinking)
+            }
+            HStack(spacing: 10) {
+                Text("Temperature \(String(format: "%.2f", temperature))").font(V2DeskType.control(11.5))
+                Slider(value: $temperature, in: 0...2, step: 0.05)
+                    .disabled(bounded || (!(row?.capabilities.temperatureEffectiveWhenThinking ?? true) && !thinking))
+            }
+            if !sync.networkActionsAvailable { V2DeskOfflineExplanation() }
+            HStack {
+                if row?.source == "book" {
+                    Button("恢复跟随全局") { confirmRestore = true }.buttonStyle(V2MacDeskButton(kind: .danger, compact: true)).disabled(saving || !sync.networkActionsAvailable)
+                }
+                Spacer()
+                Button(saving ? "正在保存" : "保存本书覆盖") { Task { await save() } }
+                    .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(saving || !sync.networkActionsAvailable)
+            }
+        }
+        .onAppear(perform: loadDraft)
+        .onChange(of: selectedRole) { _, _ in loadDraft() }
+        .onChange(of: row) { _, _ in loadDraft() }
+        .confirmationDialog("恢复跟随全局？", isPresented: $confirmRestore) {
+            Button("恢复跟随全局", role: .destructive) { Task { await restore() } }
+            Button("取消", role: .cancel) {}
+        } message: { Text("本书的完整模型覆盖会移除；以后启动的任务重新使用全局配置。") }
+    }
+
+    private func loadDraft() {
+        let values = row?.bookBinding ?? row?.effectiveBinding
+        profileID = values?.llmProfileId ?? ""
+        thinking = bounded ? false : (values?.thinkingEnabled ?? false)
+        effort = values?.reasoningEffort ?? ""
+        temperature = values?.temperature ?? 1
+    }
+
+    private func save() async {
+        guard let bookID = session.currentBook?.id else { return }
+        saving = true
+        let binding = AgentModelBindingValues(
+            llmProfileId: profileID.isEmpty ? nil : profileID,
+            thinkingEnabled: bounded ? false : thinking,
+            reasoningEffort: effort.isEmpty ? nil : effort,
+            temperature: temperature,
+            effectiveThinkingEnabled: nil,
+            effectiveReasoningEffort: nil,
+            effectiveTemperature: nil,
+            contentRevision: nil
+        )
+        _ = await agents.saveBookModelBinding(bookID: bookID, role: selectedRole, binding: binding)
+        saving = false
+        loadDraft()
+    }
+
+    private func restore() async {
+        guard let bookID = session.currentBook?.id else { return }
+        saving = true
+        _ = await agents.clearBookModelBinding(bookID: bookID, role: selectedRole)
+        saving = false
+        loadDraft()
     }
 }
 
@@ -601,8 +717,7 @@ private struct V2MacAppearanceSettings: View {
 
 private struct V2MacExportSheet: View {
     @EnvironmentObject private var session: AppSession
-    @EnvironmentObject private var workspace: WorkspaceStore
-    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var bookshelf: BookshelfStore
     @Environment(\.dismiss) private var dismiss
     let currentChapterID: String?
     @State private var scope: ExportScope = .accepted
@@ -639,8 +754,190 @@ private struct V2MacExportSheet: View {
     private func export() async {
         guard let book = session.currentBook else { return }
         exporting = true
-        await MacExportSaver.exportComposed(book: book, session: session, chapterSummaries: workspace.chapters, characters: characters.characters, scope: scope, currentChapterID: currentChapterID, format: format, includeWorld: includeWorld, includeCharacters: includeCharacters, separateChapters: separate)
+        await MacExportSaver.exportComposed(book: book, session: session, bookshelf: bookshelf, scope: scope, currentChapterID: currentChapterID, format: format, includeWorld: includeWorld, includeCharacters: includeCharacters, separateChapters: separate)
         exporting = false; dismiss()
+    }
+}
+
+private struct V2MacSearchSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var sync: ClientSyncStore
+    @State private var query = ""
+    @State private var results: [SearchResult] = []
+    @State private var searching = false
+    @State private var hasSearched = false
+    @State private var openingID: String?
+    @State private var characterDestinationID: String?
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        V2MacSheetFrame(title: "搜索", width: 640) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    TextField("搜索书名、章节、正文、人物或有效记忆", text: $query)
+                        .textFieldStyle(.plain)
+                        .font(V2DeskType.control(13))
+                        .padding(9)
+                        .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
+                        .overlay { RoundedRectangle(cornerRadius: 6).stroke(V2DeskPalette.color(.line, scheme: colorScheme)) }
+                        .onSubmit { Task { await search() } }
+                    Button(searching ? "正在搜索" : "搜索") { Task { await search() } }
+                        .buttonStyle(V2MacDeskButton(kind: .primary))
+                        .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || searching || !sync.networkActionsAvailable)
+                }
+                Text("只搜索作者当前可见的资料；内部生成过程文本和被拒证据不会进入结果。离线时不能搜索服务器。")
+                    .font(V2DeskType.control(11.5))
+                    .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                if !sync.networkActionsAvailable { V2DeskOfflineExplanation() }
+                V2MacDeskHairline()
+                if searching {
+                    ProgressView("正在搜索").frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if hasSearched && results.isEmpty {
+                    Text("没有找到结果")
+                        .font(V2DeskType.prose(16))
+                        .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(results) { result in
+                                Button { Task { await open(result) } } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        HStack {
+                                            Label(result.title.isEmpty ? resultType(result) : result.title, systemImage: resultSymbol(result))
+                                                .font(V2DeskType.control(13, weight: .medium))
+                                                .foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme))
+                                            Spacer()
+                                            if openingID == result.id { ProgressView().controlSize(.small) }
+                                        }
+                                        if let snippet = result.snippet, !snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                            Text(snippet).font(V2DeskType.prose(12.5)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme)).lineLimit(3)
+                                        }
+                                        Text(resultType(result)).font(V2DeskType.control(10.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 10)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(openingID != nil || !sync.networkActionsAvailable)
+                                V2MacDeskHairline()
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(22)
+            .frame(minHeight: 420)
+        }
+        .sheet(isPresented: Binding(
+            get: { characterDestinationID != nil },
+            set: { if !$0 { characterDestinationID = nil } }
+        )) {
+            V2MacPeopleSheet()
+        }
+    }
+
+    private func search() async {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty, !searching else { return }
+        searching = true; hasSearched = true
+        defer { searching = false }
+        do { results = try await session.api.search(query: needle).items }
+        catch { results = []; session.notices.publish(error) }
+    }
+
+    private func open(_ result: SearchResult) async {
+        guard openingID == nil else { return }
+        openingID = result.id
+        defer { openingID = nil }
+        do {
+            let book: Book = try await session.api.request("/books/\(result.bookId)")
+            session.currentBook = book
+            await workspace.load(bookId: book.id)
+            await characters.load(bookId: book.id)
+            if let characterID = result.characterId {
+                guard characters.characters.contains(where: { $0.id == characterID }) else {
+                    throw APIError.http(404, "人物已不存在")
+                }
+                characters.selectedCharacterId = characterID
+                characterDestinationID = characterID
+                return
+            }
+            if let chapterID = result.chapterId,
+               let chapter = workspace.chapters.first(where: { $0.id == chapterID }) {
+                await editor.load(chapter)
+            }
+            dismiss()
+        } catch { session.notices.publish(error) }
+    }
+
+    private func resultType(_ result: SearchResult) -> String {
+        switch result.type {
+        case "book": "书籍"
+        case "chapter": "章节"
+        case "character": "人物详情"
+        case "archive": "有效记忆"
+        default: "搜索结果"
+        }
+    }
+
+    private func resultSymbol(_ result: SearchResult) -> String {
+        switch result.type {
+        case "book": "books.vertical"
+        case "chapter": "doc.text"
+        case "character": "person"
+        case "archive": "sparkles"
+        default: "magnifyingglass"
+        }
+    }
+}
+
+private struct V2MacProjectPackageSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var sync: ClientSyncStore
+    @State private var working = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        V2MacSheetFrame(title: "项目备份与恢复", width: 520) {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    V2MacDeskSectionLabel(text: "完整备份")
+                    Text("备份当前书的正文、人物、关联、有效记忆、人格和模型覆盖。项目包不包含访问密钥、全局模型设置或内部生成过程文本。")
+                        .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                    HStack { Spacer(); Button(working ? "正在准备" : "备份当前书") { Task { await export() } }.buttonStyle(V2MacDeskButton(kind: .primary)).disabled(working || session.currentBook == nil || !sync.networkActionsAvailable) }
+                }
+                V2MacDeskHairline()
+                VStack(alignment: .leading, spacing: 6) {
+                    V2MacDeskSectionLabel(text: "恢复为新书")
+                    Text("恢复会先验证格式、清单和文件完整性，随后创建一本新书；绝不覆盖已有书籍。")
+                        .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                    HStack { Spacer(); Button(working ? "正在恢复" : "选择 .ictwbook 文件") { Task { await importProject() } }.buttonStyle(V2MacDeskButton(kind: .secondary)).disabled(working || !sync.networkActionsAvailable) }
+                }
+                if !sync.networkActionsAvailable { V2DeskOfflineExplanation() }
+                if working { HStack { ProgressView(); Text("正在与服务器核验项目包") }.font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)) }
+            }
+            .padding(22)
+        }
+    }
+
+    private func export() async {
+        working = true
+        if let book = session.currentBook { await MacExportSaver.exportProject(book, session: session, bookshelf: bookshelf) }
+        working = false
+    }
+
+    private func importProject() async {
+        working = true
+        await MacExportSaver.importProject(session: session, bookshelf: bookshelf)
+        working = false
+        dismiss()
     }
 }
 

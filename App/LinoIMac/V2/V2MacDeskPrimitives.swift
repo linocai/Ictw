@@ -120,6 +120,7 @@ struct V2MacDeskEmptyPrompt: View {
     let title: String
     let actionTitle: String
     let action: () -> Void
+    var actionDisabled = false
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -130,6 +131,7 @@ struct V2MacDeskEmptyPrompt: View {
                 .foregroundStyle(V2DeskPalette.color(.tertiaryInk, scheme: colorScheme))
             Button(actionTitle, action: action)
                 .buttonStyle(V2MacDeskButton(kind: .secondary))
+                .disabled(actionDisabled)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(36)

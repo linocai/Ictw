@@ -22,12 +22,16 @@ from app.models import (
     ChapterArchiveFactParticipant,
     ChapterArchiveRevision,
     ChapterArchiveStateDelta,
+    ChapterCharacter,
+    Character,
+    CharacterStateChange,
     JobRun,
 )
 from app.models.entities import utc_now
 from app.services.character_state_projection import (
     PERSISTENT_SLOTS,
     SNAPSHOT_SLOTS,
+    StateProjectionCursor,
     projected_fields_before_chapter,
 )
 from app.services.context import normalize_text
@@ -124,17 +128,37 @@ def archive_input_fingerprint(chapter: Chapter) -> str:
         if session is not None
         else {}
     )
+    return archive_input_fingerprint_for_projection(
+        chapter,
+        projected,
+        character_ids=[item["id"] for item in identities],
+    )
+
+
+def archive_input_fingerprint_for_projection(
+    chapter: Chapter,
+    projected: dict[str, dict[str, str]],
+    *,
+    character_ids: list[str],
+) -> str:
+    """Hash an archive input from a caller-provided pre-chapter projection.
+
+    This is intentionally the same payload as ``archive_input_fingerprint``.
+    List rendering supplies a rolling projection to avoid recursively fetching
+    every prior chapter for every row.
+    """
+    character_ids = sorted(character_ids)
     # The Extractor prompt receives prior state only for this chapter's
     # selected characters.  Hashing unrelated characters would make an
     # independent story line stale even though none of its model input changed.
-    prior_fields = {item["id"]: projected.get(item["id"], {}) for item in identities}
+    prior_fields = {character_id: projected.get(character_id, {}) for character_id in character_ids}
     payload = {
         "contract": ARCHIVE_CONTRACT_VERSION,
         "span_version": SOURCE_SPAN_VERSION,
         "draft_text": chapter.draft_text,
         # The selected-character identity, not its mutable display name, is the
         # whitelist. Renaming a card does not change what prose was accepted.
-        "character_ids": [item["id"] for item in identities],
+        "character_ids": character_ids,
         "prior_state": prior_fields,
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -627,14 +651,21 @@ def active_archive_revision(db: Session, chapter: Chapter) -> ChapterArchiveRevi
 
 
 def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, dict[str, Any]]:
-    """Return list-safe archive health in one revision query.
+    """Return list-safe archive health with a fixed number of SQL statements.
 
     This is deliberately count/status-only; display previews stay on the
     chapter detail endpoint and inactive rows are never fed back into memory.
+    The health decision remains byte-for-byte equivalent to strict detail
+    validation: a single rolling projection supplies each chapter's prior
+    state rather than making ``archive_input_fingerprint`` re-query history.
     """
     if not chapters:
         return {}
     chapter_ids = [chapter.id for chapter in chapters]
+    book_ids = {chapter.book_id for chapter in chapters}
+    if len(book_ids) != 1:
+        raise ValueError("archive health summaries require one book")
+    book_id = next(iter(book_ids))
     revisions = db.scalars(
         select(ChapterArchiveRevision)
         .where(ChapterArchiveRevision.chapter_id.in_(chapter_ids))
@@ -644,14 +675,48 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
     by_id = {revision.id: revision for revision in revisions}
     for revision in revisions:
         latest_by_chapter.setdefault(revision.chapter_id, revision)
+    active_ids = [chapter.active_archive_revision_id for chapter in chapters if chapter.active_archive_revision_id]
+    deltas_by_revision: dict[str, list[ChapterArchiveStateDelta]] = {}
+    if active_ids:
+        for delta in db.scalars(
+            select(ChapterArchiveStateDelta)
+            .where(ChapterArchiveStateDelta.revision_id.in_(active_ids))
+            .order_by(
+                ChapterArchiveStateDelta.revision_id,
+                ChapterArchiveStateDelta.position,
+                ChapterArchiveStateDelta.id,
+            )
+        ).all():
+            deltas_by_revision.setdefault(delta.revision_id, []).append(delta)
+    legacy_by_chapter: dict[str, list[CharacterStateChange]] = {}
+    for change in db.scalars(
+        select(CharacterStateChange)
+        .where(CharacterStateChange.book_id == book_id)
+        .order_by(CharacterStateChange.chapter_id, CharacterStateChange.created_at, CharacterStateChange.id)
+    ).all():
+        legacy_by_chapter.setdefault(change.chapter_id, []).append(change)
+    selected_by_chapter: dict[str, list[str]] = {}
+    for link in db.scalars(
+        select(ChapterCharacter)
+        .where(ChapterCharacter.chapter_id.in_(chapter_ids))
+        .order_by(ChapterCharacter.chapter_id, ChapterCharacter.character_id)
+    ).all():
+        selected_by_chapter.setdefault(link.chapter_id, []).append(link.character_id)
+    characters = db.scalars(select(Character).where(Character.book_id == book_id)).all()
+    cursor = StateProjectionCursor.for_characters(characters, stable_relationship_keys=True)
     result: dict[str, dict[str, Any]] = {}
-    for chapter in chapters:
+    for chapter in sorted(chapters, key=lambda item: (item.index, item.id)):
         active = by_id.get(chapter.active_archive_revision_id or "")
+        expected_fingerprint = archive_input_fingerprint_for_projection(
+            chapter,
+            cursor.materialize_fields(),
+            character_ids=selected_by_chapter.get(chapter.id, []),
+        )
         active_valid = (
             active is not None
             and active.is_active
             and active.status == "complete"
-            and active.input_fingerprint == archive_input_fingerprint(chapter)
+            and active.input_fingerprint == expected_fingerprint
         )
         latest = latest_by_chapter.get(chapter.id)
         retry_allowed = (
@@ -671,6 +736,17 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
             "archive_can_retry": retry_allowed,
             "archive_latest_attempt_status": latest.status if latest is not None else chapter.archive_status,
         }
+        # Match _changes_for_projection exactly: its status-only active test is
+        # deliberate to avoid fingerprint recursion, and legacy is a fallback
+        # only when no active v2 source exists.
+        if chapter.status != "finalized":
+            continue
+        if active is not None and active.is_active and active.status == "complete":
+            for delta in deltas_by_revision.get(active.id, []):
+                cursor.apply(delta)
+        elif chapter.legacy_archive_eligible or chapter.archive_input_fingerprint is None:
+            for change in legacy_by_chapter.get(chapter.id, []):
+                cursor.apply(change)
     return result
 
 

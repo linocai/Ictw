@@ -1,5 +1,6 @@
 from app.models.entities import (
     AgentModelBinding,
+    BookAgentModelBinding,
     AgentPersona,
     BookAgentPersona,
     Book,
@@ -17,10 +18,12 @@ from app.models.entities import (
     JobRun,
     LLMCallAudit,
     LLMProfile,
+    SearchDocument,
 )
 
 __all__ = [
     "AgentModelBinding",
+    "BookAgentModelBinding",
     "AgentPersona",
     "BookAgentPersona",
     "Book",
@@ -38,4 +41,5 @@ __all__ = [
     "JobRun",
     "LLMCallAudit",
     "LLMProfile",
+    "SearchDocument",
 ]

@@ -15,13 +15,14 @@ from app.models.entities import utc_now
 from app.llm.factory import LLMConfigurationError
 from app.routers import books, chapters, characters, settings
 from app.services.personas import seed_defaults
+from app.services.content_revisions import bump_content_revision
 
 # Single source of truth for the number health reports; deployment verification
 # reads it back to confirm the running build. `EXPECTED_ALEMBIC_HEAD` is
 # asserted against the real migration head by the test suite, so it cannot
 # drift silently.
-APP_VERSION = "1.9.5"
-EXPECTED_ALEMBIC_HEAD = "20260814_0012"
+APP_VERSION = "2.1.0"
+EXPECTED_ALEMBIC_HEAD = "20260830_0013"
 
 
 @asynccontextmanager
@@ -47,7 +48,10 @@ def recover_interrupted_chapters(db) -> None:
                 if revision is not None and revision.status in {"pending", "extracting"}:
                     revision.status, revision.error_code, revision.error_message = "failed", "interrupted", "服务重启，归档任务中断"
                     revision.finished_at = utc_now()
-                chapter.archive_status = "complete" if chapter.active_archive_revision_id else "failed"
+                recovered_archive_status = "complete" if chapter.active_archive_revision_id else "failed"
+                if chapter.archive_status != recovered_archive_status:
+                    chapter.archive_status = recovered_archive_status
+                    bump_content_revision(chapter)
             else:
                 run.phase, run.error_code, run.error_message = "cancelled", "archive_reopened", "章节已重开，归档任务已取消"
                 if revision is not None and revision.status in {"pending", "extracting"}:
@@ -59,6 +63,7 @@ def recover_interrupted_chapters(db) -> None:
         chapter = db.get(Chapter, run.chapter_id)
         if chapter is not None and chapter.status in {"writing", "extracting"}:
             chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
+            bump_content_revision(chapter)
             # Stamp the JobRun after the authoritative visible recovery state.
             db.flush()
         run.phase = "failed"

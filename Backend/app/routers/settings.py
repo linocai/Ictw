@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.llm.base import LLMError
 from app.llm.openai_compatible import OpenAICompatibleClient
-from app.models import AgentModelBinding, AgentPersona, LLMProfile
+from app.models import AgentModelBinding, AgentPersona, BookAgentModelBinding, LLMProfile
 from app.schemas.settings import (
     AgentModelBindingPatch,
     AgentModelBindingRead,
@@ -28,6 +28,7 @@ from app.services.model_capabilities import (
     temperature_sendable,
 )
 from app.services.personas import AGENT_ROLES, DEFAULT_PERSONAS, PROGRAM_PROTOCOLS
+from app.services.content_revisions import bump_content_revision, require_matching_revision
 
 router = APIRouter(tags=["settings"])
 
@@ -62,23 +63,46 @@ def _binding_response(binding: AgentModelBinding, db: Session) -> dict[str, obje
         "temperature_adjustable": adjustable,
         "capabilities": capabilities.as_dict(),
         "updated_at": binding.updated_at,
+        "content_revision": binding.content_revision,
     }
 
 
 def _sanitize_profile_bindings(db: Session, profile: LLMProfile) -> None:
     capabilities = resolve_capabilities(profile.model_name, profile.base_url)
-    bindings = db.scalars(
+    bindings = list(db.scalars(
         select(AgentModelBinding).where(AgentModelBinding.llm_profile_id == profile.id)
-    ).all()
+    ).all())
+    bindings.extend(db.scalars(
+        select(BookAgentModelBinding).where(BookAgentModelBinding.llm_profile_id == profile.id)
+    ).all())
     for binding in bindings:
-        binding.thinking_enabled, binding.reasoning_effort = sanitized_settings(
+        thinking, effort = sanitized_settings(
             binding.thinking_enabled,
             binding.reasoning_effort,
             capabilities,
         )
-        binding.temperature = sanitized_temperature(
-            binding.temperature, binding.thinking_enabled, capabilities
-        )
+        temperature = sanitized_temperature(binding.temperature, thinking, capabilities)
+        if (thinking, effort, temperature) != (
+            binding.thinking_enabled, binding.reasoning_effort, binding.temperature
+        ):
+            binding.thinking_enabled, binding.reasoning_effort, binding.temperature = thinking, effort, temperature
+            bump_content_revision(binding)
+
+
+def _clear_profile_bindings(db: Session, profile: LLMProfile) -> None:
+    bindings = list(db.scalars(
+        select(AgentModelBinding).where(AgentModelBinding.llm_profile_id == profile.id)
+    ).all())
+    bindings.extend(db.scalars(
+        select(BookAgentModelBinding).where(BookAgentModelBinding.llm_profile_id == profile.id)
+    ).all())
+    capabilities = resolve_capabilities(None, None)
+    for binding in bindings:
+        thinking, effort = sanitized_settings(binding.thinking_enabled, binding.reasoning_effort, capabilities)
+        temperature = sanitized_temperature(binding.temperature, thinking, capabilities)
+        binding.llm_profile_id = None
+        binding.thinking_enabled, binding.reasoning_effort, binding.temperature = thinking, effort, temperature
+        bump_content_revision(binding)
 
 
 @router.get("/agent-personas", response_model=list[AgentPersonaRead])
@@ -96,11 +120,24 @@ def _persona_response(role: str, persona: AgentPersona | None) -> dict[str, obje
         "default_persona": DEFAULT_PERSONAS[role],
         "program_protocol": PROGRAM_PROTOCOLS[role],
         "updated_at": persona.updated_at if persona is not None else None,
+        "content_revision": persona.content_revision if persona is not None else 1,
     }
 
 
+@router.get("/agent-personas/{agent_role}", response_model=AgentPersonaRead)
+def get_persona(agent_role: str, db: Session = Depends(get_db)) -> dict[str, object]:
+    if agent_role not in AGENT_ROLES:
+        raise HTTPException(status_code=404, detail="agent role not found")
+    return _persona_response(agent_role, db.get(AgentPersona, agent_role))
+
+
 @router.patch("/agent-personas/{agent_role}", response_model=AgentPersonaRead)
-def patch_persona(agent_role: str, payload: AgentPersonaPatch, db: Session = Depends(get_db)) -> dict[str, object]:
+def patch_persona(
+    agent_role: str,
+    payload: AgentPersonaPatch,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> dict[str, object]:
     if agent_role not in AGENT_ROLES:
         raise HTTPException(status_code=404, detail="agent role not found")
     persona = db.get(AgentPersona, agent_role)
@@ -108,14 +145,20 @@ def patch_persona(agent_role: str, payload: AgentPersonaPatch, db: Session = Dep
         persona = AgentPersona(agent_role=agent_role, system_prompt=payload.value)
         db.add(persona)
     else:
+        require_matching_revision(persona, if_match, resource_type="agent_persona", resource_id=agent_role, db=db)
         persona.system_prompt = payload.value
+        bump_content_revision(persona)
     db.commit()
     db.refresh(persona)
     return _persona_response(agent_role, persona)
 
 
 @router.post("/agent-personas/{agent_role}/reset", response_model=AgentPersonaRead)
-def reset_persona(agent_role: str, db: Session = Depends(get_db)) -> dict[str, object]:
+def reset_persona(
+    agent_role: str,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> dict[str, object]:
     if agent_role not in AGENT_ROLES:
         raise HTTPException(status_code=404, detail="agent role not found")
     persona = db.get(AgentPersona, agent_role)
@@ -123,7 +166,9 @@ def reset_persona(agent_role: str, db: Session = Depends(get_db)) -> dict[str, o
         persona = AgentPersona(agent_role=agent_role, system_prompt=DEFAULT_PERSONAS[agent_role])
         db.add(persona)
     else:
+        require_matching_revision(persona, if_match, resource_type="agent_persona", resource_id=agent_role, db=db)
         persona.system_prompt = DEFAULT_PERSONAS[agent_role]
+        bump_content_revision(persona)
     db.commit()
     db.refresh(persona)
     return _persona_response(agent_role, persona)
@@ -132,6 +177,14 @@ def reset_persona(agent_role: str, db: Session = Depends(get_db)) -> dict[str, o
 @router.get("/llm_profiles", response_model=list[LLMProfileRead])
 def list_profiles(db: Session = Depends(get_db)) -> list[LLMProfile]:
     return list(db.scalars(select(LLMProfile).order_by(LLMProfile.created_at)).all())
+
+
+@router.get("/llm_profiles/{profile_id}", response_model=LLMProfileRead)
+def get_profile(profile_id: str, db: Session = Depends(get_db)) -> LLMProfile:
+    profile = db.get(LLMProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    return profile
 
 
 @router.post("/llm_profiles", response_model=LLMProfileRead, status_code=status.HTTP_201_CREATED)
@@ -150,10 +203,16 @@ def create_profile(payload: LLMProfileCreate, db: Session = Depends(get_db)) -> 
 
 
 @router.patch("/llm_profiles/{profile_id}", response_model=LLMProfileRead)
-def patch_profile(profile_id: str, payload: LLMProfilePatch, db: Session = Depends(get_db)) -> LLMProfile:
+def patch_profile(
+    profile_id: str,
+    payload: LLMProfilePatch,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> LLMProfile:
     profile = db.get(LLMProfile, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
+    require_matching_revision(profile, if_match, resource_type="llm_profile", resource_id=profile.id, db=db)
     updates = payload.model_dump(exclude_unset=True)
     api_key = updates.pop("api_key", None)
     # Retargeting a profile at a different host must not carry the existing
@@ -180,15 +239,23 @@ def patch_profile(profile_id: str, payload: LLMProfilePatch, db: Session = Depen
     if api_key is not None:
         profile.api_key_encrypted = encrypt_secret(api_key)
     _sanitize_profile_bindings(db, profile)
+    if payload.model_fields_set:
+        bump_content_revision(profile)
     db.commit()
     db.refresh(profile)
     return profile
 
 
 @router.delete("/llm_profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_profile(profile_id: str, db: Session = Depends(get_db)) -> Response:
+def delete_profile(
+    profile_id: str,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> Response:
     profile = db.get(LLMProfile, profile_id)
     if profile is not None:
+        require_matching_revision(profile, if_match, resource_type="llm_profile", resource_id=profile.id, db=db)
+        _clear_profile_bindings(db, profile)
         db.delete(profile)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -237,11 +304,27 @@ def list_bindings(db: Session = Depends(get_db)) -> list[dict[str, object]]:
     return [_binding_response(bindings[role], db) for role in AGENT_ROLES if role in bindings]
 
 
-@router.patch("/agent-model-bindings/{agent_role}", response_model=AgentModelBindingRead)
-def patch_binding(agent_role: str, payload: AgentModelBindingPatch, db: Session = Depends(get_db)) -> dict[str, object]:
+@router.get("/agent-model-bindings/{agent_role}", response_model=AgentModelBindingRead)
+def get_binding(agent_role: str, db: Session = Depends(get_db)) -> dict[str, object]:
     if agent_role not in AGENT_ROLES:
         raise HTTPException(status_code=404, detail="agent role not found")
     binding = db.get(AgentModelBinding, agent_role)
+    if binding is None:
+        raise HTTPException(status_code=404, detail="agent model binding not found")
+    return _binding_response(binding, db)
+
+
+@router.patch("/agent-model-bindings/{agent_role}", response_model=AgentModelBindingRead)
+def patch_binding(
+    agent_role: str,
+    payload: AgentModelBindingPatch,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> dict[str, object]:
+    if agent_role not in AGENT_ROLES:
+        raise HTTPException(status_code=404, detail="agent role not found")
+    binding = db.get(AgentModelBinding, agent_role)
+    binding_created = binding is None
     if binding is None:
         binding = AgentModelBinding(
             agent_role=agent_role,
@@ -250,6 +333,10 @@ def patch_binding(agent_role: str, payload: AgentModelBindingPatch, db: Session 
             reasoning_effort=None,
         )
         db.add(binding)
+    else:
+        require_matching_revision(
+            binding, if_match, resource_type="agent_model_binding", resource_id=agent_role, db=db
+        )
 
     fields = payload.model_fields_set
     if "llm_profile_id" in fields:
@@ -316,6 +403,8 @@ def patch_binding(agent_role: str, payload: AgentModelBindingPatch, db: Session 
         capabilities,
     )
     binding.temperature = sanitized_temperature(temperature, binding.thinking_enabled, capabilities)
+    if not binding_created:
+        bump_content_revision(binding)
     db.commit()
     db.refresh(binding)
     return _binding_response(binding, db)

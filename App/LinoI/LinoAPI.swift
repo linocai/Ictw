@@ -7,6 +7,9 @@ enum APIError: LocalizedError, Equatable {
     case http(Int, String)
     case validation(code: String, message: String, names: [String])
     case transport(String)
+    /// The server deliberately omits the competing content. Clients must
+    /// re-read the normal public resource before presenting a comparison.
+    case writeConflict(resourceType: String, resourceId: String, submittedRevision: Int, currentRevision: Int)
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +19,8 @@ enum APIError: LocalizedError, Equatable {
         case .validation(_, let message, let names):
             names.isEmpty ? message : "\(message)：\(names.joined(separator: "、"))"
         case .transport(let message): message
+        case .writeConflict:
+            "此内容已在其他设备更新。已保留本机修改，请先比较后再决定。"
         }
     }
 }
@@ -28,18 +33,38 @@ struct APIClient {
         baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/v1"
     }
 
-    func request<T: Decodable & Sendable>(_ path: String, method: String = "GET", body: (any Encodable & Sendable)? = nil) async throws -> T {
-        let data = try await rawRequest(path, method: method, body: body)
+    func request<T: Decodable & Sendable>(
+        _ path: String,
+        method: String = "GET",
+        body: (any Encodable & Sendable)? = nil,
+        ifMatch contentRevision: Int? = nil,
+        allowZeroRevision: Bool = false
+    ) async throws -> T {
+        let data = try await rawRequest(path, method: method, body: body, ifMatch: contentRevision, allowZeroRevision: allowZeroRevision)
         return try JSONDecoder.lino.decode(T.self, from: data)
     }
 
     @discardableResult
-    func rawRequest(_ path: String, method: String = "GET", body: (any Encodable & Sendable)? = nil) async throws -> Data {
-        let request = try preparedRequest(path, method: method, body: body)
+    func rawRequest(
+        _ path: String,
+        method: String = "GET",
+        body: (any Encodable & Sendable)? = nil,
+        ifMatch contentRevision: Int? = nil,
+        allowZeroRevision: Bool = false
+    ) async throws -> Data {
+        let request = try preparedRequest(path, method: method, body: body, ifMatch: contentRevision, allowZeroRevision: allowZeroRevision)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { return data }
             if !(200..<300).contains(http.statusCode) {
+                if http.statusCode == 409, let conflict = Self.writeConflict(from: data) {
+                    throw APIError.writeConflict(
+                        resourceType: conflict.resourceType,
+                        resourceId: conflict.resourceId,
+                        submittedRevision: conflict.submittedRevision,
+                        currentRevision: conflict.currentRevision
+                    )
+                }
                 if let structured = Self.structuredError(from: data) {
                     throw APIError.validation(code: structured.code, message: structured.message, names: structured.names)
                 }
@@ -56,7 +81,9 @@ struct APIClient {
     func preparedRequest(
         _ path: String,
         method: String = "GET",
-        body: (any Encodable & Sendable)? = nil
+        body: (any Encodable & Sendable)? = nil,
+        ifMatch contentRevision: Int? = nil,
+        allowZeroRevision: Bool = false
     ) throws -> URLRequest {
         guard !baseURL.isEmpty, !token.isEmpty else { throw APIError.notConfigured }
         guard let url = URL(string: apiRoot + path) else { throw APIError.badURL }
@@ -64,6 +91,12 @@ struct APIClient {
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // `0` means an old Backend response that predates the additive v2.1
+        // field. Do not send an accidental `If-Match: \"0\"` during rolling
+        // deployment; v2.1 responses always carry a positive revision.
+        if let contentRevision, contentRevision > 0 || (allowZeroRevision && contentRevision == 0) {
+            request.setValue("\"\(contentRevision)\"", forHTTPHeaderField: "If-Match")
+        }
         if let body {
             request.httpBody = try JSONEncoder.lino.encode(AnyEncodable(body))
         }
@@ -73,8 +106,11 @@ struct APIClient {
     /// Starts (or restarts) the background write job for a chapter. The server
     /// answers immediately with the freshly created job's status; progress is
     /// observed by polling `jobStatus(chapterId:)`.
-    func startWrite(chapterId: String, replaceDraft: Bool) async throws -> WriteJobStatus {
-        try await request("/chapters/\(chapterId)/write", method: "POST", body: ["replace_draft": replaceDraft])
+    func startWrite(chapterId: String, replaceDraft: Bool, contentRevision: Int) async throws -> WriteJobStatus {
+        try await request(
+            "/chapters/\(chapterId)/write", method: "POST",
+            body: ["replace_draft": replaceDraft], ifMatch: contentRevision
+        )
     }
 
     /// Polls the latest job snapshot (write or extract) for a chapter.
@@ -83,16 +119,19 @@ struct APIClient {
     }
 
     /// Starts the background Extractor job for a chapter's draft.
-    func accept(chapterId: String, overrideChecker: Bool = false) async throws -> WriteJobStatus {
-        try await request("/chapters/\(chapterId)/accept", method: "POST", body: CheckerAcceptPayload(override_checker: overrideChecker))
+    func accept(chapterId: String, contentRevision: Int, overrideChecker: Bool = false) async throws -> WriteJobStatus {
+        try await request(
+            "/chapters/\(chapterId)/accept", method: "POST",
+            body: CheckerAcceptPayload(override_checker: overrideChecker), ifMatch: contentRevision
+        )
     }
 
-    func retryArchive(chapterId: String) async throws -> WriteJobStatus {
-        try await request("/chapters/\(chapterId)/archive/retry", method: "POST")
+    func retryArchive(chapterId: String, contentRevision: Int) async throws -> WriteJobStatus {
+        try await request("/chapters/\(chapterId)/archive/retry", method: "POST", ifMatch: contentRevision)
     }
 
-    func rerunChecker(chapterId: String) async throws -> CheckerRunResult {
-        try await request("/chapters/\(chapterId)/check", method: "POST")
+    func rerunChecker(chapterId: String, contentRevision: Int) async throws -> CheckerRunResult {
+        try await request("/chapters/\(chapterId)/check", method: "POST", ifMatch: contentRevision)
     }
 
     func cancelWrite(chapterId: String) async throws -> Chapter {
@@ -138,6 +177,51 @@ struct APIClient {
             }
         }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private static func writeConflict(from data: Data) -> (resourceType: String, resourceId: String, submittedRevision: Int, currentRevision: Int)? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = object["detail"] as? [String: Any],
+              detail["code"] as? String == "write_conflict",
+              let details = detail["details"] as? [String: Any],
+              let resourceType = details["resource_type"] as? String,
+              let resourceId = details["resource_id"] as? String,
+              let submittedRevision = details["submitted_revision"] as? Int,
+              let currentRevision = details["current_revision"] as? Int else { return nil }
+        return (resourceType, resourceId, submittedRevision, currentRevision)
+    }
+
+    func search(query: String, bookID: String? = nil, limit: Int = 50, offset: Int = 0) async throws -> SearchResponse {
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset))
+        ]
+        if let bookID { components.queryItems?.append(URLQueryItem(name: "book_id", value: bookID)) }
+        return try await request("/search?\(components.percentEncodedQuery ?? "")")
+    }
+
+    func exportProject(bookID: String) async throws -> Data {
+        try await rawRequest("/books/\(bookID)/project-export")
+    }
+
+    func exportData(bookID: String) async throws -> BookExportData {
+        try await request("/books/\(bookID)/export-data")
+    }
+
+    func importProject(_ data: Data) async throws -> ProjectImportResult {
+        var request = try preparedRequest("/books/project-import", method: "POST")
+        request.setValue("application/vnd.ictw.project+zip", forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        do {
+            let (responseData, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw APIError.http((response as? HTTPURLResponse)?.statusCode ?? 0, Self.errorMessage(from: responseData))
+            }
+            return try JSONDecoder.lino.decode(ProjectImportResult.self, from: responseData)
+        } catch let error as APIError { throw error }
+        catch { throw APIError.transport(error.localizedDescription) }
     }
 }
 

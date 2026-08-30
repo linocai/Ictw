@@ -49,6 +49,9 @@ enum LinoErrorPresenter {
     /// toast pipeline.
     static func present(error: Error) -> (message: String, critical: Bool) {
         guard let apiError = error as? APIError else {
+            if error is DecodingError {
+                return ("服务器返回的数据与当前客户端不兼容，请确认后端已经升级后再试。", false)
+            }
             return (error.localizedDescription, false)
         }
         switch apiError {
@@ -67,6 +70,8 @@ enum LinoErrorPresenter {
             return presentHTTP(statusCode: statusCode, body: body)
         case .validation(let code, let message, let names):
             return presentValidation(code: code, message: message, names: names)
+        case .writeConflict:
+            return ("内容已在其他设备更新；本机修改已保留，请比较后决定。", true)
         }
     }
 
@@ -86,6 +91,8 @@ enum LinoErrorPresenter {
             return statusCode == 401 ? "unauthorized" : "http_\(statusCode)"
         case .validation(let code, _, _):
             return code
+        case .writeConflict:
+            return "write_conflict"
         }
     }
 
@@ -119,6 +126,12 @@ enum LinoErrorPresenter {
                 suggestion: "请刷新后重试", code: nil
             )
             return (message, false)
+        }
+        if statusCode == 404 {
+            let normalized = body.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if normalized.isEmpty || normalized == "not found" || normalized == "404 not found" {
+                return ("当前后端尚未提供这个功能，请先升级后端后再试。", false)
+            }
         }
         if statusCode == 409, body == "chapter has no draft text" {
             let message = compose(

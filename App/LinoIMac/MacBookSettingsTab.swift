@@ -104,8 +104,8 @@ struct MacBookSettingsTab: View {
                     guard let book = session.currentBook else { return }
                     isExporting = true
                     await MacExportSaver.exportComposed(
-                        book: book, session: session, chapterSummaries: workspace.chapters,
-                        characters: characters.characters, scope: exportScope, currentChapterID: currentChapterID,
+                        book: book, session: session, bookshelf: bookshelf,
+                        scope: exportScope, currentChapterID: currentChapterID,
                         format: exportFormat, includeWorld: exportWorld, includeCharacters: exportCharacters,
                         separateChapters: exportSeparateChapters
                     )

@@ -160,6 +160,7 @@ def test_recover_interrupted_jobs_marks_failed(client, auth_headers):
     db = db_module.SessionLocal()
     try:
         ch = db.get(Chapter, chapter["id"])
+        revision_before_recovery = ch.content_revision
         ch.status = "writing"
         run = JobRun(chapter_id=chapter["id"], kind="write", phase="writing")
         db.add(run)
@@ -172,6 +173,7 @@ def test_recover_interrupted_jobs_marks_failed(client, auth_headers):
         assert recovered.error_code == "interrupted"
         assert recovered.finished_at is not None
         assert db.get(Chapter, chapter["id"]).status == "draft"
+        assert db.get(Chapter, chapter["id"]).content_revision == revision_before_recovery + 1
         assert recovered.finished_at >= db.get(Chapter, chapter["id"]).updated_at
     finally:
         db.close()
@@ -208,13 +210,17 @@ def test_recovery_never_refinalizes_reopened_extractor_job(client, auth_headers)
         ]
         db.add_all(runs)
         db.commit()
+        finalized_revision = final_chapter.content_revision
+        reopened_revision = reopened_chapter.content_revision
         recover_interrupted_chapters(db)
         db.expire_all()
 
         assert db.get(Chapter, final_chapter.id).status == "finalized"
+        assert db.get(Chapter, final_chapter.id).content_revision == finalized_revision + 1
         assert db.get(ChapterArchiveRevision, revisions[0].id).status == "failed"
         assert db.get(JobRun, runs[0].id).phase == "failed"
         assert db.get(Chapter, reopened_chapter.id).status == "draft_ready"
+        assert db.get(Chapter, reopened_chapter.id).content_revision == reopened_revision
         assert db.get(ChapterArchiveRevision, revisions[1].id).status == "stale"
         assert db.get(JobRun, runs[1].id).phase == "cancelled"
     finally:
@@ -420,7 +426,7 @@ def test_health_reports_current_version(client, auth_headers):
     from app.main import APP_VERSION
 
     assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == APP_VERSION
-    assert APP_VERSION == "1.9.5"
+    assert APP_VERSION == "2.1.0"
 
 
 # --- B8 migration from the production revision --------------------------------

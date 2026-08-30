@@ -41,6 +41,8 @@ from app.services.archive_v2 import (
     mark_revision_partial,
     validate_archive_output,
 )
+from app.services.content_revisions import bump_content_revision
+from app.services.search_index import rebuild_book_search_index
 from app.services.character_state_projection import rebuild_book_projection
 from app.services.write_ownership import (
     cancel_local_writer_jobs,
@@ -471,7 +473,12 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                         Chapter.id == chapter.id,
                         Chapter.write_generation == job.chapter_write_generation,
                     )
-                    .values(draft_text=last_candidate.draft_text, status="draft_ready", updated_at=utc_now())
+                    .values(
+                        draft_text=last_candidate.draft_text,
+                        status="draft_ready",
+                        updated_at=utc_now(),
+                        content_revision=Chapter.content_revision + 1,
+                    )
                 )
                 if result.rowcount != 1:
                     db.rollback()
@@ -483,6 +490,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                     .values(is_current=False)
                 )
                 last_candidate.is_current = True
+                rebuild_book_search_index(db, chapter.book_id)
                 db.flush()
                 if not _apply_job_phase(
                     db,
@@ -521,7 +529,12 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                         Chapter.id == chapter.id,
                         Chapter.write_generation == job.chapter_write_generation,
                     )
-                    .values(draft_text=job.baseline_text, status=job.baseline_status, updated_at=utc_now())
+                    .values(
+                        draft_text=job.baseline_text,
+                        status=job.baseline_status,
+                        updated_at=utc_now(),
+                        content_revision=Chapter.content_revision + 1,
+                    )
                 )
                 if result.rowcount != 1:
                     db.rollback()
@@ -646,6 +659,11 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             invalidated_downstream = invalidate_downstream_archives(
                 db, chapter.book_id, after_index=chapter.index
             )
+            bump_content_revision(chapter)
+            for invalidated_id in invalidated_downstream:
+                invalidated_chapter = db.get(Chapter, invalidated_id)
+                if invalidated_chapter is not None:
+                    bump_content_revision(invalidated_chapter)
             rebuild_book_projection(db, chapter.book_id)
             # Extractor-owned dynamic projections are Writer prompt input for
             # chapters selecting the changed characters. Persist the
@@ -657,6 +675,12 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 for affected in chapters_for_character(db, character_id)
             ]
             invalidated_writer_chapters = invalidate_writer_inputs(db, affected_writer_chapters)
+            rebuild_book_search_index(db, chapter.book_id)
+            # The terminal JobRun timestamp is compared with the visible
+            # chapter timestamp by /job. Flush all content revision/status
+            # mutations first so a terminal run can never look older than its
+            # own successfully activated archive state.
+            db.flush()
             if not _apply_job_phase(
                 db,
                 job.job_id,
@@ -691,6 +715,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
         if chapter is not None and revision is not None:
             mark_revision_failed(revision, chapter, error_code=exc.code, error_message=str(exc))
+            bump_content_revision(chapter)
             db.flush()
             _apply_job_phase(
                 db,
@@ -724,6 +749,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             # legacy_archive_eligible here erased legacy chapters outright
             # whenever a manual retry raced an edit to an earlier chapter.
             chapter.archive_status = "stale"
+            bump_content_revision(chapter)
             db.flush()
             _apply_job_phase(
                 db,
@@ -734,6 +760,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 error_message=str(exc),
             )
             rebuild_book_projection(db, chapter.book_id)
+            rebuild_book_search_index(db, chapter.book_id)
             db.commit()
         job.mark_terminal("failed")
     except (ArchiveV2ValidationError, ExtractorContractError) as exc:
@@ -751,6 +778,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         if chapter is not None and revision is not None:
             summary = output.get("summary", "") if "output" in locals() and isinstance(output, dict) else ""
             mark_revision_partial(revision, chapter, reason=reason, summary=summary)
+            bump_content_revision(chapter)
             db.flush()
             _apply_job_phase(
                 db,
@@ -777,6 +805,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         if chapter is not None and revision is not None:
             message = "归档任务执行失败"
             mark_revision_failed(revision, chapter, error_code="extract_failed", error_message=message)
+            bump_content_revision(chapter)
             db.flush()
             _apply_job_phase(
                 db,
@@ -885,7 +914,12 @@ def _restore_baseline(db: Session, job: WriteJob, *, phase: str | None = None, *
             Chapter.id == job.chapter_id,
             Chapter.write_generation == job.chapter_write_generation,
         )
-        .values(draft_text=job.baseline_text, status=job.baseline_status, updated_at=utc_now())
+        .values(
+            draft_text=job.baseline_text,
+            status=job.baseline_status,
+            updated_at=utc_now(),
+            content_revision=Chapter.content_revision + 1,
+        )
     )
     if result.rowcount != 1:
         db.rollback()
@@ -901,4 +935,6 @@ def _restore_draft_ready(db: Session, job: WriteJob) -> None:
     if not write_registry.is_current(job): return
     chapter = db.get(Chapter, job.chapter_id)
     if chapter is not None:
-        chapter.status = "draft_ready"; db.commit()
+        chapter.status = "draft_ready"
+        bump_content_revision(chapter)
+        db.commit()

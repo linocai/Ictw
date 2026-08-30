@@ -4,6 +4,7 @@ import SwiftUI
 struct LinoIApp: App {
     @StateObject private var notices: NoticeBus
     @StateObject private var session: AppSession
+    @StateObject private var syncStore: ClientSyncStore
     @StateObject private var bookshelfStore: BookshelfStore
     @StateObject private var workspaceStore: WorkspaceStore
     @StateObject private var charactersStore: CharactersStore
@@ -14,14 +15,16 @@ struct LinoIApp: App {
     init() {
         let notices = NoticeBus()
         let session = AppSession(notices: notices)
+        let syncStore = ClientSyncStore()
         _notices = StateObject(wrappedValue: notices)
         _session = StateObject(wrappedValue: session)
-        _bookshelfStore = StateObject(wrappedValue: BookshelfStore(session: session))
-        _workspaceStore = StateObject(wrappedValue: WorkspaceStore(session: session))
-        _charactersStore = StateObject(wrappedValue: CharactersStore(session: session))
-        _chapterEditorStore = StateObject(wrappedValue: ChapterEditorStore(session: session))
+        _syncStore = StateObject(wrappedValue: syncStore)
+        _bookshelfStore = StateObject(wrappedValue: BookshelfStore(session: session, sync: syncStore))
+        _workspaceStore = StateObject(wrappedValue: WorkspaceStore(session: session, sync: syncStore))
+        _charactersStore = StateObject(wrappedValue: CharactersStore(session: session, sync: syncStore))
+        _chapterEditorStore = StateObject(wrappedValue: ChapterEditorStore(session: session, sync: syncStore))
         _inspirationCreatorStore = StateObject(wrappedValue: InspirationCreatorStore(session: session))
-        _agentSettingsStore = StateObject(wrappedValue: AgentSettingsStore(session: session))
+        _agentSettingsStore = StateObject(wrappedValue: AgentSettingsStore(session: session, sync: syncStore))
     }
 
     var body: some Scene {
@@ -29,6 +32,7 @@ struct LinoIApp: App {
             V2IOSRootView()
                 .environmentObject(notices)
                 .environmentObject(session)
+                .environmentObject(syncStore)
                 .environmentObject(bookshelfStore)
                 .environmentObject(workspaceStore)
                 .environmentObject(charactersStore)

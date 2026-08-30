@@ -188,6 +188,29 @@ def client() -> Iterator[TestClient]:
     # endpoint now checks. Stamp the head the ORM metadata corresponds to;
     # test_schema_matches_alembic_head proves that correspondence holds.
     with engine.begin() as connection:
+        connection.exec_driver_sql("""
+            CREATE VIRTUAL TABLE search_documents_fts USING fts5(
+                title, body, content='search_documents', content_rowid='rowid', tokenize='trigram'
+            )
+        """)
+        connection.exec_driver_sql("""
+            CREATE TRIGGER search_documents_fts_ai AFTER INSERT ON search_documents BEGIN
+                INSERT INTO search_documents_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+            END
+        """)
+        connection.exec_driver_sql("""
+            CREATE TRIGGER search_documents_fts_ad AFTER DELETE ON search_documents BEGIN
+                INSERT INTO search_documents_fts(search_documents_fts, rowid, title, body)
+                VALUES ('delete', old.rowid, old.title, old.body);
+            END
+        """)
+        connection.exec_driver_sql("""
+            CREATE TRIGGER search_documents_fts_au AFTER UPDATE ON search_documents BEGIN
+                INSERT INTO search_documents_fts(search_documents_fts, rowid, title, body)
+                VALUES ('delete', old.rowid, old.title, old.body);
+                INSERT INTO search_documents_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+            END
+        """)
         connection.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)"))
         connection.execute(text("DELETE FROM alembic_version"))
         connection.execute(

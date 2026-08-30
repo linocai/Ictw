@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct V2IOSSettingsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -13,6 +14,7 @@ struct V2IOSSettingsView: View {
     @State private var accessToken = ""
     @State private var savingConnection = false
     @State private var showingConnectionDiscardConfirmation = false
+    @State private var showingProjectPackage = false
     private let roles = ["memory_selector", "writer", "checker", "extractor", "inspiration_creator"]
 
     var body: some View {
@@ -48,7 +50,15 @@ struct V2IOSSettingsView: View {
                         }
                     }
                 }
+                Section {
+                    Button("备份或恢复完整项目") { showingProjectPackage = true }
+                } header: {
+                    Text("资料")
+                } footer: {
+                    Text("完整项目包可在另一台设备或隔离环境中恢复为一本新书，不包含访问密钥与内部生成过程文本。")
+                }
             }
+            .v2IOSNoticeOverlay()
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
@@ -59,7 +69,6 @@ struct V2IOSSettingsView: View {
                 }
             }
         }
-        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .onAppear {
             baseURL = session.baseURL
@@ -78,6 +87,12 @@ struct V2IOSSettingsView: View {
         .sheet(isPresented: $showingNewProfile) {
             NavigationStack { V2IOSProfileEditor(profile: nil) }
                 .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
+        .sheet(isPresented: $showingProjectPackage) {
+            V2IOSProjectPackageSheet()
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
@@ -143,17 +158,40 @@ struct V2IOSBookSettingsView: View {
                     }
                 }
                 Section {
+                    ForEach(roles, id: \.self) { key in
+                        NavigationLink { V2IOSBookModelEditor(role: key) } label: {
+                            HStack {
+                                Text(roleName(key))
+                                Spacer()
+                                Text(modelSource(key)).font(V2DeskType.control(11)).foregroundStyle(Color.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("本书模型")
+                } footer: {
+                    Text("本书覆盖是一整份模型配置；缺省即完整跟随全局。整理记忆与找方向始终由服务端以有界非思考方式运行。")
+                }
+                Section {
                     Button("全局模型与人格") { showingGlobal = true }
                 } footer: { Text("模型、程序协议、绑定和参数始终是全局设置。") }
             }
+            // Keep notices inside the navigation content so the toast starts
+            // below the title bar. Hosting it outside NavigationStack makes
+            // its close target overlap the trailing “完成” button.
+            .v2IOSNoticeOverlay()
             .navigationTitle("书设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction) } }
         }
-        .v2IOSNoticeOverlay()
         .v2IOSPage()
-        .task { if let id = session.currentBook?.id { _ = await agents.loadBookPersonas(bookID: id) } }
+        .task {
+            if let id = session.currentBook?.id {
+                _ = await agents.loadBookPersonas(bookID: id)
+                _ = await agents.loadBookModelBindings(bookID: id)
+            }
+        }
         .sheet(isPresented: $showingGlobal) {
             V2IOSSettingsView()
                 .presentationDetents([.large])
@@ -163,6 +201,7 @@ struct V2IOSBookSettingsView: View {
     }
 
     private func source(_ role: String) -> String { agents.bookPersonas.first(where: { $0.agentRole == role })?.source == "book" ? "本书覆盖" : "跟随全局" }
+    private func modelSource(_ role: String) -> String { agents.bookModelBindings.first(where: { $0.agentRole == role })?.source == "book" ? "本书覆盖" : "跟随全局" }
 }
 
 private struct V2IOSGlobalAgentRoleView: View {
@@ -200,6 +239,7 @@ private struct V2IOSGlobalAgentRoleView: View {
                 if saving { HStack { ProgressView(); Text("正在保存") } }
             }
         }
+        .v2IOSNoticeOverlay()
         .navigationTitle(roleName(role))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -270,6 +310,7 @@ private struct V2IOSBookPersonaEditor: View {
                 }
             }
         }
+        .v2IOSNoticeOverlay()
         .navigationTitle(roleName(role))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -322,6 +363,119 @@ private struct V2IOSBookPersonaEditor: View {
     }
 }
 
+private struct V2IOSBookModelEditor: View {
+    let role: String
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var agents: AgentSettingsStore
+    @EnvironmentObject private var sync: ClientSyncStore
+    @State private var profileID = ""
+    @State private var thinking = false
+    @State private var effort = ""
+    @State private var temperature = 1.0
+    @State private var saving = false
+    @State private var confirmingRestore = false
+
+    private var row: BookAgentModelBinding? { agents.bookModelBindings.first(where: { $0.agentRole == role }) }
+    private var effective: AgentModelBindingValues? { row?.effectiveBinding }
+    private var bounded: Bool { role == "extractor" || role == "inspiration_creator" }
+    private var selectedProfileName: String {
+        guard let id = effective?.llmProfileId,
+              let profile = agents.profiles.first(where: { $0.id == id }) else { return "未绑定" }
+        return "\(profile.name) · \(profile.modelName)"
+    }
+
+    var body: some View {
+        Form {
+            Section("实际生效") {
+                LabeledContent("来源", value: row?.source == "book" ? "本书覆盖" : "跟随全局")
+                LabeledContent("模型", value: selectedProfileName)
+                LabeledContent("深度思考", value: effective?.effectiveThinkingEnabled == true ? "开启" : "关闭")
+            }
+            Section("本书覆盖") {
+                Picker("模型", selection: $profileID) {
+                    Text("未绑定").tag("")
+                    ForEach(agents.profiles) { profile in Text("\(profile.name) · \(profile.modelName)").tag(profile.id) }
+                }
+                Toggle("启用思考", isOn: $thinking)
+                    .disabled(bounded || !(row?.capabilities.thinkingToggleSupported ?? false))
+                if bounded {
+                    Text("这个角色的深度思考由服务端固定关闭。")
+                        .font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary)
+                }
+                if !bounded, let levels = row?.capabilities.reasoningEffortLevels, !levels.isEmpty {
+                    Picker("思考强度", selection: $effort) {
+                        Text("模型默认").tag("")
+                        ForEach(levels, id: \.self) { Text($0).tag($0) }
+                    }
+                    .disabled(!thinking)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack { Text("Temperature"); Spacer(); Text(String(format: "%.2f", temperature)).monospacedDigit().foregroundStyle(Color.secondary) }
+                    Slider(value: $temperature, in: 0...2, step: 0.05)
+                        .disabled(bounded || !(row?.capabilities.temperatureEffectiveWhenThinking ?? true) && !thinking)
+                }
+            }
+            Section {
+                Button(saving ? "正在保存" : "保存本书覆盖", action: save)
+                    .disabled(saving || !sync.networkActionsAvailable)
+                if row?.source == "book" {
+                    Button("恢复跟随全局", role: .destructive) { confirmingRestore = true }
+                        .disabled(saving || !sync.networkActionsAvailable)
+                }
+                if !sync.networkActionsAvailable { V2DeskOfflineExplanation() }
+            }
+        }
+        .v2IOSNoticeOverlay()
+        .navigationTitle(roleName(role))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction).disabled(saving) } }
+        .onAppear(perform: loadDraft)
+        .onChange(of: row) { _, _ in loadDraft() }
+        .confirmationDialog("恢复跟随全局？", isPresented: $confirmingRestore, titleVisibility: .visible) {
+            Button("恢复跟随全局", role: .destructive) { restore() }
+            Button("取消", role: .cancel) {}
+        } message: { Text("这本书的完整模型覆盖会移除；以后启动的任务重新使用全局配置。") }
+    }
+
+    private func loadDraft() {
+        let source = row?.bookBinding ?? row?.effectiveBinding
+        profileID = source?.llmProfileId ?? ""
+        thinking = bounded ? false : (source?.thinkingEnabled ?? false)
+        effort = source?.reasoningEffort ?? ""
+        temperature = source?.temperature ?? 1.0
+    }
+
+    private func save() {
+        guard let bookID = session.currentBook?.id else { return }
+        saving = true
+        let binding = AgentModelBindingValues(
+            llmProfileId: profileID.isEmpty ? nil : profileID,
+            thinkingEnabled: bounded ? false : thinking,
+            reasoningEffort: effort.isEmpty ? nil : effort,
+            temperature: temperature,
+            effectiveThinkingEnabled: nil,
+            effectiveReasoningEffort: nil,
+            effectiveTemperature: nil,
+            contentRevision: nil
+        )
+        Task {
+            if await agents.saveBookModelBinding(bookID: bookID, role: role, binding: binding) { loadDraft() }
+            saving = false
+        }
+    }
+
+    private func restore() {
+        guard let bookID = session.currentBook?.id else { return }
+        saving = true
+        Task {
+            if await agents.clearBookModelBinding(bookID: bookID, role: role) { loadDraft() }
+            saving = false
+        }
+    }
+}
+
 private struct V2IOSProfileEditor: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var agents: AgentSettingsStore
@@ -351,6 +505,7 @@ private struct V2IOSProfileEditor: View {
                 Section { HStack { ProgressView(); Text("正在保存") } }
             }
         }
+        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .navigationTitle(profile == nil ? "新增模型" : "模型")
         .navigationBarTitleDisplayMode(.inline)
@@ -419,7 +574,7 @@ private struct V2IOSProfileEditor: View {
 struct V2IOSExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
-    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var bookshelf: BookshelfStore
     @EnvironmentObject private var notices: NoticeBus
     @Environment(\.colorScheme) private var colorScheme
     let currentChapterID: String?
@@ -534,29 +689,19 @@ struct V2IOSExportSheet: View {
         exportTask = Task {
             defer { finishExport(sessionID: sessionID) }
             do {
-                let summaries: [ChapterSummary] = try await session.api.request("/books/\(book.id)/chapters")
+                guard let data = await bookshelf.exportData(book) else { return }
                 try Task.checkCancellation()
                 guard isCurrentExportSession(sessionID) else { return }
-                totalChapters = summaries.count
-                var details: [Chapter] = []
-                details.reserveCapacity(summaries.count)
-                for summary in summaries {
-                    try Task.checkCancellation()
-                    let chapter: Chapter = try await session.api.request("/chapters/\(summary.id)")
-                    try Task.checkCancellation()
-                    guard isCurrentExportSession(sessionID) else { return }
-                    details.append(chapter)
-                    completedChapters = details.count
-                }
-                let selected = ExportComposer.chapters(for: scope, chapters: details, currentID: currentChapterID)
+                totalChapters = data.chapters.count
+                completedChapters = totalChapters
+                let selected = V2DeskExportComposer.chapters(for: scope, in: data, currentID: currentChapterID)
                 guard !selected.isEmpty else {
                     if isCurrentExportSession(sessionID) { notices.publish("这个范围没有可导出的已保存章节。") }
                     return
                 }
-                let files = ExportComposer.compose(
-                    book: book,
+                let files = V2DeskExportComposer.compose(
+                    data: data,
                     chapters: selected,
-                    characters: characters.characters,
                     format: format,
                     includeWorld: includeWorld,
                     includeCharacters: includeCharacters,
@@ -638,4 +783,250 @@ func roleName(_ role: String) -> String {
     case "inspiration_creator": "找方向"
     default: role
     }
+}
+
+// MARK: - v2.1 search and project packages
+
+/// Search is intentionally a server request rather than a download-and-filter
+/// of cached manuscripts.  This keeps snippets within the Backend's visible
+/// content boundary and makes the offline limitation explicit to the author.
+struct V2IOSSearchSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var notices: NoticeBus
+    @EnvironmentObject private var sync: ClientSyncStore
+    @State private var query = ""
+    @State private var results: [SearchResult] = []
+    @State private var isSearching = false
+    @State private var hasSearched = false
+    @State private var openingID: String?
+    @State private var characterDestinationID: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 10) {
+                        TextField("搜索书名、章节、正文、人物或有效记忆", text: $query)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.search)
+                            .onSubmit { startSearch() }
+                        if isSearching { ProgressView() }
+                    }
+                    Button("搜索", action: startSearch)
+                        .disabled(query.v2IOSTrimmed.isEmpty || isSearching || !sync.networkActionsAvailable)
+                } footer: {
+                    Text("只搜索作者当前可见的资料；内部生成过程文本和被拒证据不会进入结果。离线时不能搜索服务器。")
+                    if !sync.networkActionsAvailable { V2DeskOfflineExplanation() }
+                }
+
+                if hasSearched {
+                    Section(results.isEmpty ? "没有找到结果" : "结果") {
+                        ForEach(results) { result in
+                            Button { Task { await open(result) } } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    HStack(spacing: 7) {
+                                        Image(systemName: resultSymbol(result))
+                                            .foregroundStyle(V2DeskPalette.color(.accent, scheme: .light))
+                                            .frame(width: 16)
+                                        Text(result.title.v2IOSTrimmed.isEmpty ? resultType(result) : result.title)
+                                            .font(V2DeskType.control(14, weight: .medium))
+                                            .lineLimit(1)
+                                        Spacer()
+                                        if openingID == result.id { ProgressView() }
+                                    }
+                                    if let snippet = result.snippet, !snippet.v2IOSTrimmed.isEmpty {
+                                        Text(snippet)
+                                            .font(V2DeskType.prose(12.5))
+                                            .foregroundStyle(Color.secondary)
+                                            .lineLimit(3)
+                                    }
+                                    Text(resultType(result))
+                                        .font(V2DeskType.control(10.5))
+                                        .foregroundStyle(Color.secondary)
+                                }
+                                .padding(.vertical, 3)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(openingID != nil || !sync.networkActionsAvailable)
+                        }
+                    }
+                }
+            }
+            .v2IOSNoticeOverlay()
+            .navigationTitle("搜索")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction) }
+            }
+        }
+        .v2IOSPage()
+        .sheet(isPresented: Binding(
+            get: { characterDestinationID != nil },
+            set: { if !$0 { characterDestinationID = nil } }
+        )) {
+            V2IOSCharactersView(initialCharacterID: characterDestinationID)
+        }
+    }
+
+    private func startSearch() {
+        guard !query.v2IOSTrimmed.isEmpty, !isSearching else { return }
+        isSearching = true
+        hasSearched = true
+        Task {
+            defer { isSearching = false }
+            do {
+                results = try await session.api.search(query: query.v2IOSTrimmed)
+                    .items
+            } catch {
+                results = []
+                notices.publish(error)
+            }
+        }
+    }
+
+    private func open(_ result: SearchResult) async {
+        guard openingID == nil else { return }
+        openingID = result.id
+        defer { openingID = nil }
+        do {
+            let book: Book = try await session.api.request("/books/\(result.bookId)")
+            session.currentBook = book
+            await workspace.load(bookId: book.id)
+            await characters.load(bookId: book.id)
+            if let characterID = result.characterId {
+                guard characters.characters.contains(where: { $0.id == characterID }) else {
+                    throw APIError.http(404, "人物已不存在")
+                }
+                characters.selectedCharacterId = characterID
+                characterDestinationID = characterID
+                return
+            }
+            if let chapterID = result.chapterId,
+               let chapter = workspace.chapters.first(where: { $0.id == chapterID }) {
+                workspace.replaceCurrentDestination(with: chapter)
+            }
+            dismiss()
+        } catch {
+            notices.publish(error)
+        }
+    }
+
+    private func resultType(_ result: SearchResult) -> String {
+        switch result.type {
+        case "book": "书籍"
+        case "chapter": "章节"
+        case "character": "人物详情"
+        case "archive": "有效记忆"
+        default: "搜索结果"
+        }
+    }
+
+    private func resultSymbol(_ result: SearchResult) -> String {
+        switch result.type {
+        case "book": "books.vertical"
+        case "chapter": "doc.text"
+        case "character": "person"
+        case "archive": "sparkles"
+        default: "magnifyingglass"
+        }
+    }
+}
+
+struct V2IOSProjectPackageSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var notices: NoticeBus
+    @EnvironmentObject private var sync: ClientSyncStore
+    @State private var preparingExport = false
+    @State private var importing = false
+    @State private var showingImporter = false
+    @State private var sharingURL: URL?
+    @State private var showingShare = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("完整备份") {
+                    Text("备份当前书的正文、人物、关联、有效记忆、人格和模型覆盖。访问密钥、全局模型设置和内部生成过程文本不会写入项目包。")
+                        .font(V2DeskType.control(12.5))
+                        .foregroundStyle(Color.secondary)
+                    Button(preparingExport ? "正在准备备份" : "备份当前书") { Task { await exportCurrentBook() } }
+                        .disabled(preparingExport || importing || session.currentBook == nil || !sync.networkActionsAvailable)
+                }
+                Section("恢复为新书") {
+                    Text("恢复永远新建一本书，不会覆盖服务器上已有的内容。导入会先校验格式、清单和每个文件的完整性。")
+                        .font(V2DeskType.control(12.5))
+                        .foregroundStyle(Color.secondary)
+                    Button(importing ? "正在验证并恢复" : "选择 .ictwbook 文件") { showingImporter = true }
+                        .disabled(preparingExport || importing || !sync.networkActionsAvailable)
+                }
+                if preparingExport || importing {
+                    Section { HStack { ProgressView(); Text(preparingExport ? "正在生成并校验项目包" : "正在验证并恢复项目") } }
+                }
+                if !sync.networkActionsAvailable {
+                    Section { V2DeskOfflineExplanation() }
+                }
+            }
+            .v2IOSNoticeOverlay()
+            .navigationTitle("项目备份与恢复")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction).disabled(preparingExport || importing) } }
+        }
+        .v2IOSPage()
+        .sheet(isPresented: $showingShare) {
+            if let sharingURL { V2IOSShareSheet(urls: [sharingURL]) }
+        }
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.ictwProjectPackage], allowsMultipleSelection: false) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            Task { await importProject(from: url) }
+        }
+    }
+
+    private func exportCurrentBook() async {
+        guard let book = session.currentBook else {
+            notices.publish("请先打开一本书再备份。")
+            return
+        }
+        preparingExport = true
+        defer { preparingExport = false }
+        do {
+            guard let data = await bookshelf.exportProject(book) else { return }
+            let filename = sanitizedFilename(book.title) + ".ictwbook"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+            try data.write(to: url, options: .atomic)
+            sharingURL = url
+            showingShare = true
+        } catch {
+            notices.publish(error)
+        }
+    }
+
+    private func importProject(from url: URL) async {
+        importing = true
+        defer { importing = false }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            guard let imported = await bookshelf.importProject(data) else { return }
+            let warning = imported.warnings.isEmpty ? "" : "\n\(imported.warnings.map(\.message).joined(separator: "\n"))"
+            notices.publish("已恢复《\(imported.title)》为新书。\(warning)")
+            dismiss()
+        } catch {
+            notices.publish(error)
+        }
+    }
+
+    private func sanitizedFilename(_ title: String) -> String {
+        let trimmed = title.v2IOSTrimmed.isEmpty ? "ICTW-项目备份" : title.v2IOSTrimmed
+        return trimmed.replacingOccurrences(of: "/", with: "-")
+    }
+}
+
+private extension UTType {
+    static let ictwProjectPackage = UTType(filenameExtension: "ictwbook") ?? .zip
 }

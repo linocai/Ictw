@@ -110,6 +110,8 @@ enum InspirationErrorCopy {
             return "后端地址无效，请在设置中检查。"
         case .transport:
             return "暂时无法连接服务，请检查网络后重试。"
+        case .writeConflict:
+            return "章节已在其他设备更新，请先处理同步冲突后再生成灵感。"
         case .http(let statusCode, let body):
             if statusCode == 404, body == "Not Found" {
                 return "当前后端版本还不支持灵感创造师，请先更新后端。"

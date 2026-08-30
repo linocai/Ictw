@@ -101,6 +101,7 @@ struct V2IOSWorldEditorView: View {
                 .padding(.vertical, 14)
                 .accessibilityLabel("世界观")
                 .accessibilityHint("可编辑整本书的世界观设定")
+                .v2IOSNoticeOverlay()
                 .navigationTitle("世界观")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -119,7 +120,6 @@ struct V2IOSWorldEditorView: View {
                 }
         }
         .toolbar(.visible, for: .navigationBar)
-        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .background(
             V2IOSDismissAttemptObserver(
@@ -175,6 +175,11 @@ struct V2IOSCharactersView: View {
     @EnvironmentObject private var characters: CharactersStore
     @State private var path: [V2IOSCharacterRoute] = []
     @StateObject private var leaveCoordinator = V2IOSCharacterSheetLeaveCoordinator()
+    let initialCharacterID: String?
+
+    init(initialCharacterID: String? = nil) {
+        self.initialCharacterID = initialCharacterID
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -200,6 +205,7 @@ struct V2IOSCharactersView: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
             }
+            .v2IOSNoticeOverlay()
             .navigationTitle("人物")
             .toolbar {
                 if path.isEmpty {
@@ -221,7 +227,6 @@ struct V2IOSCharactersView: View {
         }
         .toolbar(.visible, for: .navigationBar)
         .environmentObject(leaveCoordinator)
-        .v2IOSNoticeOverlay()
         .v2IOSPage()
         .background(
             V2IOSDismissAttemptObserver(
@@ -235,6 +240,13 @@ struct V2IOSCharactersView: View {
         .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         .onChange(of: path) { _, newPath in
             if newPath.isEmpty { leaveCoordinator.reset() }
+        }
+        .task(id: initialCharacterID) {
+            guard let initialCharacterID,
+                  path.isEmpty,
+                  let character = characters.characters.first(where: { $0.id == initialCharacterID }) else { return }
+            characters.selectedCharacterId = character.id
+            path.append(.existing(character))
         }
     }
 }
@@ -307,6 +319,7 @@ private struct V2IOSCharacterDetailView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
         }
+        .v2IOSNoticeOverlay()
         .navigationTitle(edited.name.v2IOSTrimmed.isEmpty ? "人物" : edited.name)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isDirty)
@@ -465,6 +478,7 @@ private struct V2IOSNewCharacterView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
         }
+        .v2IOSNoticeOverlay()
         .navigationTitle("新增人物")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isDirty)
@@ -524,42 +538,73 @@ private struct V2IOSNewCharacterView: View {
     }
 }
 
+enum V2IOSInspirationPresentation {
+    static let compactDetent = PresentationDetent.height(230)
+}
+
 struct V2IOSInspirationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var inspiration: InspirationCreatorStore
+    @Binding var selectedDetent: PresentationDetent
     @State private var addingID: String?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                V2IOSSheetHeader(title: "找方向", dismiss: dismiss.callAsFunction)
-                TextField("本章推进边界（可选）", text: $inspiration.pacingBoundary)
-                    .font(V2DeskType.prose(14)).textFieldStyle(.plain).padding(13).v2IOSPaper()
-                    .disabled(!canEditChapter)
-                if inspiration.isLoading { ProgressView("正在找方向").frame(maxWidth: .infinity, minHeight: 120) }
-                if let error = inspiration.errorMessage { Text(error).font(V2DeskType.control(13)).foregroundStyle(Color.red).padding(13).v2IOSPaper(.card) }
-                ForEach(inspiration.cards) { card in
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(card.body).font(V2DeskType.prose(14.5)).lineSpacing(6)
-                        V2IOSSecondaryButton(title: inspiration.adoptedCardIDs.contains(card.id) || addingID == card.id ? "已加入意图" : "加入意图") { add(card) }
-                            .disabled(!canEditChapter || inspiration.adoptedCardIDs.contains(card.id) || addingID == card.id)
-                    }.padding(14).v2IOSPaper(.manuscriptPaper)
-                }
-                if inspiration.canUndo(chapterID: editor.currentChapter?.id ?? "", currentBible: editor.currentChapter?.userPrompt ?? "") {
-                    V2IOSSecondaryButton(title: "撤销这次加入", tone: .accent) { undo() }
-                        .disabled(!canEditChapter)
-                }
-                V2IOSPrimaryButton(title: inspiration.cards.isEmpty ? "开始找灵感" : "换三个", disabled: inspiration.isLoading || !canEditChapter) {
-                    if let chapter = editor.currentChapter { inspiration.generate(for: chapter) }
-                }
-            }.padding(20)
+        Group {
+            if needsScrolling {
+                ScrollView { sheetContents }
+            } else {
+                sheetContents
+            }
         }
         .v2IOSNoticeOverlay()
         .v2IOSPage()
+        .onAppear {
+            if inspiration.isLoading || !inspiration.cards.isEmpty || inspiration.errorMessage != nil {
+                selectedDetent = .large
+            }
+        }
+        .onChange(of: inspiration.cards.count) { _, count in
+            if count > 0 { selectedDetent = .large }
+        }
+        .onChange(of: inspiration.errorMessage) { _, message in
+            if message != nil { selectedDetent = .large }
+        }
     }
 
     private var canEditChapter: Bool { ChapterEditingPolicy.canEdit(editor.currentChapter) }
+    private var needsScrolling: Bool {
+        inspiration.isLoading || !inspiration.cards.isEmpty || inspiration.errorMessage != nil
+    }
+
+    private var sheetContents: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            V2IOSSheetHeader(title: "找方向", dismiss: dismiss.callAsFunction)
+            TextField("本章推进边界（可选）", text: $inspiration.pacingBoundary)
+                .font(V2DeskType.prose(14)).textFieldStyle(.plain).padding(13).v2IOSPaper()
+                .disabled(!canEditChapter)
+            if inspiration.isLoading { ProgressView("正在找方向").frame(maxWidth: .infinity, minHeight: 120) }
+            if let error = inspiration.errorMessage {
+                Text(error).font(V2DeskType.control(13)).foregroundStyle(Color.red).padding(13).v2IOSPaper(.card)
+            }
+            ForEach(inspiration.cards) { card in
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(card.body).font(V2DeskType.prose(14.5)).lineSpacing(6)
+                    V2IOSSecondaryButton(title: inspiration.adoptedCardIDs.contains(card.id) || addingID == card.id ? "已加入意图" : "加入意图") { add(card) }
+                        .disabled(!canEditChapter || inspiration.adoptedCardIDs.contains(card.id) || addingID == card.id)
+                }.padding(14).v2IOSPaper(.manuscriptPaper)
+            }
+            if inspiration.canUndo(chapterID: editor.currentChapter?.id ?? "", currentBible: editor.currentChapter?.userPrompt ?? "") {
+                V2IOSSecondaryButton(title: "撤销这次加入", tone: .accent) { undo() }
+                    .disabled(!canEditChapter)
+            }
+            V2IOSPrimaryButton(title: inspiration.cards.isEmpty ? "开始找灵感" : "换三个", disabled: inspiration.isLoading || !canEditChapter) {
+                selectedDetent = .large
+                if let chapter = editor.currentChapter { inspiration.generate(for: chapter) }
+            }
+        }
+        .padding(20)
+    }
 
     private func add(_ card: InspirationCard) {
         guard let chapter = editor.currentChapter else { return }

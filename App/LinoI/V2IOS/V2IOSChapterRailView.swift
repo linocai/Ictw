@@ -5,6 +5,7 @@ struct V2IOSChapterRailView: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var agents: AgentSettingsStore
+    @EnvironmentObject private var sync: ClientSyncStore
     @State private var showingWorld = false
     @State private var showingCharacters = false
     @State private var showingBookSettings = false
@@ -30,6 +31,8 @@ struct V2IOSChapterRailView: View {
                             .frame(minHeight: 52)
                     }
                     .buttonStyle(.plain)
+                    .disabled(!sync.networkActionsAvailable)
+                    .accessibilityHint(sync.networkActionsAvailable ? "" : "离线时不能新建章节")
                     .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 4, trailing: 20))
                     .listRowBackground(Color.clear)
                 }
@@ -59,7 +62,7 @@ struct V2IOSChapterRailView: View {
         }
         .sheet(isPresented: $showingExport) {
             V2IOSExportSheet(currentChapterID: nil)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
@@ -80,6 +83,7 @@ struct V2IOSChapterRailView: View {
                 Text("章节")
                     .font(V2DeskType.control(11)).foregroundStyle(Color.secondary)
             }
+            if !sync.isOnline { V2DeskSyncPill(state: .offline, compact: true) }
             Spacer()
             Menu {
                 Button("书设置") { showingBookSettings = true }

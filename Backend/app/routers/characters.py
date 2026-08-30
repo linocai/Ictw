@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,8 @@ from app.services.archive_v2 import (
     invalidate_archive_if_input_changed,
     invalidate_downstream_archives,
 )
+from app.services.content_revisions import bump_content_revision, require_matching_revision
+from app.services.search_index import rebuild_book_search_index
 
 router = APIRouter(tags=["characters"])
 
@@ -46,6 +48,7 @@ def _character_event_read(event: CharacterEvent) -> CharacterEventRead:
         event_text=event.event_text,
         created_at=event.created_at,
         updated_at=event.updated_at,
+        content_revision=event.content_revision,
         chapter_index=event.chapter.index if event.chapter is not None else None,
     )
 
@@ -109,6 +112,7 @@ def _character_read(db: Session, character: Character) -> CharacterRead:
                 event_text=event.event_text,
                 created_at=event.created_at,
                 updated_at=event.updated_at,
+                content_revision=event.content_revision,
                 chapter_index=event.chapter.index,
                 source="legacy",
                 editable=True,
@@ -165,6 +169,8 @@ def create_character(book_id: str, payload: CharacterCreate, db: Session = Depen
     values = payload.model_dump(exclude={"dynamic_fields"})
     character = Character(book_id=book_id, **values)
     db.add(character)
+    db.flush()
+    rebuild_book_search_index(db, book_id)
     db.commit()
     db.refresh(character)
     return _character_read(db, character)
@@ -179,6 +185,8 @@ def import_characters(book_id: str, payload: CharacterImportRequest, db: Session
         character = Character(book_id=book_id, name=item.name, role=item.role, fixed_profile=item.fixed_profile)
         db.add(character)
         created.append(character)
+    db.flush()
+    rebuild_book_search_index(db, book_id)
     db.commit()
     for character in created:
         db.refresh(character)
@@ -194,10 +202,16 @@ def get_character(character_id: str, db: Session = Depends(get_db)) -> Character
 
 
 @router.patch("/characters/{character_id}", response_model=CharacterRead)
-def patch_character(character_id: str, payload: CharacterPatch, db: Session = Depends(get_db)) -> CharacterRead:
+def patch_character(
+    character_id: str,
+    payload: CharacterPatch,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> CharacterRead:
     character = db.get(Character, character_id)
     if character is None:
         raise HTTPException(status_code=404, detail="character not found")
+    require_matching_revision(character, if_match, resource_type="character", resource_id=character.id, db=db)
     old_name = character.name
     writer_input_changed = bool({"name", "role", "fixed_profile", "dynamic_fields"} & payload.model_fields_set)
     updates = payload.model_dump(exclude_unset=True, exclude={"dynamic_fields"})
@@ -207,6 +221,9 @@ def patch_character(character_id: str, payload: CharacterPatch, db: Session = De
         db.flush()
         rebuild_book_projection(db, character.book_id)
     invalidated = invalidate_writer_inputs(db, chapters_for_character(db, character.id)) if writer_input_changed else []
+    if payload.model_fields_set:
+        bump_content_revision(character)
+        rebuild_book_search_index(db, character.book_id)
     db.commit()
     cancel_local_writer_jobs(invalidated)
     db.refresh(character)
@@ -214,9 +231,14 @@ def patch_character(character_id: str, payload: CharacterPatch, db: Session = De
 
 
 @router.delete("/characters/{character_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_character(character_id: str, db: Session = Depends(get_db)) -> Response:
+def delete_character(
+    character_id: str,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> Response:
     character = db.get(Character, character_id)
     if character is not None:
+        require_matching_revision(character, if_match, resource_type="character", resource_id=character.id, db=db)
         book_id = character.book_id
         affected_chapters = sorted(
             (link.chapter for link in character.chapter_links), key=lambda chapter: chapter.index
@@ -224,13 +246,19 @@ def delete_character(character_id: str, db: Session = Depends(get_db)) -> Respon
         invalidated = invalidate_writer_inputs(db, affected_chapters)
         for chapter in affected_chapters:
             invalidate_archive_if_input_changed(db, chapter, force=True)
+            bump_content_revision(chapter)
         db.delete(character)
         db.flush()
         if affected_chapters:
-            invalidate_downstream_archives(
+            downstream_ids = invalidate_downstream_archives(
                 db, book_id, after_index=max(0, affected_chapters[0].index - 1)
             )
+            for downstream_id in downstream_ids:
+                downstream = db.get(Chapter, downstream_id)
+                if downstream is not None:
+                    bump_content_revision(downstream)
         rebuild_book_projection(db, book_id)
+        rebuild_book_search_index(db, book_id)
         db.commit()
         cancel_local_writer_jobs(invalidated)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -238,21 +266,40 @@ def delete_character(character_id: str, db: Session = Depends(get_db)) -> Respon
 
 @router.patch("/character-events/{event_id}", response_model=CharacterEventRead)
 def patch_character_event(
-    event_id: str, payload: CharacterEventPatch, db: Session = Depends(get_db)
+    event_id: str, payload: CharacterEventPatch, db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> CharacterEventRead:
     event = db.get(CharacterEvent, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="character event not found")
+    require_matching_revision(event, if_match, resource_type="character_event", resource_id=event.id, db=db)
     event.event_text = truncate_to_nonspace(payload.event_text, CHARACTER_EVENT_MAX_CHARS)
+    bump_content_revision(event)
+    rebuild_book_search_index(db, event.book_id)
     db.commit()
     db.refresh(event)
     return _character_event_read(event)
 
 
+@router.get("/character-events/{event_id}", response_model=CharacterEventRead)
+def get_character_event(event_id: str, db: Session = Depends(get_db)) -> CharacterEventRead:
+    event = db.get(CharacterEvent, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="character event not found")
+    return _character_event_read(event)
+
+
 @router.delete("/character-events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_character_event(event_id: str, db: Session = Depends(get_db)) -> Response:
+def delete_character_event(
+    event_id: str,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> Response:
     event = db.get(CharacterEvent, event_id)
     if event is not None:
+        require_matching_revision(event, if_match, resource_type="character_event", resource_id=event.id, db=db)
+        book_id = event.book_id
         db.delete(event)
+        rebuild_book_search_index(db, book_id)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

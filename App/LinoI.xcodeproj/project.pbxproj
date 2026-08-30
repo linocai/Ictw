@@ -15,6 +15,7 @@
 		A00000000000000000000104 /* NoticeBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000124 /* NoticeBus.swift */; };
 		A00000000000000000000105 /* ChapterDraftCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000125 /* ChapterDraftCache.swift */; };
 		A00000000000000000000106 /* LinoStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000126 /* LinoStores.swift */; };
+		A00000000000000000000136 /* ClientSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000146 /* ClientSyncStore.swift */; };
 		A00000000000000000000107 /* LinoComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000127 /* LinoComponents.swift */; };
 		A00000000000000000000108 /* ShelfViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000128 /* ShelfViews.swift */; };
 		A00000000000000000000109 /* WorkspaceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000129 /* WorkspaceViews.swift */; };
@@ -28,6 +29,7 @@
 		B00000000000000000000202 /* LinoAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000123 /* LinoAPI.swift */; };
 		B00000000000000000000203 /* LinoModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000122 /* LinoModels.swift */; };
 		B00000000000000000000204 /* ChapterDraftCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000125 /* ChapterDraftCache.swift */; };
+		B00000000000000000000233 /* ClientSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000146 /* ClientSyncStore.swift */; };
 		B00000000000000000000205 /* NoticeBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000124 /* NoticeBus.swift */; };
 		B00000000000000000000206 /* LinoTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000121 /* LinoTheme.swift */; };
 		B00000000000000000000207 /* LinoComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000127 /* LinoComponents.swift */; };
@@ -84,6 +86,7 @@
 		A00000000000000000000124 /* NoticeBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoticeBus.swift; sourceTree = "<group>"; };
 		A00000000000000000000125 /* ChapterDraftCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChapterDraftCache.swift; sourceTree = "<group>"; };
 		A00000000000000000000126 /* LinoStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoStores.swift; sourceTree = "<group>"; };
+		A00000000000000000000146 /* ClientSyncStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientSyncStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000127 /* LinoComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoComponents.swift; sourceTree = "<group>"; };
 		A00000000000000000000128 /* ShelfViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfViews.swift; sourceTree = "<group>"; };
 		A00000000000000000000129 /* WorkspaceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceViews.swift; sourceTree = "<group>"; };
@@ -172,6 +175,7 @@
 				A00000000000000000000124 /* NoticeBus.swift */,
 				A00000000000000000000125 /* ChapterDraftCache.swift */,
 				A00000000000000000000126 /* LinoStores.swift */,
+				A00000000000000000000146 /* ClientSyncStore.swift */,
 				A00000000000000000000127 /* LinoComponents.swift */,
 				A00000000000000000000128 /* ShelfViews.swift */,
 				A00000000000000000000129 /* WorkspaceViews.swift */,
@@ -379,6 +383,7 @@
 				A00000000000000000000104 /* NoticeBus.swift in Sources */,
 				A00000000000000000000105 /* ChapterDraftCache.swift in Sources */,
 				A00000000000000000000106 /* LinoStores.swift in Sources */,
+				A00000000000000000000136 /* ClientSyncStore.swift in Sources */,
 				A00000000000000000000107 /* LinoComponents.swift in Sources */,
 				A00000000000000000000108 /* ShelfViews.swift in Sources */,
 				A00000000000000000000109 /* WorkspaceViews.swift in Sources */,
@@ -408,6 +413,7 @@
 				B00000000000000000000205 /* NoticeBus.swift in Sources */,
 				B00000000000000000000204 /* ChapterDraftCache.swift in Sources */,
 				B00000000000000000000201 /* LinoStores.swift in Sources */,
+				B00000000000000000000233 /* ClientSyncStore.swift in Sources */,
 				B00000000000000000000207 /* LinoComponents.swift in Sources */,
 				B00000000000000000000211 /* LinoIMacApp.swift in Sources */,
 				B00000000000000000000212 /* MacShell.swift in Sources */,
@@ -554,7 +560,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 46;
+				CURRENT_PROJECT_VERSION = 47;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -564,7 +570,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.0.4;
+				MARKETING_VERSION = 2.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -580,7 +586,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 46;
+				CURRENT_PROJECT_VERSION = 47;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LinoI/Info.plist;
@@ -589,7 +595,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.0.4;
+				MARKETING_VERSION = 2.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -606,7 +612,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 46;
+				CURRENT_PROJECT_VERSION = 47;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -616,7 +622,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 2.0.4;
+				MARKETING_VERSION = 2.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;
@@ -632,7 +638,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 46;
+				CURRENT_PROJECT_VERSION = 47;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -642,7 +648,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 2.0.4;
+				MARKETING_VERSION = 2.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;

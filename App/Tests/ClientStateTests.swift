@@ -102,6 +102,157 @@ private func testAPIEndpointBearerAndStructuredConfigurationError() throws {
     let structured = APIClient.structuredError(from: body)
     try expect(structured?.code == "llm_profile_not_configured", "configuration code must decode as structured API error")
     try expect(structured?.message == "该 Agent 尚未完成可用模型配置", "configuration message must remain user-displayable")
+
+    let conditional = try api.preparedRequest("/chapters/chapter-1", method: "PATCH", ifMatch: 7)
+    try expect(conditional.value(forHTTPHeaderField: "If-Match") == "\"7\"", "v2.1 writes must send a quoted content revision")
+    let legacy = try api.preparedRequest("/chapters/chapter-1", method: "PATCH", ifMatch: 0)
+    try expect(legacy.value(forHTTPHeaderField: "If-Match") == nil, "pre-v2.1 responses must remain additive-compatible")
+    let personaCreate = try api.preparedRequest(
+        "/books/book-1/agent-personas/writer", method: "PUT", ifMatch: 0, allowZeroRevision: true
+    )
+    try expect(personaCreate.value(forHTTPHeaderField: "If-Match") == "\"0\"", "book persona creation must conditionally claim an absent override")
+    let bindingCreate = try api.preparedRequest(
+        "/books/book-1/agent-model-bindings/writer", method: "PUT", ifMatch: 0, allowZeroRevision: true
+    )
+    try expect(bindingCreate.value(forHTTPHeaderField: "If-Match") == "\"0\"", "book model override creation must conditionally claim an absent row")
+}
+
+private func testRevisionAndSearchContractsDecode() throws {
+    var chapter = try makeChapter()
+    chapter.contentRevision = 7
+    let local = LocalChapterDraft(chapter: chapter, dirty: true)
+    try expect(local.shouldRestore(over: chapter), "a local draft may restore only onto its exact revision baseline")
+    var newerServer = chapter
+    newerServer.contentRevision = 8
+    try expect(!local.shouldRestore(over: newerServer), "a server revision change must never be ordered by device time")
+
+    let data = try JSONSerialization.data(withJSONObject: [
+        "query": "废城",
+        "total": 1,
+        "items": [[
+            "id": "chapter-1:body", "result_type": "chapter", "book_id": "book-1",
+            "chapter_id": "chapter-1", "title": "第一章", "snippet": "进入废城",
+        ]],
+    ])
+    let response = try JSONDecoder().decode(SearchResponse.self, from: data)
+    try expect(response.query == "废城" && response.items.first?.type == "chapter", "search must decode server result_type and bounded snippet")
+}
+
+private func testLegacyCharactersDefaultMissingRevisions() throws {
+    let data = try JSONSerialization.data(withJSONObject: [
+        "id": "character-1", "book_id": "book-1", "name": "蒋语笛",
+        "role": "主角", "fixed_profile": "冷静", "dynamic_fields": [:],
+        "events": [[
+            "id": "event-1", "book_id": "book-1", "character_id": "character-1",
+            "chapter_id": "chapter-1", "event_type": "relationship",
+            "event_text": "与朋友重逢", "chapter_index": 1,
+        ]],
+    ])
+    let character = try JSONDecoder().decode(Character.self, from: data)
+    try expect(character.contentRevision == 0, "pre-v2.1 characters must decode without content_revision")
+    try expect(character.events.first?.contentRevision == 0, "pre-v2.1 character events must decode without content_revision")
+    _ = try JSONEncoder().encode(character)
+
+    let profileData = try JSONSerialization.data(withJSONObject: [
+        "id": "profile-1", "name": "默认模型", "provider": "openai_compatible",
+        "base_url": "https://example.test/v1", "model_name": "writer-model",
+    ])
+    let profile = try JSONDecoder().decode(LLMProfile.self, from: profileData)
+    try expect(profile.contentRevision == 0, "pre-v2.1 model profiles must decode without content_revision")
+}
+
+private func testAuthorFacingCompatibilityErrorsAndShelfDates() throws {
+    let oldBackend = LinoErrorPresenter.present(error: APIError.http(404, "Not Found"))
+    try expect(oldBackend.message.contains("升级后端"), "a missing new endpoint must explain the rolling-upgrade action")
+    try expect(!oldBackend.message.contains("Not Found"), "raw English 404 copy must not reach the author")
+
+    do {
+        _ = try JSONDecoder().decode(SearchResult.self, from: Data("{}".utf8))
+        throw TestFailure.assertion("invalid server JSON should fail decoding")
+    } catch let failure as TestFailure {
+        throw failure
+    } catch {
+        let presented = LinoErrorPresenter.present(error: error)
+        try expect(presented.message.contains("数据") && presented.message.contains("后端"), "decoding failures must become actionable Chinese copy")
+        try expect(!presented.message.contains("couldn’t be read"), "Foundation decoding text must not reach the author")
+    }
+
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+    let current = calendar.date(from: DateComponents(year: 2026, month: 8, day: 30, hour: 12))!
+    try expect(
+        BookUpdatedAtPresentation.label("2026-08-30T11:23:41.662723", currentDate: current, calendar: calendar) == "今天更新",
+        "today's timezone-less backend timestamp must read as today"
+    )
+    try expect(
+        BookUpdatedAtPresentation.label("2026-08-21T11:23:41", currentDate: current, calendar: calendar) == "8月21日更新",
+        "same-year shelf dates must stay compact"
+    )
+    try expect(
+        BookUpdatedAtPresentation.label("legacy", currentDate: current, calendar: calendar) == "最近更新",
+        "malformed legacy timestamps must never leak raw wire text"
+    )
+}
+
+private func testPendingMutationReplaysOriginalJSONShape() throws {
+    let original = try JSONSerialization.data(withJSONObject: [
+        "title": "离线标题",
+        "world_setting": "雨夜",
+    ])
+    let replayed = try JSONEncoder.lino.encode(RawJSONPayload(data: original))
+    let object = try JSONSerialization.jsonObject(with: replayed) as? [String: Any]
+    try expect(object?["title"] as? String == "离线标题", "pending replay must keep the original top-level fields")
+    try expect(object?["value"] == nil, "pending replay must not wrap the payload in a synthetic value field")
+}
+
+private func testLocalDraftRoundTripPreservesAuthorInputs() throws {
+    var chapter = try makeChapter()
+    chapter.title = "雨夜"
+    chapter.userPrompt = "只让关系前进一步"
+    chapter.authorNote = "避免直白解释"
+    chapter.draftText = "离线正文"
+    chapter.characterLinks = [ChapterLink(characterId: "character-2")]
+    chapter.exemptedCharacterNames = ["未登场人物"]
+    chapter.contentRevision = 9
+
+    let original = LocalChapterDraft(chapter: chapter, dirty: true)
+    let data = try JSONEncoder().encode(original)
+    let restored = try JSONDecoder().decode(LocalChapterDraft.self, from: data)
+    let applied = restored.apply(to: try makeChapter())
+
+    try expect(restored.version == LocalChapterDraft.currentVersion, "new local drafts must write their schema version")
+    try expect(applied.title == chapter.title && applied.userPrompt == chapter.userPrompt, "local draft must restore author title and intent")
+    try expect(applied.authorNote == chapter.authorNote && applied.draftText == chapter.draftText, "local draft must restore author note and prose")
+    try expect(applied.characterLinks == chapter.characterLinks && applied.exemptedCharacterNames == chapter.exemptedCharacterNames, "local draft must restore character selection and exemptions")
+}
+
+private func testOfflineSnapshotCacheKeepsResourcesSeparate() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("ictw-sync-cache-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let bookData = try JSONSerialization.data(withJSONObject: [
+        "id": "book-1", "title": "离线书", "world_setting": "", "chapter_count": 1,
+        "character_count": 0, "archive_pending_count": 0, "archive_attention_count": 0,
+        "updated_at": "2026-08-30T00:00:00", "content_revision": 4,
+    ])
+    let book = try JSONDecoder().decode(Book.self, from: bookData)
+    var chapter = try makeChapter()
+    chapter.contentRevision = 4
+    let cache = ClientSnapshotCache(root: root)
+    cache.saveBooks([book])
+    cache.saveChapter(chapter)
+    cache.saveChapters([try makeChapterSummary(id: chapter.id, index: 1, title: chapter.title, status: chapter.status)], bookID: book.id)
+    try expect(cache.books().first?.contentRevision == 4, "bookshelf snapshot must survive a cold launch")
+    try expect(cache.chapter(id: chapter.id)?.contentRevision == 4, "reading snapshot must persist independently of its directory row")
+    try expect(cache.chapters(bookID: book.id).count == 1, "chapter directory must persist independently of prose")
+}
+
+private func testSyncCacheReportsWriteFailure() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("ictw-sync-cache-blocked-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("not a directory".utf8).write(to: root)
+    let cache = ClientSnapshotCache(root: root)
+    try expect(!cache.saveMutations([]), "pending mutation persistence must report a blocked cache path")
+    try expect(!cache.saveConflicts([]), "conflict persistence must report a blocked cache path")
 }
 
 private func testInspirationResponseAndEmptySnapshotRequestDecode() throws {
@@ -1344,6 +1495,13 @@ private struct ClientStateTestRunner {
         try testLegacySynopsisDecodesAsCanonicalSummary()
         try testConnectionDefaultMigrationPreservesCustomEndpoint()
         try testAPIEndpointBearerAndStructuredConfigurationError()
+        try testRevisionAndSearchContractsDecode()
+        try testLegacyCharactersDefaultMissingRevisions()
+        try testAuthorFacingCompatibilityErrorsAndShelfDates()
+        try testPendingMutationReplaysOriginalJSONShape()
+        try testLocalDraftRoundTripPreservesAuthorInputs()
+        try testOfflineSnapshotCacheKeepsResourcesSeparate()
+        try testSyncCacheReportsWriteFailure()
         try testInspirationResponseAndEmptySnapshotRequestDecode()
         try testInspirationSnapshotStalenessAppendAndUndo()
         try testInspirationErrorsUseAuthorFacingCopy()

@@ -312,7 +312,11 @@ private struct LinoICharacterEventRow: View {
                         Button("取消") { draftText = event.eventText; isEditing = false }
                             .buttonStyle(LinoITintButtonStyle(compact: true))
                         Button("保存") {
-                            Task { await characters.updateEvent(event, text: draftText); isEditing = false }
+                            Task {
+                                if await characters.updateEvent(event, text: draftText) {
+                                    isEditing = false
+                                }
+                            }
                         }
                         .buttonStyle(LinoIPrimaryButtonStyle(compact: true))
                     }

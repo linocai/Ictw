@@ -76,8 +76,11 @@ require "macOS inspiration sheet must keep an explicit start button" \
 # explicit Writer candidate-flow types, while allowing the unrelated internal
 # inspiration `recordAdoption` undo mechanism.
 v2_dirs=("$app_dir/LinoI/V2Shared" "$app_dir/LinoI/V2IOS" "$app_dir/LinoIMac/V2")
-forbid "V2 author-facing code must not expose candidate/adopt/discard copy" \
-  "${swift_only[@]}" -iE '"[^"]*(候选|采用|丢弃|candidate|adopt|discard)[^"]*"' "${v2_dirs[@]}"
+# v2.1 has an explicit *server/local conflict* decision. “采用服务器版本” is
+# therefore legitimate recovery copy, unlike the retired Writer-candidate
+# adoption flow. Keep the guard narrowly focused on candidate wording.
+forbid "V2 author-facing code must not expose Writer candidate copy" \
+  "${swift_only[@]}" -iE '"[^"]*(候选|candidate)[^"]*"' "${v2_dirs[@]}"
 forbid "V2 author-facing code must not expose a Writer candidate flow" \
   "${swift_only[@]}" -E 'WriterCandidate|AdoptCandidate|DiscardCandidate|writerCandidate|adoptCandidate|discardCandidate' "${v2_dirs[@]}"
 
@@ -107,6 +110,17 @@ fi
 require "Profile binding must send only llm_profile_id" \
   -F 'AgentBindingProfilePayload(llmProfileId: profileId)' "$app_dir/LinoI/LinoStores.swift"
 
+# Profile PATCH bodies can contain a newly entered API key, but the offline
+# pending/conflict cache is durable and author-visible. Keep the redacted
+# payload boundary mechanically pinned so a later refactor cannot serialize a
+# credential along with a conflict record.
+require "Profile conflicts must use the redacted payload" \
+  -F 'LLMProfileConflictPayload(profile: profile)' "$app_dir/LinoI/LinoStores.swift"
+forbid "Sync cache must never contain API-key fields" \
+  -iE 'api[_-]?key' "$app_dir/LinoI/ClientSyncStore.swift"
+require "Book override creation must explicitly opt into If-Match zero" \
+  -F 'allowZeroRevision: revision == nil' "$app_dir/LinoI/LinoStores.swift"
+
 # NoticeBus is the only channel that tells the author a save failed. A single
 # overlay on the app root is invisible inside pushed destinations and sheets.
 require "iOS notice overlay must exist as a reusable modifier" \
@@ -118,6 +132,16 @@ for notice_host in \
   require "Every iOS presentation context that can save must carry the notice overlay: $notice_host" \
     -F '.v2IOSNoticeOverlay()' "$notice_host"
 done
+
+# A notice inset hosted outside the book-settings NavigationStack occupies the
+# same top strip as its trailing Done button. The close target can then dismiss
+# both the notice and the sheet. Pin the modifier to the List content, where
+# SwiftUI starts the inset below the navigation bar.
+if ! perl -0777 -ne 'exit(/\.v2IOSNoticeOverlay\(\)\s*\.navigationTitle\("书设置"\)/s ? 0 : 1)' \
+    "$app_dir/LinoI/V2IOS/V2IOSSettingsAndExport.swift"; then
+  print -u2 "Book-settings notices must stay below the navigation bar"
+  exit 1
+fi
 
 # Rewrite and delete were both absent from the entire v2 UI until v2.0.4: the
 # store methods and the backend endpoints existed the whole time and simply had
@@ -196,6 +220,7 @@ xcrun swiftc -parse-as-library \
   "$app_dir/LinoI/LinoModels.swift" \
   "$app_dir/LinoI/LinoAPI.swift" \
   "$app_dir/LinoI/ChapterDraftCache.swift" \
+  "$app_dir/LinoI/ClientSyncStore.swift" \
   "$app_dir/LinoI/InspirationCreator.swift" \
   "$app_dir/LinoI/V2Shared/V2DeskPresentation.swift" \
   "$app_dir/LinoI/LinoTheme.swift" \

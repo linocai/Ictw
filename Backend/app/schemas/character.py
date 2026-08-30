@@ -45,6 +45,7 @@ class CharacterEventRead(ORMModel):
     event_text: str
     created_at: datetime
     updated_at: datetime
+    content_revision: int = 1
     chapter_index: int | None = None
     source: str = "legacy"
     editable: bool = True
@@ -60,4 +61,5 @@ class CharacterRead(ORMModel):
     dynamic_fields_updated_chapter_index: int | None = None
     created_at: datetime
     updated_at: datetime
+    content_revision: int = 1
     events: list[CharacterEventRead] = Field(default_factory=list)

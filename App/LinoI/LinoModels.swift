@@ -13,6 +13,36 @@ enum ConnectionEndpoint {
     }
 }
 
+/// Turns the backend's wire timestamp into quiet, author-facing shelf copy.
+/// Only the calendar date is used: older backends return a timezone-less
+/// value, so interpreting the clock portion would create false day changes.
+enum BookUpdatedAtPresentation {
+    static func label(
+        _ rawValue: String,
+        currentDate: Date = Date(),
+        calendar: Calendar = .current
+    ) -> String {
+        let datePart = rawValue.prefix(10).split(separator: "-", omittingEmptySubsequences: false)
+        guard datePart.count == 3,
+              let year = Int(datePart[0]),
+              let month = Int(datePart[1]),
+              let day = Int(datePart[2]),
+              (1...12).contains(month),
+              (1...31).contains(day) else {
+            return "最近更新"
+        }
+
+        let today = calendar.dateComponents([.year, .month, .day], from: currentDate)
+        if today.year == year, today.month == month, today.day == day {
+            return "今天更新"
+        }
+        if today.year == year {
+            return "\(month)月\(day)日更新"
+        }
+        return "\(year)年\(month)月\(day)日更新"
+    }
+}
+
 enum JSONValue: Codable, Hashable, Sendable, CustomStringConvertible {
     case string(String)
     case number(Double)
@@ -91,6 +121,9 @@ struct Book: Codable, Identifiable, Hashable, Sendable {
     var archivePendingCount: Int
     var archiveAttentionCount: Int
     var updatedAt: String
+    /// Server-issued monotonic write baseline. `0` is reserved for a response
+    /// from a pre-v2.1 backend during the rolling Backend-first upgrade.
+    var contentRevision: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id, title
@@ -100,6 +133,7 @@ struct Book: Codable, Identifiable, Hashable, Sendable {
         case archivePendingCount = "archive_pending_count"
         case archiveAttentionCount = "archive_attention_count"
         case updatedAt = "updated_at"
+        case contentRevision = "content_revision"
     }
 
     init(from decoder: Decoder) throws {
@@ -112,7 +146,95 @@ struct Book: Codable, Identifiable, Hashable, Sendable {
         archivePendingCount = try container.decodeIfPresent(Int.self, forKey: .archivePendingCount) ?? 0
         archiveAttentionCount = try container.decodeIfPresent(Int.self, forKey: .archiveAttentionCount) ?? 0
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
     }
+}
+
+/// A server-side search never returns a full hidden candidate or rejected
+/// evidence. The snippet is only the small, author-visible context needed to
+/// choose a destination.
+struct SearchResult: Codable, Identifiable, Hashable, Sendable {
+    var id: String
+    var resultType: String
+    var bookId: String
+    var chapterId: String?
+    var characterId: String?
+    var title: String
+    var snippet: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, snippet
+        case resultType = "result_type"
+        case bookId = "book_id"
+        case chapterId = "chapter_id"
+        case characterId = "character_id"
+    }
+
+    var type: String { resultType }
+}
+
+struct SearchResponse: Decodable, Hashable, Sendable {
+    var query: String
+    var items: [SearchResult]
+    var total: Int
+
+    enum CodingKeys: String, CodingKey { case query, items, results, total }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        query = try container.decodeIfPresent(String.self, forKey: .query) ?? ""
+        items = try container.decodeIfPresent([SearchResult].self, forKey: .items)
+            ?? container.decodeIfPresent([SearchResult].self, forKey: .results)
+            ?? []
+        total = try container.decodeIfPresent(Int.self, forKey: .total) ?? items.count
+    }
+}
+
+struct ProjectImportResult: Codable, Hashable, Sendable {
+    var bookID: String
+    var title: String
+    var warnings: [ProjectImportWarning]
+
+    enum CodingKeys: String, CodingKey { case bookID = "book_id", title, warnings }
+}
+
+struct ProjectImportWarning: Codable, Hashable, Sendable {
+    var code: String
+    var message: String
+}
+
+/// One bounded, public aggregation for text export. It intentionally omits
+/// author-hidden candidates and rejected evidence, and replaces the old
+/// client-side N+1 chapter fetch loop.
+struct BookExportData: Codable, Hashable, Sendable {
+    var bookID: String
+    var title: String
+    var worldSetting: String
+    var chapters: [BookExportChapter]
+    var characters: [BookExportCharacter]
+
+    enum CodingKeys: String, CodingKey {
+        case bookID = "book_id"
+        case title, chapters, characters
+        case worldSetting = "world_setting"
+    }
+}
+
+struct BookExportChapter: Codable, Hashable, Sendable {
+    var id: String
+    var index: Int
+    var title: String
+    var draftText: String
+    var status: String
+    enum CodingKeys: String, CodingKey { case id, index, title, status; case draftText = "draft_text" }
+}
+
+struct BookExportCharacter: Codable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var role: String
+    var fixedProfile: String
+    enum CodingKeys: String, CodingKey { case id, name, role; case fixedProfile = "fixed_profile" }
 }
 
 struct ChapterLink: Codable, Hashable, Sendable {
@@ -206,6 +328,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
     var characterLinks: [ChapterLink]
     var exemptedCharacterNames: [String]
     var archive: ChapterArchive?
+    var contentRevision: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id, index, title, summary, status, source, headline, archive
@@ -222,6 +345,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         case updatedAt = "updated_at"
         case characterLinks = "character_links"
         case exemptedCharacterNames = "exempted_character_names"
+        case contentRevision = "content_revision"
     }
 
     init(from decoder: Decoder) throws {
@@ -252,6 +376,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         characterLinks = try container.decodeIfPresent([ChapterLink].self, forKey: .characterLinks) ?? []
         exemptedCharacterNames = try container.decodeIfPresent([String].self, forKey: .exemptedCharacterNames) ?? []
         archive = try container.decodeIfPresent(ChapterArchive.self, forKey: .archive)
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
     }
 
     func encode(to encoder: Encoder) throws {
@@ -276,6 +401,7 @@ struct Chapter: Codable, Identifiable, Hashable, Sendable {
         try container.encode(characterLinks, forKey: .characterLinks)
         try container.encode(exemptedCharacterNames, forKey: .exemptedCharacterNames)
         try container.encodeIfPresent(archive, forKey: .archive)
+        try container.encode(contentRevision, forKey: .contentRevision)
     }
 }
 
@@ -291,6 +417,7 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
     var archiveSchema: String
     var archiveCanRetry: Bool
     var archiveLatestAttemptStatus: String?
+    var contentRevision: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id, index, title, status, source
@@ -300,6 +427,7 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
         case archiveSchema = "archive_schema"
         case archiveCanRetry = "archive_can_retry"
         case archiveLatestAttemptStatus = "archive_latest_attempt_status"
+        case contentRevision = "content_revision"
     }
 
     init(from decoder: Decoder) throws {
@@ -315,18 +443,20 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
         archiveSchema = try container.decodeIfPresent(String.self, forKey: .archiveSchema) ?? "none"
         archiveCanRetry = try container.decodeIfPresent(Bool.self, forKey: .archiveCanRetry) ?? false
         archiveLatestAttemptStatus = try container.decodeIfPresent(String.self, forKey: .archiveLatestAttemptStatus)
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
     }
 
     init(
         id: String, bookId: String, index: Int, title: String, status: String,
         source: String, updatedAt: String, archiveStatus: String = "stale",
         archiveSchema: String = "none", archiveCanRetry: Bool = false,
-        archiveLatestAttemptStatus: String? = nil
+        archiveLatestAttemptStatus: String? = nil, contentRevision: Int = 0
     ) {
         self.id = id; self.bookId = bookId; self.index = index; self.title = title
         self.status = status; self.source = source; self.updatedAt = updatedAt
         self.archiveStatus = archiveStatus; self.archiveSchema = archiveSchema
         self.archiveCanRetry = archiveCanRetry; self.archiveLatestAttemptStatus = archiveLatestAttemptStatus
+        self.contentRevision = contentRevision
     }
 }
 
@@ -405,6 +535,7 @@ enum ChapterEditingPolicy {
 
 struct CharacterEvent: Codable, Identifiable, Hashable, Sendable {
     let id: String
+    let bookId: String
     let characterId: String
     let chapterId: String
     var eventType: String
@@ -412,14 +543,31 @@ struct CharacterEvent: Codable, Identifiable, Hashable, Sendable {
     var chapterIndex: Int?
     var source: String?
     var editable: Bool?
+    var contentRevision: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id, source, editable
+        case bookId = "book_id"
         case characterId = "character_id"
         case chapterId = "chapter_id"
         case eventType = "event_type"
         case eventText = "event_text"
         case chapterIndex = "chapter_index"
+        case contentRevision = "content_revision"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        bookId = try container.decode(String.self, forKey: .bookId)
+        characterId = try container.decode(String.self, forKey: .characterId)
+        chapterId = try container.decode(String.self, forKey: .chapterId)
+        eventType = try container.decodeIfPresent(String.self, forKey: .eventType) ?? ""
+        eventText = try container.decodeIfPresent(String.self, forKey: .eventText) ?? ""
+        chapterIndex = try container.decodeIfPresent(Int.self, forKey: .chapterIndex)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        editable = try container.decodeIfPresent(Bool.self, forKey: .editable)
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
     }
 }
 
@@ -432,6 +580,7 @@ struct Character: Codable, Identifiable, Hashable, Sendable {
     var dynamicFields: [String: JSONValue]
     var dynamicFieldsUpdatedChapterIndex: Int?
     var events: [CharacterEvent]
+    var contentRevision: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id, name, role, events
@@ -439,6 +588,20 @@ struct Character: Codable, Identifiable, Hashable, Sendable {
         case fixedProfile = "fixed_profile"
         case dynamicFields = "dynamic_fields"
         case dynamicFieldsUpdatedChapterIndex = "dynamic_fields_updated_chapter_index"
+        case contentRevision = "content_revision"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        bookId = try container.decode(String.self, forKey: .bookId)
+        name = try container.decode(String.self, forKey: .name)
+        role = try container.decodeIfPresent(String.self, forKey: .role) ?? ""
+        fixedProfile = try container.decodeIfPresent(String.self, forKey: .fixedProfile) ?? ""
+        dynamicFields = try container.decodeIfPresent([String: JSONValue].self, forKey: .dynamicFields) ?? [:]
+        dynamicFieldsUpdatedChapterIndex = try container.decodeIfPresent(Int.self, forKey: .dynamicFieldsUpdatedChapterIndex)
+        events = try container.decodeIfPresent([CharacterEvent].self, forKey: .events) ?? []
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
     }
 }
 
@@ -448,11 +611,23 @@ struct LLMProfile: Codable, Identifiable, Hashable, Sendable {
     var provider: String
     var baseURL: String
     var modelName: String
+    var contentRevision: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id, name, provider
         case baseURL = "base_url"
         case modelName = "model_name"
+        case contentRevision = "content_revision"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "openai_compatible"
+        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        modelName = try container.decodeIfPresent(String.self, forKey: .modelName) ?? ""
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
     }
 }
 
@@ -463,6 +638,7 @@ struct AgentPersona: Codable, Identifiable, Hashable, Sendable {
     var editablePersona: String
     var defaultPersona: String
     var programProtocol: String
+    var contentRevision: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case agentRole = "agent_role"
@@ -470,6 +646,7 @@ struct AgentPersona: Codable, Identifiable, Hashable, Sendable {
         case editablePersona = "editable_persona"
         case defaultPersona = "default_persona"
         case programProtocol = "program_protocol"
+        case contentRevision = "content_revision"
     }
 
     init(from decoder: Decoder) throws {
@@ -479,6 +656,7 @@ struct AgentPersona: Codable, Identifiable, Hashable, Sendable {
         editablePersona = try container.decodeIfPresent(String.self, forKey: .editablePersona) ?? systemPrompt
         defaultPersona = try container.decodeIfPresent(String.self, forKey: .defaultPersona) ?? editablePersona
         programProtocol = try container.decodeIfPresent(String.self, forKey: .programProtocol) ?? ""
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
     }
 }
 
@@ -493,6 +671,7 @@ struct BookAgentPersona: Codable, Identifiable, Hashable, Sendable {
     var defaultPersona: String
     var effectivePersona: String
     var programProtocol: String
+    var contentRevision: Int?
 
     enum CodingKeys: String, CodingKey {
         case source
@@ -502,6 +681,7 @@ struct BookAgentPersona: Codable, Identifiable, Hashable, Sendable {
         case defaultPersona = "default_persona"
         case effectivePersona = "effective_persona"
         case programProtocol = "program_protocol"
+        case contentRevision = "content_revision"
     }
 }
 
@@ -641,6 +821,7 @@ struct AgentBinding: Codable, Identifiable, Hashable, Sendable {
     var effectiveTemperature: Double?
     var temperatureAdjustable: Bool
     var capabilities: ModelCapabilities
+    var contentRevision: Int
 
     enum CodingKeys: String, CodingKey {
         case agentRole = "agent_role"
@@ -653,6 +834,7 @@ struct AgentBinding: Codable, Identifiable, Hashable, Sendable {
         case effectiveTemperature = "effective_temperature"
         case temperatureAdjustable = "temperature_adjustable"
         case capabilities
+        case contentRevision = "content_revision"
     }
 
     init(from decoder: Decoder) throws {
@@ -667,6 +849,74 @@ struct AgentBinding: Codable, Identifiable, Hashable, Sendable {
         effectiveTemperature = try container.decodeIfPresent(Double.self, forKey: .effectiveTemperature)
         temperatureAdjustable = try container.decodeIfPresent(Bool.self, forKey: .temperatureAdjustable) ?? false
         capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities) ?? .unsupported
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
+    }
+}
+
+/// A complete model binding. Book overrides are all-or-nothing so the author
+/// can always explain the effective result as either “follow global” or “this
+/// book’s full override”, never a surprising mixture of two rows.
+struct AgentModelBindingValues: Codable, Hashable, Sendable {
+    var llmProfileId: String?
+    var thinkingEnabled: Bool?
+    var reasoningEffort: String?
+    var temperature: Double?
+    var effectiveThinkingEnabled: Bool?
+    var effectiveReasoningEffort: String?
+    var effectiveTemperature: Double?
+    var contentRevision: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case llmProfileId = "llm_profile_id"
+        case thinkingEnabled = "thinking_enabled"
+        case reasoningEffort = "reasoning_effort"
+        case temperature
+        case effectiveThinkingEnabled = "effective_thinking_enabled"
+        case effectiveReasoningEffort = "effective_reasoning_effort"
+        case effectiveTemperature = "effective_temperature"
+        case contentRevision = "content_revision"
+    }
+
+    /// The response additionally contains effective values and a revision.
+    /// A book override is a request body too, so never echo those read-only
+    /// response fields back to the server.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(llmProfileId, forKey: .llmProfileId)
+        try container.encode(thinkingEnabled, forKey: .thinkingEnabled)
+        try container.encode(reasoningEffort, forKey: .reasoningEffort)
+        try container.encode(temperature, forKey: .temperature)
+    }
+}
+
+struct BookAgentModelBinding: Codable, Identifiable, Hashable, Sendable {
+    var id: String { agentRole }
+    var agentRole: String
+    var source: String
+    var bookBinding: AgentModelBindingValues?
+    var globalBinding: AgentModelBindingValues?
+    var effectiveBinding: AgentModelBindingValues?
+    var capabilities: ModelCapabilities
+    var contentRevision: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case source, capabilities
+        case agentRole = "agent_role"
+        case bookBinding = "book_binding"
+        case globalBinding = "global_binding"
+        case effectiveBinding = "effective_binding"
+        case contentRevision = "content_revision"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agentRole = try container.decode(String.self, forKey: .agentRole)
+        source = try container.decodeIfPresent(String.self, forKey: .source) ?? "global"
+        bookBinding = try container.decodeIfPresent(AgentModelBindingValues.self, forKey: .bookBinding)
+        globalBinding = try container.decodeIfPresent(AgentModelBindingValues.self, forKey: .globalBinding)
+        effectiveBinding = try container.decodeIfPresent(AgentModelBindingValues.self, forKey: .effectiveBinding)
+        capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities) ?? .unsupported
+        contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision)
     }
 }
 

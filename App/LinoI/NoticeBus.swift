@@ -1,20 +1,42 @@
 import SwiftUI
 
+enum NoticeTone: Equatable {
+    case info
+    case success
+    case warning
+    case error
+
+    static func inferred(from message: String, critical: Bool) -> NoticeTone {
+        if critical { return .error }
+        if message.hasPrefix("已") || message.contains("成功") { return .success }
+        let warningWords = ["请", "不能", "失败", "中断", "未能", "错误", "不存在", "离线", "尚未", "暂无"]
+        if warningWords.contains(where: message.contains) { return .warning }
+        return .info
+    }
+}
+
 @MainActor
 final class NoticeBus: ObservableObject {
     struct Notice: Identifiable, Equatable {
         let id = UUID()
         let message: String
         let isCritical: Bool
+        let tone: NoticeTone
         let timestamp = Date()
+
+        init(message: String, isCritical: Bool, tone: NoticeTone? = nil) {
+            self.message = message
+            self.isCritical = isCritical
+            self.tone = tone ?? .inferred(from: message, critical: isCritical)
+        }
     }
 
     @Published var current: Notice?
     @Published private(set) var history: [Notice] = []
     private var automaticDismissTask: Task<Void, Never>?
 
-    func publish(_ message: String, critical: Bool = false) {
-        let notice = Notice(message: message, isCritical: critical)
+    func publish(_ message: String, critical: Bool = false, tone: NoticeTone? = nil) {
+        let notice = Notice(message: message, isCritical: critical, tone: tone)
         automaticDismissTask?.cancel()
         current = notice
         history.append(notice)
@@ -26,7 +48,7 @@ final class NoticeBus: ObservableObject {
 
     func publish(_ error: Error) {
         let presented = LinoErrorPresenter.present(error: error)
-        publish(presented.message, critical: presented.critical)
+        publish(presented.message, critical: presented.critical, tone: .error)
     }
 
     /// The optional identifier prevents an expired timer for an older notice
@@ -83,11 +105,11 @@ struct LinoIToast: View {
                 HStack(spacing: 9) {
                     #if os(iOS)
                     Circle()
-                        .fill(notice.isCritical ? LinoTheme.danger : LinoTheme.success)
+                        .fill(toneColor(notice.tone))
                         .frame(width: 6, height: 6)
                     #else
-                    Image(systemName: notice.isCritical ? "exclamationmark.shield.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(notice.isCritical ? LinoTheme.danger : LinoTheme.warning)
+                    Image(systemName: toneIcon(notice.tone))
+                        .foregroundStyle(toneColor(notice.tone))
                     #endif
                     Text(notice.message)
                         .font(LinoType.ui(13.5, .medium))
@@ -129,5 +151,23 @@ struct LinoIToast: View {
         let item = DispatchWorkItem { bus.dismiss(id: notice.id) }
         dismissWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.6, execute: item)
+    }
+
+    private func toneColor(_ tone: NoticeTone) -> Color {
+        switch tone {
+        case .info: LinoTheme.accent
+        case .success: LinoTheme.success
+        case .warning: LinoTheme.warning
+        case .error: LinoTheme.danger
+        }
+    }
+
+    private func toneIcon(_ tone: NoticeTone) -> String {
+        switch tone {
+        case .info: "info.circle.fill"
+        case .success: "checkmark.circle.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .error: "exclamationmark.circle.fill"
+        }
     }
 }

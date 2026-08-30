@@ -53,18 +53,28 @@ final class BookshelfStore: ObservableObject {
     @Published private(set) var isLoading = false
 
     private let session: AppSession
+    let sync: ClientSyncStore
 
-    init(session: AppSession) {
+    init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
+        self.sync = sync
+        books = sync.cache.books()
     }
 
     func load() async {
-        guard !session.token.isEmpty else { return }
+        // Cold start is local-first: a Ningbo outage must not turn a book the
+        // author already opened into an empty shelf.
+        if books.isEmpty { books = sync.cache.books() }
+        guard !session.token.isEmpty else { sync.markOffline(); return }
         isLoading = true
         defer { isLoading = false }
         do {
+            await sync.flush(using: session.api)
             books = try await session.api.request("/books")
+            sync.cache.saveBooks(books)
+            sync.markOnline()
         } catch {
+            if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
         }
     }
@@ -75,6 +85,8 @@ final class BookshelfStore: ObservableObject {
             let payload = BookPayload(title: title, world_setting: world)
             let book: Book = try await session.api.request("/books", method: "POST", body: payload)
             books.insert(book, at: 0)
+            sync.upsertBook(book)
+            sync.markOnline()
             session.currentBook = book
             return book
         } catch {
@@ -84,9 +96,13 @@ final class BookshelfStore: ObservableObject {
     }
 
     func open(_ book: Book) async {
+        session.currentBook = book
         do {
             session.currentBook = try await session.api.request("/books/\(book.id)")
+            if let current = session.currentBook { sync.upsertBook(current) }
+            sync.markOnline()
         } catch {
+            if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
         }
     }
@@ -97,17 +113,84 @@ final class BookshelfStore: ObservableObject {
         } else {
             books.insert(book, at: 0)
         }
+        sync.upsertBook(book)
     }
 
     func delete(_ book: Book) async {
         do {
-            try await session.api.rawRequest("/books/\(book.id)", method: "DELETE")
+            try await session.api.rawRequest("/books/\(book.id)", method: "DELETE", ifMatch: book.contentRevision)
             books.removeAll { $0.id == book.id }
+            sync.cache.saveBooks(books)
+            sync.markOnline()
             if session.currentBook?.id == book.id {
                 session.closeBook()
             }
         } catch {
+            if let conflict = error as? APIError,
+               case .writeConflict = conflict {
+                await sync.recordWriteConflict(
+                    kind: .book, id: book.id, path: "/books/\(book.id)", method: "DELETE",
+                    baseRevision: book.contentRevision, payload: EmptyMutationPayload(), baseSnapshot: book,
+                    error: conflict, api: session.api
+                )
+            } else if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
+        }
+    }
+
+    /// Full project backups are always prepared by the Backend in one
+    /// response. This keeps a many-chapter export from becoming a partial
+    /// client-side loop and gives both platforms one file-transfer seam.
+    func exportProject(_ book: Book) async -> Data? {
+        guard sync.networkActionsAvailable else {
+            session.notices.publish("离线时不能创建项目包，请恢复网络后重试。")
+            return nil
+        }
+        do {
+            let data = try await session.api.exportProject(bookID: book.id)
+            sync.markOnline()
+            return data
+        } catch {
+            if case APIError.transport = error { sync.markOffline() }
+            session.notices.publish(error)
+            return nil
+        }
+    }
+
+    func exportData(_ book: Book) async -> BookExportData? {
+        guard sync.networkActionsAvailable else {
+            session.notices.publish("离线时不能导出，请恢复网络后重试。")
+            return nil
+        }
+        do {
+            let data = try await session.api.exportData(bookID: book.id)
+            sync.markOnline()
+            return data
+        } catch {
+            if case APIError.transport = error { sync.markOffline() }
+            session.notices.publish(error)
+            return nil
+        }
+    }
+
+    @discardableResult
+    func importProject(_ data: Data) async -> ProjectImportResult? {
+        guard sync.networkActionsAvailable else {
+            session.notices.publish("离线时不能导入项目包，请恢复网络后重试。")
+            return nil
+        }
+        do {
+            let result = try await session.api.importProject(data)
+            // Import is explicitly a new book; fetch its public form rather
+            // than constructing a partial local Book from the response.
+            let book: Book = try await session.api.request("/books/\(result.bookID)")
+            upsert(book)
+            sync.markOnline()
+            return result
+        } catch {
+            if case APIError.transport = error { sync.markOffline() }
+            session.notices.publish(error)
+            return nil
         }
     }
 }
@@ -121,9 +204,11 @@ final class WorkspaceStore: ObservableObject {
     @Published var chapterPath: [ChapterSummary] = []
 
     private let session: AppSession
+    let sync: ClientSyncStore
 
-    init(session: AppSession) {
+    init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
+        self.sync = sync
     }
 
     /// Opens a book's chapter list. Clearing `chapterPath` is part of the
@@ -131,6 +216,8 @@ final class WorkspaceStore: ObservableObject {
     /// makes this the right call after the visible chapter has been deleted.
     func load(bookId: String) async {
         chapterPath = []
+        let cached = sync.cache.chapters(bookID: bookId)
+        if !cached.isEmpty { chapters = cached }
         await refreshChapters(bookId: bookId)
     }
 
@@ -143,8 +230,12 @@ final class WorkspaceStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
+            await sync.flush(using: session.api)
             chapters = try await session.api.request("/books/\(bookId)/chapters")
+            sync.cache.saveChapters(chapters, bookID: bookId)
+            sync.markOnline()
         } catch {
+            if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
         }
     }
@@ -157,8 +248,11 @@ final class WorkspaceStore: ObservableObject {
         do {
             let payload = ChapterCreatePayload(title: "新章节", user_prompt: "")
             let chapter: Chapter = try await session.api.request("/books/\(book.id)/chapters", method: "POST", body: payload)
+            sync.cache.saveChapter(chapter)
             upsert(chapter)
             chapters = try await session.api.request("/books/\(book.id)/chapters")
+            sync.cache.saveChapters(chapters, bookID: book.id)
+            sync.markOnline()
             if let created = chapters.first(where: { $0.id == chapter.id }) {
                 replaceCurrentDestination(with: created, orAppend: !replacingCurrentDestination)
                 return created
@@ -184,12 +278,23 @@ final class WorkspaceStore: ObservableObject {
     @discardableResult
     func saveBook(title: String, world: String) async -> Bool {
         guard let book = session.currentBook else { return false }
+        let payload = BookPayload(title: title, world_setting: world)
+        let baseBook = sync.cache.books().first(where: { $0.id == book.id }) ?? book
+        let base = BookPayload(title: baseBook.title, world_setting: baseBook.worldSetting)
         do {
-            let payload = BookPayload(title: title, world_setting: world)
-            let updated: Book = try await session.api.request("/books/\(book.id)", method: "PATCH", body: payload)
+            let updated: Book = try await session.api.request("/books/\(book.id)", method: "PATCH", body: payload, ifMatch: book.contentRevision)
             session.currentBook = updated
+            sync.upsertBook(updated)
+            sync.acknowledge(kind: .book, id: book.id)
+            sync.markOnline()
             return true
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH", baseRevision: book.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
+            } else if case APIError.transport = error {
+                sync.markOffline()
+                sync.enqueue(kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH", baseRevision: book.contentRevision, payload: payload, baseSnapshot: base)
+            }
             session.notices.publish(error)
             return false
         }
@@ -207,7 +312,8 @@ final class WorkspaceStore: ObservableObject {
             archiveStatus: chapter.archive?.status ?? "stale",
             archiveSchema: chapter.archive?.archiveSchema ?? "none",
             archiveCanRetry: chapter.archive?.canRetry ?? false,
-            archiveLatestAttemptStatus: chapter.archive?.latestAttemptStatus
+            archiveLatestAttemptStatus: chapter.archive?.latestAttemptStatus,
+            contentRevision: chapter.contentRevision
         )
         upsert(summary)
     }
@@ -223,6 +329,7 @@ final class WorkspaceStore: ObservableObject {
 
     func removeChapter(id: String) {
         chapters.removeAll { $0.id == id }
+        if let bookID = session.currentBook?.id { sync.cache.saveChapters(chapters, bookID: bookID) }
     }
 }
 
@@ -233,9 +340,11 @@ final class CharactersStore: ObservableObject {
     @Published private(set) var isLoading = false
 
     private let session: AppSession
+    let sync: ClientSyncStore
 
-    init(session: AppSession) {
+    init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
+        self.sync = sync
     }
 
     var selected: Character? {
@@ -247,12 +356,18 @@ final class CharactersStore: ObservableObject {
     }
 
     func load(bookId: String) async {
+        let cached = sync.cache.characters(bookID: bookId)
+        if !cached.isEmpty { characters = cached; ensureSelection() }
         isLoading = true
         defer { isLoading = false }
         do {
+            await sync.flush(using: session.api)
             characters = try await session.api.request("/books/\(bookId)/characters")
+            sync.cache.saveCharacters(characters, bookID: bookId)
+            sync.markOnline()
             ensureSelection()
         } catch {
+            if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
         }
     }
@@ -264,6 +379,8 @@ final class CharactersStore: ObservableObject {
             let payload = CharacterPatchPayload(name: name, role: role, fixed_profile: fixedProfile)
             let character: Character = try await session.api.request("/books/\(book.id)/characters", method: "POST", body: payload)
             characters.append(character)
+            sync.cache.saveCharacters(characters, bookID: book.id)
+            sync.markOnline()
             selectedCharacterId = character.id
             return character
         } catch {
@@ -287,12 +404,23 @@ final class CharactersStore: ObservableObject {
 
     @discardableResult
     func update(_ character: Character) async -> Bool {
+        let payload = CharacterPatchPayload(character)
+        let baseCharacter = sync.cache.characters(bookID: character.bookId).first(where: { $0.id == character.id }) ?? character
+        let base = CharacterPatchPayload(baseCharacter)
         do {
-            let payload = CharacterPatchPayload(character)
-            let updated: Character = try await session.api.request("/characters/\(character.id)", method: "PATCH", body: payload)
+            let updated: Character = try await session.api.request("/characters/\(character.id)", method: "PATCH", body: payload, ifMatch: character.contentRevision)
             replace(updated)
+            sync.cache.saveCharacters(characters, bookID: updated.bookId)
+            sync.acknowledge(kind: .character, id: character.id)
+            sync.markOnline()
             return true
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH", baseRevision: character.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
+            } else if case APIError.transport = error {
+                sync.markOffline()
+                sync.enqueue(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH", baseRevision: character.contentRevision, payload: payload, baseSnapshot: base)
+            }
             session.notices.publish(error)
             return false
         }
@@ -301,11 +429,16 @@ final class CharactersStore: ObservableObject {
     @discardableResult
     func delete(_ character: Character) async -> Bool {
         do {
-            try await session.api.rawRequest("/characters/\(character.id)", method: "DELETE")
+            try await session.api.rawRequest("/characters/\(character.id)", method: "DELETE", ifMatch: character.contentRevision)
             characters.removeAll { $0.id == character.id }
+            sync.cache.saveCharacters(characters, bookID: character.bookId)
+            sync.markOnline()
             ensureSelection()
             return true
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "DELETE", baseRevision: character.contentRevision, payload: EmptyMutationPayload(), baseSnapshot: character, error: conflict, api: session.api)
+            } else if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
             return false
         }
@@ -317,23 +450,70 @@ final class CharactersStore: ObservableObject {
         } else {
             characters.append(character)
         }
+        sync.cache.saveCharacters(characters, bookID: character.bookId)
     }
 
-    func updateEvent(_ event: CharacterEvent, text: String) async {
+    @discardableResult
+    func updateEvent(_ event: CharacterEvent, text: String) async -> Bool {
+        let payload = CharacterEventPatchPayload(event_text: text)
+        let base = CharacterEventPatchPayload(event_text: event.eventText)
         do {
-            let payload = CharacterEventPatchPayload(event_text: text)
-            let updated: CharacterEvent = try await session.api.request("/character-events/\(event.id)", method: "PATCH", body: payload)
+            let updated: CharacterEvent = try await session.api.request("/character-events/\(event.id)", method: "PATCH", body: payload, ifMatch: event.contentRevision)
             applyEventUpdate(updated)
+            sync.acknowledge(kind: .characterEvent, id: event.id)
+            sync.markOnline()
+            return true
         } catch {
+            if let conflict = error as? APIError,
+               case .writeConflict = conflict {
+                await sync.recordWriteConflict(
+                    kind: .characterEvent, id: event.id, path: "/character-events/\(event.id)", method: "PATCH",
+                    readPath: "/character-events/\(event.id)", readStrategy: .direct,
+                    baseRevision: event.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api
+                )
+                session.notices.publish(error)
+                return false
+            }
+            if case APIError.transport = error {
+                sync.markOffline()
+                guard sync.enqueue(
+                    kind: .characterEvent, id: event.id,
+                    path: "/character-events/\(event.id)", method: "PATCH",
+                    baseRevision: event.contentRevision,
+                    payload: payload, baseSnapshot: base
+                ) else {
+                    session.notices.publish("人物记录未能安全保存在本机，请保留编辑框后重试。", critical: true)
+                    return false
+                }
+                var local = event
+                local.eventText = text
+                applyEventUpdate(local)
+                session.notices.publish("当前离线，人物记录已保存在本机，恢复网络后会安全同步。")
+                return true
+            }
             session.notices.publish(error)
+            return false
         }
     }
 
     func deleteEvent(_ event: CharacterEvent) async {
+        guard sync.networkActionsAvailable else {
+            session.notices.publish("离线时不能删除人物记录；恢复连接后再试。")
+            return
+        }
         do {
-            try await session.api.rawRequest("/character-events/\(event.id)", method: "DELETE")
+            try await session.api.rawRequest("/character-events/\(event.id)", method: "DELETE", ifMatch: event.contentRevision)
             removeEvent(event)
+            sync.markOnline()
         } catch {
+            if case APIError.transport = error { sync.markOffline() }
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(
+                    kind: .characterEvent, id: event.id, path: "/character-events/\(event.id)", method: "DELETE",
+                    readPath: "/character-events/\(event.id)", readStrategy: .direct,
+                    baseRevision: event.contentRevision, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(), error: conflict, api: session.api
+                )
+            }
             session.notices.publish(error)
         }
     }
@@ -342,11 +522,13 @@ final class CharactersStore: ObservableObject {
         guard let charIdx = characters.firstIndex(where: { $0.id == event.characterId }) else { return }
         guard let eventIdx = characters[charIdx].events.firstIndex(where: { $0.id == event.id }) else { return }
         characters[charIdx].events[eventIdx] = event
+        sync.cache.saveCharacters(characters, bookID: characters[charIdx].bookId)
     }
 
     private func removeEvent(_ event: CharacterEvent) {
         guard let charIdx = characters.firstIndex(where: { $0.id == event.characterId }) else { return }
         characters[charIdx].events.removeAll { $0.id == event.id }
+        sync.cache.saveCharacters(characters, bookID: characters[charIdx].bookId)
     }
 
     func ensureSelection() {
@@ -384,14 +566,16 @@ final class ChapterEditorStore: ObservableObject {
     @Published private(set) var pendingExemptionNames: [String] = []
 
     private let session: AppSession
+    let sync: ClientSyncStore
     private let cache = ChapterDraftCache()
     private var pollingTask: Task<Void, Never>?
     private var pollingChapterId: String?
     private var pollingErrorNotified = false
     private var localEditRevision: UInt64 = 0
 
-    init(session: AppSession) {
+    init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
+        self.sync = sync
     }
 
     var draftCharCount: Int {
@@ -440,11 +624,30 @@ final class ChapterEditorStore: ObservableObject {
         checkerAppliesToVisibleDraft = false
         staleCheckedSnapshot = nil
         defer { isLoading = false }
+        // Offline-first reading. A local snapshot is safe to render because it
+        // is explicitly labelled by `sync.state`; a later refresh never
+        // replaces an unsent local draft.
+        if let cached = sync.cache.chapter(id: summary.id) {
+            currentChapter = cached
+            let local = cache.load(chapterId: cached.id)
+            if let local, local.shouldRestore(over: cached) {
+                currentChapter = local.apply(to: cached)
+                restoredLocalDraft = true
+                saveState = .restoredLocalDraft
+            } else {
+                saveState = sync.state(for: .chapter, id: cached.id) == .synced ? .synced : .localDraft
+            }
+        }
         do {
+            await sync.flush(using: session.api)
             let remote: Chapter = try await session.api.request("/chapters/\(summary.id)")
             if let pollingChapterId, pollingChapterId != remote.id {
                 stopPolling(for: pollingChapterId)
             }
+            // Capture the public baseline before applying a local draft. The
+            // base revision, not either device's clock, decides whether this
+            // draft can be safely restored onto the response.
+            sync.cache.saveChapter(remote)
             let local = cache.load(chapterId: remote.id)
             if let local, local.shouldRestore(over: remote) {
                 currentChapter = local.apply(to: remote)
@@ -455,6 +658,7 @@ final class ChapterEditorStore: ObservableObject {
                 cache.saveClean(remote)
                 saveState = .synced
             }
+            sync.markOnline()
             staleCheckedSnapshot = cache.loadCheckedSnapshot(chapterId: remote.id)
             pendingExemptionNames = []
             currentValidationReason = nil
@@ -475,6 +679,7 @@ final class ChapterEditorStore: ObservableObject {
                 pendingExemptionNames = outcome.pendingExemptionNames
             }
         } catch {
+            if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
         }
     }
@@ -529,13 +734,15 @@ final class ChapterEditorStore: ObservableObject {
         // Persist the exact outgoing snapshot before the network request. If
         // PATCH fails, the UI can truthfully promise the local draft survived.
         let localSnapshotSaved = cache.saveDirty(chapter)
+        let payload = ChapterPatchPayload(chapter)
+        let baseChapter = sync.cache.chapter(id: chapter.id) ?? chapter
+        let base = ChapterPatchPayload(baseChapter)
         let startingRevision = localEditRevision
         isSaving = true
         saveState = .savingRemotely
         defer { isSaving = false }
         do {
-            let payload = ChapterPatchPayload(chapter)
-            let saved: Chapter = try await session.api.request("/chapters/\(chapter.id)", method: "PATCH", body: payload)
+            let saved: Chapter = try await session.api.request("/chapters/\(chapter.id)", method: "PATCH", body: payload, ifMatch: chapter.contentRevision)
             guard currentChapter?.id == chapter.id else { return saved }
             // Keystrokes landing during the round trip must survive it. The
             // response reflects the text we sent, so adopting it wholesale
@@ -548,17 +755,33 @@ final class ChapterEditorStore: ObservableObject {
                 return saved
             }
             currentChapter = saved
+            sync.cache.saveChapter(saved)
+            sync.acknowledge(kind: .chapter, id: chapter.id)
+            sync.markOnline()
             cache.saveClean(saved)
             restoredLocalDraft = false
             saveState = .synced
             return saved
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH", baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
+                saveState = .remoteSaveFailed(message: "章节已在另一设备更新；本机内容已保留，等待比较。", localDraftPreserved: localSnapshotSaved)
+                session.notices.publish("章节已在另一设备更新；本机内容已保留。")
+                return nil
+            }
+            if case APIError.transport = error {
+                sync.markOffline()
+                sync.enqueue(kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH", baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base)
+                saveState = .localDraft
+                session.notices.publish("当前离线，修改已保存在本机，恢复网络后会安全同步。")
+                return nil
+            }
             let presented = LinoErrorPresenter.present(error: error)
             saveState = .remoteSaveFailed(
                 message: presented.message,
                 localDraftPreserved: localSnapshotSaved
             )
-            session.notices.publish(presented.message, critical: presented.critical)
+            session.notices.publish(presented.message, critical: presented.critical, tone: .error)
             return nil
         }
     }
@@ -566,8 +789,9 @@ final class ChapterEditorStore: ObservableObject {
     func importDraft(_ text: String) async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
         do {
-            let imported: Chapter = try await session.api.request("/chapters/\(chapter.id)/import", method: "POST", body: ChapterImportPayload(draft_text: text))
+            let imported: Chapter = try await session.api.request("/chapters/\(chapter.id)/import", method: "POST", body: ChapterImportPayload(draft_text: text), ifMatch: chapter.contentRevision)
             currentChapter = imported
+            sync.cache.saveChapter(imported)
             checkerResult = nil
             failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = false
@@ -621,13 +845,17 @@ final class ChapterEditorStore: ObservableObject {
         ChapterTaskOutcomeStore.clear(chapterID: saved.id)
         writingPhase = .extracting
         do {
-            let status = try await session.api.accept(chapterId: saved.id, overrideChecker: overrideChecker)
+            let status = try await session.api.accept(
+                chapterId: saved.id, contentRevision: saved.contentRevision,
+                overrideChecker: overrideChecker
+            )
             applyJobStatus(status, chapterId: saved.id)
             if !Self.isTerminalPhase(status.phase) {
                 pollJob(chapterId: saved.id)
             }
             return currentChapter
         } catch {
+            _ = await recordActionRevisionConflictIfNeeded(error, chapter: saved)
             if await adoptRunningJobIfNeeded(error, chapterId: saved.id) {
                 return currentChapter
             }
@@ -644,13 +872,16 @@ final class ChapterEditorStore: ObservableObject {
         ChapterTaskOutcomeStore.clear(chapterID: saved.id)
         writingPhase = .extracting
         do {
-            let status = try await session.api.retryArchive(chapterId: saved.id)
+            let status = try await session.api.retryArchive(
+                chapterId: saved.id, contentRevision: saved.contentRevision
+            )
             applyJobStatus(status, chapterId: saved.id)
             if !Self.isTerminalPhase(status.phase) {
                 pollJob(chapterId: saved.id)
             }
             return currentChapter
         } catch {
+            _ = await recordActionRevisionConflictIfNeeded(error, chapter: saved)
             if await adoptRunningJobIfNeeded(error, chapterId: saved.id) {
                 return currentChapter
             }
@@ -670,7 +901,9 @@ final class ChapterEditorStore: ObservableObject {
         guard let chapter = await save() else { return nil }
         let startingRevision = localEditRevision
         do {
-            let response = try await session.api.rerunChecker(chapterId: chapter.id)
+            let response = try await session.api.rerunChecker(
+                chapterId: chapter.id, contentRevision: chapter.contentRevision
+            )
             guard currentChapter?.id == chapter.id else { return nil }
             guard ChapterRefreshReconciler.shouldReplaceLocal(
                 startingRevision: startingRevision,
@@ -686,6 +919,7 @@ final class ChapterEditorStore: ObservableObject {
             }
             return response.checkerResult
         } catch {
+            _ = await recordActionRevisionConflictIfNeeded(error, chapter: chapter)
             session.notices.publish(error)
             return nil
         }
@@ -723,8 +957,9 @@ final class ChapterEditorStore: ObservableObject {
     func reopen() async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
         do {
-            let reopened: Chapter = try await session.api.request("/chapters/\(chapter.id)/reopen", method: "POST")
+            let reopened: Chapter = try await session.api.request("/chapters/\(chapter.id)/reopen", method: "POST", ifMatch: chapter.contentRevision)
             currentChapter = reopened
+            sync.cache.saveChapter(reopened)
             checkerResult = nil
             failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = false
@@ -819,8 +1054,9 @@ final class ChapterEditorStore: ObservableObject {
         let deletingId = chapter.id
         stopPolling(for: deletingId)
         do {
-            try await session.api.rawRequest("/chapters/\(deletingId)", method: "DELETE")
+            try await session.api.rawRequest("/chapters/\(deletingId)", method: "DELETE", ifMatch: chapter.contentRevision)
             cache.remove(chapterId: deletingId)
+            sync.cache.removeChapter(id: deletingId)
             ChapterTaskOutcomeStore.clear(chapterID: deletingId)
             writingPhase = .idle
             saveState = .synced
@@ -890,13 +1126,17 @@ final class ChapterEditorStore: ObservableObject {
         ChapterTaskOutcomeStore.clear(chapterID: chapter.id)
         writingPhase = .selectingMemory
         do {
-            let status = try await session.api.startWrite(chapterId: chapter.id, replaceDraft: replaceDraft)
+            let status = try await session.api.startWrite(
+                chapterId: chapter.id, replaceDraft: replaceDraft,
+                contentRevision: chapter.contentRevision
+            )
             applyJobStatus(status, chapterId: chapter.id)
             if !Self.isTerminalPhase(status.phase) {
                 pollJob(chapterId: chapter.id)
             }
             return currentChapter
         } catch {
+            _ = await recordActionRevisionConflictIfNeeded(error, chapter: chapter)
             if await adoptRunningJobIfNeeded(error, chapterId: chapter.id) {
                 return currentChapter
             }
@@ -1121,7 +1361,7 @@ final class ChapterEditorStore: ObservableObject {
             )
         }
         if announce {
-            session.notices.publish(presented.message, critical: presented.critical)
+            session.notices.publish(presented.message, critical: presented.critical, tone: .error)
         }
         Task { [weak self] in
             await self?.refreshChapterAfterFailure(chapterId)
@@ -1156,7 +1396,22 @@ final class ChapterEditorStore: ObservableObject {
                 pendingExemptionNames: pendingExemptionNames
             )
         }
-        session.notices.publish(presented.message, critical: presented.critical)
+        session.notices.publish(presented.message, critical: presented.critical, tone: .error)
+    }
+
+    @discardableResult
+    private func recordActionRevisionConflictIfNeeded(_ error: Error, chapter: Chapter) async -> Bool {
+        guard let apiError = error as? APIError,
+              case .writeConflict = apiError else { return false }
+        let snapshot = ChapterPatchPayload(chapter)
+        await sync.recordWriteConflict(
+            kind: .chapter, id: chapter.id,
+            path: "/chapters/\(chapter.id)", method: "PATCH",
+            baseRevision: chapter.contentRevision,
+            payload: snapshot, baseSnapshot: snapshot,
+            error: apiError, api: session.api
+        )
+        return true
     }
 
     /// A 409 `write_running` means another client (or a previous request whose
@@ -1440,11 +1695,15 @@ final class AgentSettingsStore: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var bookPersonas: [BookAgentPersona] = []
     @Published private(set) var bookPersonasBookID: String?
+    @Published private(set) var bookModelBindings: [BookAgentModelBinding] = []
+    @Published private(set) var bookModelBindingsBookID: String?
 
     private let session: AppSession
+    let sync: ClientSyncStore
 
-    init(session: AppSession) {
+    init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
+        self.sync = sync
     }
 
     func load() async {
@@ -1454,7 +1713,9 @@ final class AgentSettingsStore: ObservableObject {
             personas = try await session.api.request("/agent-personas")
             profiles = try await session.api.request("/llm_profiles")
             bindings = try await session.api.request("/agent-model-bindings")
+            sync.markOnline()
         } catch {
+            if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
         }
     }
@@ -1475,6 +1736,7 @@ final class AgentSettingsStore: ObservableObject {
             ) else { return false }
             bookPersonas = values
             bookPersonasBookID = bookID
+            sync.markOnline()
             return true
         } catch {
             session.notices.publish(error)
@@ -1487,10 +1749,14 @@ final class AgentSettingsStore: ObservableObject {
         guard BookPersonaResponsePolicy.accepts(
             responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
         ) else { return false }
+        let payload = BookAgentPersonaPayload(editable_persona: editablePersona)
+        let current = bookPersonas.first(where: { $0.agentRole == role })
+        let base = BookAgentPersonaPayload(editable_persona: current?.bookPersona ?? current?.globalPersona ?? "")
+        let revision = current?.contentRevision
         do {
-            let payload = BookAgentPersonaPayload(editable_persona: editablePersona)
             let saved: BookAgentPersona = try await session.api.request(
-                "/books/\(bookID)/agent-personas/\(role)", method: "PUT", body: payload
+                "/books/\(bookID)/agent-personas/\(role)", method: "PUT", body: payload,
+                ifMatch: revision ?? 0, allowZeroRevision: revision == nil
             )
             guard BookPersonaResponsePolicy.accepts(
                 responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
@@ -1498,6 +1764,9 @@ final class AgentSettingsStore: ObservableObject {
             replaceBookPersona(saved, bookID: bookID)
             return true
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(kind: .agentPersona, id: role, path: "/books/\(bookID)/agent-personas/\(role)", method: "PUT", readPath: "/books/\(bookID)/agent-personas/\(role)", readStrategy: .direct, baseRevision: revision ?? 0, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
+            }
             session.notices.publish(error)
             return false
         }
@@ -1508,13 +1777,17 @@ final class AgentSettingsStore: ObservableObject {
         guard BookPersonaResponsePolicy.accepts(
             responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
         ) else { return false }
+        let revision = bookPersonas.first(where: { $0.agentRole == role })?.contentRevision
         do {
-            try await session.api.rawRequest("/books/\(bookID)/agent-personas/\(role)", method: "DELETE")
+            try await session.api.rawRequest("/books/\(bookID)/agent-personas/\(role)", method: "DELETE", ifMatch: revision)
             // DELETE deliberately carries no response. Reload so source stays
             // server-authoritative instead of inferring global vs default from
             // equal text values.
             return await loadBookPersonas(bookID: bookID)
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(kind: .agentPersona, id: role, path: "/books/\(bookID)/agent-personas/\(role)", method: "DELETE", readPath: "/books/\(bookID)/agent-personas/\(role)", readStrategy: .direct, baseRevision: revision ?? 0, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(), error: conflict, api: session.api)
+            }
             session.notices.publish(error)
             return false
         }
@@ -1526,6 +1799,80 @@ final class AgentSettingsStore: ObservableObject {
             bookPersonas[index] = persona
         } else {
             bookPersonas.append(persona)
+        }
+    }
+
+    /// Configuration-only read: opening this screen cannot call a model or
+    /// alter a binding. An absent book row is represented by `source=global`.
+    @discardableResult
+    func loadBookModelBindings(bookID: String) async -> Bool {
+        guard session.currentBook?.id == bookID else { return false }
+        if bookModelBindingsBookID != bookID {
+            bookModelBindings = []
+            bookModelBindingsBookID = bookID
+        }
+        do {
+            let values: [BookAgentModelBinding] = try await session.api.request("/books/\(bookID)/agent-model-bindings")
+            guard session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
+            bookModelBindings = values
+            sync.markOnline()
+            return true
+        } catch {
+            if case APIError.transport = error { sync.markOffline() }
+            session.notices.publish(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func saveBookModelBinding(bookID: String, role: String, binding: AgentModelBindingValues) async -> Bool {
+        guard session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
+        let current = bookModelBindings.first(where: { $0.agentRole == role })
+        let revision = current?.contentRevision
+        let base = current?.bookBinding ?? current?.globalBinding ?? binding
+        do {
+            let saved: BookAgentModelBinding = try await session.api.request(
+                "/books/\(bookID)/agent-model-bindings/\(role)", method: "PUT", body: binding,
+                ifMatch: revision ?? 0, allowZeroRevision: revision == nil
+            )
+            replaceBookModelBinding(saved, bookID: bookID)
+            sync.markOnline()
+            return true
+        } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(kind: .modelBinding, id: role, path: "/books/\(bookID)/agent-model-bindings/\(role)", method: "PUT", readPath: "/books/\(bookID)/agent-model-bindings/\(role)", readStrategy: .direct, baseRevision: revision ?? 0, payload: binding, baseSnapshot: base, error: conflict, api: session.api)
+            }
+            if case APIError.transport = error { sync.markOffline() }
+            session.notices.publish(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func clearBookModelBinding(bookID: String, role: String) async -> Bool {
+        guard session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
+        let revision = bookModelBindings.first(where: { $0.agentRole == role })?.contentRevision
+        do {
+            try await session.api.rawRequest(
+                "/books/\(bookID)/agent-model-bindings/\(role)", method: "DELETE", ifMatch: revision
+            )
+            return await loadBookModelBindings(bookID: bookID)
+        } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(kind: .modelBinding, id: role, path: "/books/\(bookID)/agent-model-bindings/\(role)", method: "DELETE", readPath: "/books/\(bookID)/agent-model-bindings/\(role)", readStrategy: .direct, baseRevision: revision ?? 0, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(), error: conflict, api: session.api)
+            }
+            if case APIError.transport = error { sync.markOffline() }
+            session.notices.publish(error)
+            return false
+        }
+    }
+
+    private func replaceBookModelBinding(_ binding: BookAgentModelBinding, bookID: String) {
+        bookModelBindingsBookID = bookID
+        if let index = bookModelBindings.firstIndex(where: { $0.agentRole == binding.agentRole }) {
+            bookModelBindings[index] = binding
+        } else {
+            bookModelBindings.append(binding)
         }
     }
 
@@ -1544,15 +1891,34 @@ final class AgentSettingsStore: ObservableObject {
 
     @discardableResult
     func updateProfile(_ profile: LLMProfile, apiKey: String?) async -> Bool {
+        let payload = LLMProfilePatchPayload(profile: profile, apiKey: apiKey)
+        let baseProfile = profiles.first(where: { $0.id == profile.id }) ?? profile
+        // Do not queue `payload`: it may carry api_key. The conflict record is
+        // intentionally author-visible configuration only.
+        let conflictPayload = LLMProfileConflictPayload(profile: profile)
+        let conflictBase = LLMProfileConflictPayload(profile: baseProfile)
+        let includesNewAPIKey = !(apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         do {
-            let payload = LLMProfilePatchPayload(profile: profile, apiKey: apiKey)
-            let updated: LLMProfile = try await session.api.request("/llm_profiles/\(profile.id)", method: "PATCH", body: payload)
+            let updated: LLMProfile = try await session.api.request("/llm_profiles/\(profile.id)", method: "PATCH", body: payload, ifMatch: profile.contentRevision)
             if let idx = profiles.firstIndex(where: { $0.id == updated.id }) {
                 profiles[idx] = updated
             }
             bindings = try await session.api.request("/agent-model-bindings")
             return true
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(
+                    kind: .llmProfile, id: profile.id, path: "/llm_profiles/\(profile.id)", method: "PATCH",
+                    readPath: "/llm_profiles/\(profile.id)", readStrategy: .direct,
+                    baseRevision: profile.contentRevision, payload: conflictPayload, baseSnapshot: conflictBase,
+                    // The memory-only key cannot be requeued. Endpoint
+                    // changes are the mandatory re-entry case, and treating
+                    // any newly supplied key the same avoids silently
+                    // dropping a credential update after conflict recovery.
+                    requiresSecretReentry: includesNewAPIKey,
+                    error: conflict, api: session.api
+                )
+            }
             session.notices.publish(error)
             return false
         }
@@ -1560,10 +1926,18 @@ final class AgentSettingsStore: ObservableObject {
 
     func deleteProfile(_ profile: LLMProfile) async {
         do {
-            try await session.api.rawRequest("/llm_profiles/\(profile.id)", method: "DELETE")
+            try await session.api.rawRequest("/llm_profiles/\(profile.id)", method: "DELETE", ifMatch: profile.contentRevision)
             profiles.removeAll { $0.id == profile.id }
             bindings = try await session.api.request("/agent-model-bindings")
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(
+                    kind: .llmProfile, id: profile.id, path: "/llm_profiles/\(profile.id)", method: "DELETE",
+                    readPath: "/llm_profiles/\(profile.id)", readStrategy: .direct,
+                    baseRevision: profile.contentRevision, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(),
+                    error: conflict, api: session.api
+                )
+            }
             session.notices.publish(error)
         }
     }
@@ -1578,82 +1952,134 @@ final class AgentSettingsStore: ObservableObject {
     }
 
     func bind(role: String, profileId: String?) async {
+        let payload = AgentBindingProfilePayload(llmProfileId: profileId)
+        let current = bindings.first(where: { $0.agentRole == role })
+        let revision = current?.contentRevision
+        let base = AgentBindingProfilePayload(llmProfileId: current?.llmProfileId)
         do {
             // Binding a profile must not restate thinking/effort/temperature.
             // The server treats an explicitly encoded `null` as "clear this
             // field", so reusing AgentBindingPayload here would wipe settings
             // the caller never intended to touch.
-            let payload = AgentBindingProfilePayload(llmProfileId: profileId)
-            let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload)
+            let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload, ifMatch: revision)
             if let idx = bindings.firstIndex(where: { $0.agentRole == role }) {
                 bindings[idx] = binding
             } else {
                 bindings.append(binding)
             }
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(
+                    kind: .modelBinding, id: role, path: "/agent-model-bindings/\(role)", method: "PATCH",
+                    readPath: "/agent-model-bindings/\(role)", readStrategy: .direct,
+                    baseRevision: revision ?? 0, payload: payload, baseSnapshot: base, error: conflict, api: session.api
+                )
+            }
             session.notices.publish(error)
         }
     }
 
     func configureThinking(role: String, enabled: Bool?, effort: String?) async {
         guard let current = bindings.first(where: { $0.agentRole == role }) else { return }
+        let payload = AgentBindingPayload(
+            llmProfileId: current.llmProfileId,
+            thinkingEnabled: enabled,
+            reasoningEffort: enabled == false ? nil : effort,
+            temperature: enabled == true ? nil : current.temperature
+        )
+        let base = AgentBindingPayload(
+            llmProfileId: current.llmProfileId,
+            thinkingEnabled: current.thinkingEnabled,
+            reasoningEffort: current.reasoningEffort,
+            temperature: current.temperature
+        )
         do {
-            let payload = AgentBindingPayload(
-                llmProfileId: current.llmProfileId,
-                thinkingEnabled: enabled,
-                reasoningEffort: enabled == false ? nil : effort,
-                temperature: enabled == true ? nil : current.temperature
-            )
-            let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload)
+            let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload, ifMatch: current.contentRevision)
             if let idx = bindings.firstIndex(where: { $0.agentRole == role }) {
                 bindings[idx] = binding
             } else {
                 bindings.append(binding)
             }
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(
+                    kind: .modelBinding, id: role, path: "/agent-model-bindings/\(role)", method: "PATCH",
+                    readPath: "/agent-model-bindings/\(role)", readStrategy: .direct,
+                    baseRevision: current.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api
+                )
+            }
             session.notices.publish(error)
         }
     }
 
     func configureTemperature(role: String, temperature: Double?) async {
         guard let current = bindings.first(where: { $0.agentRole == role }) else { return }
+        let payload = AgentBindingPayload(
+            llmProfileId: current.llmProfileId,
+            thinkingEnabled: current.thinkingEnabled,
+            reasoningEffort: current.reasoningEffort,
+            temperature: temperature
+        )
+        let base = AgentBindingPayload(
+            llmProfileId: current.llmProfileId,
+            thinkingEnabled: current.thinkingEnabled,
+            reasoningEffort: current.reasoningEffort,
+            temperature: current.temperature
+        )
         do {
-            let payload = AgentBindingPayload(
-                llmProfileId: current.llmProfileId,
-                thinkingEnabled: current.thinkingEnabled,
-                reasoningEffort: current.reasoningEffort,
-                temperature: temperature
-            )
-            let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload)
+            let binding: AgentBinding = try await session.api.request("/agent-model-bindings/\(role)", method: "PATCH", body: payload, ifMatch: current.contentRevision)
             if let idx = bindings.firstIndex(where: { $0.agentRole == role }) {
                 bindings[idx] = binding
             } else {
                 bindings.append(binding)
             }
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(
+                    kind: .modelBinding, id: role, path: "/agent-model-bindings/\(role)", method: "PATCH",
+                    readPath: "/agent-model-bindings/\(role)", readStrategy: .direct,
+                    baseRevision: current.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api
+                )
+            }
             session.notices.publish(error)
         }
     }
 
     func savePersona(_ persona: AgentPersona) async {
+        let payload = AgentPersonaPayload(editable_persona: persona.editablePersona)
+        let base = AgentPersonaPayload(editable_persona: personas.first(where: { $0.agentRole == persona.agentRole })?.editablePersona ?? persona.editablePersona)
         do {
-            let payload = AgentPersonaPayload(editable_persona: persona.editablePersona)
-            let saved: AgentPersona = try await session.api.request("/agent-personas/\(persona.agentRole)", method: "PATCH", body: payload)
+            let saved: AgentPersona = try await session.api.request("/agent-personas/\(persona.agentRole)", method: "PATCH", body: payload, ifMatch: persona.contentRevision)
             if let idx = personas.firstIndex(where: { $0.agentRole == saved.agentRole }) {
                 personas[idx] = saved
             }
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(
+                    kind: .agentPersona, id: persona.agentRole, path: "/agent-personas/\(persona.agentRole)", method: "PATCH",
+                    readPath: "/agent-personas/\(persona.agentRole)", readStrategy: .direct,
+                    baseRevision: persona.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api
+                )
+            }
             session.notices.publish(error)
         }
     }
 
     func resetPersona(role: String) async {
+        let revision = personas.first(where: { $0.agentRole == role })?.contentRevision
         do {
-            let saved: AgentPersona = try await session.api.request("/agent-personas/\(role)/reset", method: "POST")
+            let saved: AgentPersona = try await session.api.request("/agent-personas/\(role)/reset", method: "POST", ifMatch: revision)
             if let idx = personas.firstIndex(where: { $0.agentRole == saved.agentRole }) {
                 personas[idx] = saved
             }
         } catch {
+            if case let conflict as APIError = error {
+                await sync.recordWriteConflict(
+                    kind: .agentPersona, id: role, path: "/agent-personas/\(role)/reset", method: "POST",
+                    readPath: "/agent-personas/\(role)", readStrategy: .direct,
+                    baseRevision: revision ?? 0, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(), error: conflict, api: session.api
+                )
+            }
             session.notices.publish(error)
         }
     }
@@ -1663,6 +2089,8 @@ private struct BookPayload: Encodable, Sendable {
     let title: String
     let world_setting: String
 }
+
+private struct EmptyMutationPayload: Encodable, Sendable {}
 
 private struct ChapterCreatePayload: Encodable, Sendable {
     let title: String
@@ -1764,6 +2192,23 @@ private struct LLMProfilePatchPayload: Encodable, Sendable {
         if let apiKey {
             try container.encode(apiKey, forKey: .apiKey)
         }
+    }
+}
+
+/// Deliberately separate from the network PATCH body. Pending mutations and
+/// three-way conflict records are persisted, so an API key must never be
+/// representable by their profile payload.
+private struct LLMProfileConflictPayload: Encodable, Sendable {
+    let name: String
+    let provider: String
+    let base_url: String
+    let model_name: String
+
+    init(profile: LLMProfile) {
+        name = profile.name
+        provider = profile.provider
+        base_url = profile.baseURL
+        model_name = profile.modelName
     }
 }
 

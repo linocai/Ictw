@@ -67,6 +67,7 @@ class ChapterSummary(ORMModel):
     status: str
     source: str
     updated_at: datetime
+    content_revision: int = 1
     archive_status: str = "stale"
     archive_schema: str = "none"
     archive_can_retry: bool = False
@@ -153,6 +154,7 @@ class ChapterRead(ORMModel):
     source: str
     created_at: datetime
     updated_at: datetime
+    content_revision: int = 1
     character_links: list[ChapterCharacterLink] = Field(default_factory=list)
     archive: ChapterArchiveRead | None = None
 

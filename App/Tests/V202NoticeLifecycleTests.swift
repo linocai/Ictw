@@ -3,6 +3,7 @@ import Foundation
 func runV202NoticeLifecycleTests() throws {
     let ordinary = NoticeBus.Notice(message: "已保存", isCritical: false)
     let critical = NoticeBus.Notice(message: "连接失败", isCritical: true)
+    let error = NoticeBus.Notice(message: "服务器返回异常", isCritical: false, tone: .error)
 
     guard NoticeLifecyclePolicy.automaticDismissDelay == 5 else {
         throw V202NoticeLifecycleTestError.assertion("ordinary notices must remain visible for five seconds")
@@ -12,6 +13,9 @@ func runV202NoticeLifecycleTests() throws {
     }
     guard !NoticeLifecyclePolicy.dismissesAutomatically(critical) else {
         throw V202NoticeLifecycleTestError.assertion("critical notices must remain until dismissed")
+    }
+    guard ordinary.tone == .success && critical.tone == .error && error.tone == .error else {
+        throw V202NoticeLifecycleTestError.assertion("notice icons must reflect success and error semantics independently of persistence")
     }
     guard NoticeLifecyclePolicy.canDismissExpiredNotice(
         noticeID: ordinary.id,

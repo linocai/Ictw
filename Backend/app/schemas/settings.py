@@ -18,6 +18,7 @@ class AgentPersonaRead(ORMModel):
     default_persona: str
     program_protocol: str
     updated_at: datetime | None
+    content_revision: int = 1
 
 
 class AgentPersonaPatch(BaseModel):
@@ -74,6 +75,7 @@ class BookAgentPersonaRead(BaseModel):
     effective_persona: str
     program_protocol: str
     updated_at: datetime | None
+    content_revision: int | None = None
 
 
 def validate_base_url(value: str) -> str:
@@ -124,6 +126,7 @@ class LLMProfileRead(ORMModel):
     model_name: str
     created_at: datetime
     updated_at: datetime
+    content_revision: int = 1
 
 
 class AgentModelBindingRead(ORMModel):
@@ -138,6 +141,7 @@ class AgentModelBindingRead(ORMModel):
     temperature_adjustable: bool
     capabilities: "ModelCapabilitiesRead"
     updated_at: datetime
+    content_revision: int = 1
 
 
 class AgentModelBindingPatch(BaseModel):
@@ -145,6 +149,36 @@ class AgentModelBindingPatch(BaseModel):
     thinking_enabled: bool | None = None
     reasoning_effort: str | None = None
     temperature: float | None = None
+
+
+class BookAgentModelBindingPut(BaseModel):
+    """A complete binding override. Omitting a field would be ambiguous."""
+
+    llm_profile_id: str
+    thinking_enabled: bool | None = None
+    reasoning_effort: str | None = None
+    temperature: float | None = None
+
+
+class AgentModelBindingValueRead(BaseModel):
+    llm_profile_id: str | None
+    thinking_enabled: bool | None
+    reasoning_effort: str | None
+    temperature: float | None
+    effective_thinking_enabled: bool | None
+    effective_reasoning_effort: str | None
+    effective_temperature: float | None
+    content_revision: int | None = None
+
+
+class BookAgentModelBindingRead(BaseModel):
+    agent_role: str
+    source: Literal["book", "global", "default"]
+    book_binding: AgentModelBindingValueRead | None
+    global_binding: AgentModelBindingValueRead
+    effective_binding: AgentModelBindingValueRead
+    capabilities: "ModelCapabilitiesRead"
+    content_revision: int | None = None
 
 
 class ModelCapabilitiesRead(BaseModel):

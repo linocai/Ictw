@@ -60,3 +60,35 @@ macOS Release 使用 Developer ID Application 与 Hardened Runtime 构建时，�
 
 - **Resolved**: 2026-08-14T16:21:00+08:00
 - **Notes**: Build 42 已用新隔离目录重建，通用架构、严格签名和无调试权限门禁均通过。
+
+---
+
+## [LRN-20260830-001] best_practice
+
+**Logged**: 2026-08-30T20:50:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+macOS 26 下用 `-AppleInterfaceStyle Light` 启动参数不能可靠覆盖 SwiftUI App 的系统深色外观。
+
+### Details
+
+为了不修改用户的全局系统偏好，视觉审核尝试只对候选进程传入浅色启动参数；App 仍按系统深色渲染。不能把这种启动方式当成浅色模式验证手段。
+
+### Suggested Action
+
+需要双外观自动化时，应建立应用内仅限测试的外观注入或使用隔离测试账户；在此之前，不为视觉审核修改用户的全局外观设置，并明确记录未覆盖的外观。
+
+### Metadata
+
+- Source: error
+- Related Files: `App/LinoIMac/LinoIMacApp.swift`
+- Tags: macos, swiftui, visual-review, appearance
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:50:00+08:00
+- **Notes**: 本轮只把当前系统深色外观计入已验证范围，未改系统偏好。
