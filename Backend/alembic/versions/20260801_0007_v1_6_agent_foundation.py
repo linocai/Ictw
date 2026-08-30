@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from alembic import op
 import sqlalchemy as sa
+from app.migration_safety import require_destructive_downgrade_authorization
 
 
 revision = "20260801_0007"
@@ -118,6 +119,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    require_destructive_downgrade_authorization(op.get_bind(), revision=revision)
     op.drop_index("ix_chapter_draft_candidates_job_id", table_name="chapter_draft_candidates")
     op.drop_index("ix_chapter_draft_candidates_chapter_id", table_name="chapter_draft_candidates")
     op.drop_table("chapter_draft_candidates")

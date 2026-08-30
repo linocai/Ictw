@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
+from app.migration_safety import require_destructive_downgrade_authorization
 
 
 revision = "20260711_0006"
@@ -25,6 +26,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    require_destructive_downgrade_authorization(op.get_bind(), revision=revision)
     with op.batch_alter_table("job_runs") as batch_op:
         batch_op.drop_column("error_context")
     with op.batch_alter_table("llm_call_audits") as batch_op:

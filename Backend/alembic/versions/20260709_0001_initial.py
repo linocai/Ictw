@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
+from app.migration_safety import require_destructive_downgrade_authorization
 
 
 revision = "20260709_0001"
@@ -109,6 +110,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    require_destructive_downgrade_authorization(op.get_bind(), revision=revision)
     op.drop_table("character_events")
     op.drop_table("chapter_characters")
     op.drop_table("characters")

@@ -99,3 +99,25 @@ App/Tests/run_client_state_tests.sh
 6. 完成 Memory Selector、Writer、Checker、Extractor 烟测。
 
 生产入口、服务器位置、网络地址及完整运维拓扑不在公开文档中披露。生产服务器配置、`.env`、SQLite 数据、SSH 凭证和发布二进制均不进入仓库；完整运维事实只保存在仓库外的私有运维文档中。
+
+### 生产回退
+
+常规回退是停止服务、恢复已核验的停服前 `linoi.db` 备份和旧代码包；不要把 `alembic downgrade` 当作常规回退。所有会删除逻辑数据的 downgrade 默认拒绝执行，并且在第一条 DDL 前退出。
+
+只有已经得到单次人工授权、且演练或事故处置确实需要跨越受保护 migration 时，才可在停止服务、SQLite checkpoint 完成、独立备份通过 `integrity_check` 与 `foreign_key_check`、且备份与源库逐字节一致后，使用下列只读脚本创建一个不超过一小时的 manifest：
+
+```bash
+cd Backend
+.venv/bin/python scripts/create_destructive_downgrade_manifest.py \
+  --database /absolute/path/to/linoi.db \
+  --backup /absolute/path/to/linoi-pre-downgrade.db \
+  --output /secure/outside-repo/downgrade-manifest.json \
+  --revision 20260814_0012 \
+  --service-stopped
+
+ICTW_DESTRUCTIVE_DOWNGRADE_CONFIRM=ICTW_ALLOW_DESTRUCTIVE_DOWNGRADE_ONCE \
+ICTW_DESTRUCTIVE_DOWNGRADE_MANIFEST=/secure/outside-repo/downgrade-manifest.json \
+.venv/bin/python -m alembic downgrade 20260809_0011
+```
+
+跨越多个受保护 revision 时，同一条 Alembic 命令必须为每个 revision 重复传入 `--revision`。manifest 是短时、单次命令的恢复证明，不得提交到 Git；脚本和迁移都不会输出数据库正文、密钥或备份内容。

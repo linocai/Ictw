@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from alembic import op
 import sqlalchemy as sa
+from app.migration_safety import require_destructive_downgrade_authorization
 
 
 revision = "20260710_0002"
@@ -137,6 +138,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     connection = op.get_bind()
     _assert_foreign_keys_clean(connection)
+    require_destructive_downgrade_authorization(connection, revision=revision)
     connection.execute(sa.text("DELETE FROM agent_model_bindings WHERE agent_role = 'memory_selector'"))
     connection.execute(sa.text("DELETE FROM agent_personas WHERE agent_role = 'memory_selector'"))
     _rename_agent(connection, "agent_personas", "reviser", "compressor")

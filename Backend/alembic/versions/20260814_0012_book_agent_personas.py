@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
+from app.migration_safety import require_destructive_downgrade_authorization
 
 
 revision = "20260814_0012"
@@ -48,6 +49,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     connection = op.get_bind()
     _assert_foreign_keys_clean(connection)
+    require_destructive_downgrade_authorization(connection, revision=revision)
     op.drop_index("ix_book_agent_personas_book_id", table_name="book_agent_personas")
     op.drop_table("book_agent_personas")
     _assert_foreign_keys_clean(connection)
