@@ -129,6 +129,18 @@ def test_archive_ledger_downgrade_accepts_a_verified_backup(tmp_path, monkeypatc
     assert _revision(database) == "20260804_0009"
 
 
+def test_one_verified_manifest_can_cover_a_single_multi_revision_command(tmp_path, monkeypatch) -> None:
+    database, config = _upgrade_to(tmp_path, monkeypatch, "20260814_0012")
+    _authorize(monkeypatch, database, ["20260814_0012", "20260809_0011", "20260805_0010"])
+
+    command.downgrade(config, "20260804_0009")
+
+    tables = _table_names(database)
+    assert "book_agent_personas" not in tables
+    assert "chapter_archive_revisions" not in tables
+    assert _revision(database) == "20260804_0009"
+
+
 def test_every_existing_logical_data_loss_downgrade_uses_the_guard() -> None:
     versions = Path("alembic/versions")
     protected = {
