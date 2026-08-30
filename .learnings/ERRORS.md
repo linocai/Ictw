@@ -861,6 +861,159 @@ Sky Computer Use native pipe closed before response
 
 ---
 
+## [ERR-20260830-012] remote-sha-awk-quoting
+
+**Logged**: 2026-08-30T21:06:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+后端包上传后的远端 SHA-256 提取命令在双层 Shell 中错误转义了 `awk`，导致哈希比较没有执行。
+
+### Error
+
+```
+awk: cmd. line:1: {print \\}
+```
+
+### Context
+
+- SCP 已完成，但生产服务尚未停止、部署尚未开始。
+- 问题只发生在本地解析远端输出。
+
+### Suggested Fix
+
+远端只运行 `sha256sum` 返回完整行，本地再用 Shell 参数展开提取首字段，避免嵌套 `awk` 引号。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T21:06:00+08:00
+- **Notes**: 改用完整哈希行进行本地比较。
+
+---
+
+## [ERR-20260830-011] nb-shortname-stale-resolution
+
+**Logged**: 2026-08-30T21:02:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+宁波发布预检使用 `nb` 短名时被本机网络解析到代理保留地址，SSH banner 握手超时。
+
+### Error
+
+```
+Connection timed out during banner exchange
+Connection to 198.18.18.54 port 22 timed out
+```
+
+### Context
+
+- 现行运维记录已注明公网 IP 于 2026-08-30 更换。
+- 直接读取记录中的新 IP，并先用 ED25519 指纹比对权威记录，结果完全一致。
+
+### Suggested Fix
+
+宁波连接在短名不可用时，使用现行文档 IP；连接前必须以 `ssh-keyscan` 的 ED25519 SHA-256 指纹对照 `NB_info.md`，再启用严格主机校验。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: /Users/linotsai/Lino/NB_info.md
+
+### Resolution
+
+- **Resolved**: 2026-08-30T21:02:00+08:00
+- **Notes**: 新 IP 指纹匹配，`deploy` 公钥登录与无交互 sudo 均已恢复。
+
+---
+
+## [ERR-20260830-010] backend-package-nul-check
+
+**Logged**: 2026-08-30T21:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+后端部署包文件名空字节门禁用 Shell 的空字节参数调用 `grep`，参数被折叠为空模式并恒定误报。
+
+### Error
+
+```
+listing_nul=FOUND
+```
+
+### Context
+
+- 禁止文件和 `LIBARCHIVE.xattr` 检查均已通过。
+- POSIX 参数不能承载 NUL，故该检查方式无效。
+
+### Suggested Fix
+
+使用 Python 读取 tar 成员名及文本列表的原始字节，直接断言不存在 `\\x00`。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T21:00:00+08:00
+- **Notes**: 发布门禁改为 Python 字节级检查。
+
+---
+
+## [ERR-20260830-009] release-signature-check-temp-cleanup
+
+**Logged**: 2026-08-30T20:57:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+发布签名校验脚本因包含 `rm -f` 临时文件清理，被执行安全策略整段拒绝。
+
+### Error
+
+```
+rejected: rm -f style commands are not permitted. Use a safer approach
+```
+
+### Context
+
+- 校验对象为已完成签名归档的 macOS 与 iOS App。
+- 被拒绝发生在脚本启动前，制品没有被修改。
+
+### Suggested Fix
+
+只读发布校验使用固定在 release 目录内的临时输出，并保留到发布结束；不在同一命令中加入删除动作。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-08-30T20:57:00+08:00
+- **Notes**: 改为保留 entitlement 检查文件的只读校验流程。
+
+---
+
 ## [ERR-20260830-015] computer-use-swiftui-post-sheet-ax-failure
 
 **Logged**: 2026-08-30T20:46:25+08:00

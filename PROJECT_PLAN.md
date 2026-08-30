@@ -4,21 +4,20 @@
 
 ## 当前基线
 
-- 双端 App 源码为 `v2.1.0(47)`，Backend 源码为 `v2.1.0`，Alembic head 为 `20260830_0013`；宁波生产仍为 Backend `v1.9.5(46)` 与 head `20260814_0012`。
-- 本机 macOS 仍安装并运行 `v2.0.4(46)`；`v2.1.0(47)` 尚未签名、换装或生成 iOS 真机包。
-- `v1.9.5(46)` 已完成宁波生产部署与发布验收：内外网鉴权健康、单实例、数据库完整性、外键、零在途任务与公网门禁均通过，部署后 journal warning 为零；完整运维事实只记录在仓库外 `/Users/linotsai/Lino/NB_info.md`。
+- 双端 App 源码与本机 macOS 均为 `v2.1.0(47)`，Backend 源码与宁波生产均为 `v2.1.0`，Alembic head 为 `20260830_0013`；iOS 真机包已签名交付，安装由用户自行处理。
+- `v2.1.0(47)` 已按 Backend-first 次序完成发布：生产数据副本迁移演练、正式迁移、内外网鉴权健康、单实例、数据库完整性、外键、零在途任务与公网门禁均通过，部署后 journal warning 为零；完整运维事实只记录在仓库外 `/Users/linotsai/Lino/NB_info.md`。
 - 发布次序自本版起是硬约束：Backend 必须先于客户端换装，因为「删除这一章」在客户端只是乐观判断、真闸门在服务端。
 - 香港旧服务保持 stopped + disabled，不参与现行生产。
 
 ## 当前版本方向
 
-### v2.1.0（Build 47，施工完成待发布）
+### v2.1.0（Build 47，已发布）
 
 - 双端 App 与 Backend 统一升级至 `v2.1.0`。本版以「可靠写作与长篇管理」为目标：跨端编辑不再静默覆盖、宁波暂不可用时仍可离线阅读与保留本机编辑、完整书籍可备份并恢复；现有 Memory Selector → Writer → Checker → 用户接受 → Extractor 主链不改写。
 - 必须同时收口跨端内容 revision 与冲突处理、离线书架／章节／阅读缓存和待同步恢复、版本化且可校验的完整项目包、章节归档健康列表的规模化查询、生产回退的 fail-closed 数据保护。
 - 新能力只纳入全局搜索与单书 Agent 模型覆盖：搜索只索引作者可见内容并可定位跳转；模型覆盖遵循单书优先于全局并展示实际生效配置，Extractor 与灵感创造师继续强制有界非思考。
 - 公开 `v1.8.1(32)` 仍在兼容窗口：Backend 必须先部署，新增协议保持加法兼容；`chapter_style` 等既有 wire 兼容层本版不撤除。
-- 本地 Backend 全量回归、Alembic head、客户端状态测试及双端 Release 构建均已通过；当前只完成施工与构建，尚未部署 Backend、执行生产迁移、换装 macOS 或制作 iOS 真机包。
+- Backend 全量回归、Alembic head、客户端状态测试、双端签名归档及解包验签均已通过；宁波生产已迁移并通过发布门禁，macOS 已备份旧版后换装启动，iOS 真机包已交付。
 - 发布流程的判据自 `v1.9.4(45)` 起有三处变化，已在生产实测确认：`/docs`、`/openapi.json`、`/redoc` 恒为 404，不再是健康判据；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后一律 503；`.env` 中任何仍为 `change-me` 开头的密钥会导致后端拒绝启动，上产前应先做只读布尔检查。
 
 ## 版本记录
@@ -117,7 +116,7 @@
 
 ## 历史索引
 
-- v2.1.0 执行计划：`docs/plans/v2.1.0-unified-reliability-plan.md`
+- v2.1.0 执行计划：`archive/plans/v2.1.0-unified-reliability-plan.md`
 - v2.0.4 执行计划：`docs/plans/v2.0.4-rewrite-and-delete-plan.md`
 - v2.0.2 iOS 执行计划：`archive/plans/v2.0.2-ios-interaction-plan.md`
 - v1.9.2 完整完成记录：`archive/plans/PROJECT_PLAN-v1.9.2-completed.md`

@@ -45,7 +45,7 @@
 
 ## 当前生产门禁
 
-- 当前双端源码与本机已安装 macOS 均为 `v2.0.4(46)`，Backend 源码与宁波生产均为 `v1.9.5(46)`，Alembic head 为 `20260814_0012`。iOS 由用户自行处理，公开发布的双端客户端仍为 `v1.8.1(32)`。
+- 当前双端源码与本机已安装 macOS 均为 `v2.1.0(47)`，Backend 源码与宁波生产均为 `v2.1.0`，Alembic head 为 `20260830_0013`。iOS 真机包已交付并由用户自行安装；公开 Release 提供 macOS 包。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
 - 生产入口为 `https://ictw.linotsai.top`，Backend 位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787` 并由 Nginx Proxy Manager 反代。
