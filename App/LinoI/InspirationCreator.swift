@@ -123,6 +123,8 @@ enum InspirationErrorCopy {
                 return "灵感创造师还没有可用模型。请先到“设置 → Agent”为它绑定一个 Profile。"
             case "inspiration_invalid_response", "llm_invalid_response", "llm_output_truncated":
                 return "这批结果没有整理出至少 3 条可用灵感，请再试一次。"
+            case "inspiration_unselected_character":
+                return "这批灵感提到了本章未选择的已有角色，已按人物白名单拒绝。请将需要出场的人物加入本章，或重新生成。"
             case "inspiration_character_invalid":
                 return "当前人物选择已发生变化，请刷新章节后重试。"
             case "llm_timeout":

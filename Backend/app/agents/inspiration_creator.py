@@ -101,12 +101,13 @@ class InspirationCreatorAgent:
                     selected_character_ids=selected_character_ids,
                 )
             except InspirationValidationError as exc:
+                error_code = _validation_error_code(exc.category)
                 logger.warning(
                     "inspiration_validation_failed attempt=%s category=%s",
                     attempt + 1,
                     exc.category,
                 )
-                _audit(audit_attempt, started, "inspiration_invalid_response", None)
+                _audit(audit_attempt, started, error_code, None)
                 if attempt == 0:
                     correction = (
                         "\n\n# 程序退回\n上一次结果未通过程序校验（"
@@ -118,7 +119,7 @@ class InspirationCreatorAgent:
                     continue
                 raise LLMError(
                     "Inspiration output failed deterministic validation",
-                    code="inspiration_invalid_response",
+                    code=error_code,
                     retryable=False,
                     agent_role="inspiration_creator",
                 ) from exc
@@ -140,6 +141,18 @@ class InspirationCreatorAgent:
             retryable=False,
             agent_role="inspiration_creator",
         )
+
+
+def _validation_error_code(category: str) -> str:
+    """Expose a safe specific cause only when every rejected card shares it."""
+    parts = category.split(":", maxsplit=2)
+    if (
+        len(parts) == 3
+        and parts[0] == "insufficient_valid_cards"
+        and parts[2] == "unselected_character"
+    ):
+        return "inspiration_unselected_character"
+    return "inspiration_invalid_response"
 
 
 def validate_inspiration_output(

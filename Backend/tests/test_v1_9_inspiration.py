@@ -461,8 +461,16 @@ def test_unselected_known_character_is_rejected_without_text_leak(client, auth_h
 
     assert response.status_code == 502
     detail = response.json()["detail"]
-    assert detail["code"] == "inspiration_invalid_response"
+    assert detail == {
+        "code": "inspiration_unselected_character",
+        "message": "这批灵感提到了本章未选择的已有角色，已按人物白名单拒绝",
+        "details": {"agent_role": "inspiration_creator"},
+    }
     assert "赵六" not in str(detail)
+    with db_module.SessionLocal() as db:
+        audits = list(db.scalars(select(LLMCallAudit).order_by(LLMCallAudit.created_at)).all())
+        assert len(audits) == 2
+        assert {audit.error_code for audit in audits} == {"inspiration_unselected_character"}
     assert _table_counts() == before
 
 

@@ -365,6 +365,7 @@ def create_inspirations(
     except LLMError as exc:
         messages = {
             "inspiration_invalid_response": "这批结果没有整理出至少 3 条可用灵感，请再试一次",
+            "inspiration_unselected_character": "这批灵感提到了本章未选择的已有角色，已按人物白名单拒绝",
             "llm_timeout": "灵感生成超时，请稍后重试",
             "llm_content_blocked": "上游模型拒绝了本次灵感请求",
         }

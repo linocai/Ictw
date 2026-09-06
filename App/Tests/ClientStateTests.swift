@@ -350,6 +350,22 @@ private func testInspirationErrorsUseAuthorFacingCopy() throws {
     try expect(configuration.contains("设置 → Agent"), "configuration copy must tell the author where to act")
     try expect(!configuration.contains("llm_profile"), "configuration copy must hide internal error codes")
 
+    let unselectedCharacter = InspirationErrorCopy.message(
+        for: APIError.validation(
+            code: "inspiration_unselected_character",
+            message: "server fallback",
+            names: []
+        )
+    )
+    try expect(
+        unselectedCharacter.contains("未选择的已有角色"),
+        "inspiration validation copy must reveal the safe character-whitelist cause"
+    )
+    try expect(
+        !unselectedCharacter.contains("server fallback"),
+        "inspiration validation copy must use stable author-facing wording"
+    )
+
     let oldBackend = InspirationErrorCopy.message(for: APIError.http(404, "Not Found"))
     try expect(oldBackend.contains("更新后端"), "old backend copy must explain the required action")
     try expect(!oldBackend.contains("Not Found"), "old backend copy must not expose raw transport wording")
