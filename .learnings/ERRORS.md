@@ -861,6 +861,46 @@ Sky Computer Use native pipe closed before response
 
 ---
 
+## [ERR-20260906-005] ictw-health-probe-route-assumption
+
+**Logged**: 2026-09-06T17:19:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+发布后的附加存活探测误用根路径 `/health` 和系统 `python`，把探测脚本错误表现成 404／命令缺失。
+
+### Error
+
+```
+internal_health=404
+python: command not found
+```
+
+### Context
+
+- ICTW 的实际前缀来自 `api_prefix`，当前健康路径是 `/api/v1/health`。
+- 生产 Python 只保证项目虚拟环境 `.venv/bin/python` 可用。
+- systemd 同期保持 active + enabled、`NRestarts=0`，不是应用故障。
+
+### Suggested Fix
+
+健康探测应从项目配置读取 API 前缀，并始终使用部署虚拟环境解释响应；不要沿用其他项目的根路径约定。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: Backend/app/config.py, Backend/app/main.py
+
+### Resolution
+
+- **Resolved**: 2026-09-06T17:19:00+08:00
+- **Notes**: 改查 `/api/v1/health` 并使用 `.venv/bin/python`，鉴权响应为 200／ok／2.1.0。
+
+---
+
 ## [ERR-20260906-004] deploy-validation-wrong-working-directory
 
 **Logged**: 2026-09-06T17:16:00+08:00
