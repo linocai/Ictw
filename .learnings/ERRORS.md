@@ -861,6 +861,160 @@ Sky Computer Use native pipe closed before response
 
 ---
 
+## [ERR-20260906-004] deploy-validation-wrong-working-directory
+
+**Logged**: 2026-09-06T17:16:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+Backend 换包后的只读校验没有先进入部署目录，并尝试以无源码读取权限的部署账号检索常量，导致校验脚本在服务启动前中止。
+
+### Error
+
+```
+PermissionError: [Errno 13] Permission denied: 'pyproject.toml'
+```
+
+### Context
+
+- 新包已完整安装，数据库未迁移，但服务仍处于停服窗口。
+- Alembic 配置使用相对路径，必须从 `/opt/linoi/backend` 运行。
+- 部署账号可以执行受控服务命令，但不能读取 mode-protected 的应用源码。
+
+### Suggested Fix
+
+生产换包脚本应在每个依赖相对路径的步骤显式设置工作目录；源码／Alembic 校验以服务账号在应用目录执行，部署账号只负责上传、切换与受控 sudo。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-09-06T17:16:00+08:00
+- **Notes**: 从正确目录改用 `linoi` 服务账号完成 Alembic 与启动校验，随后服务恢复并通过全部生产门禁。
+
+---
+
+## [ERR-20260906-003] nested-template-remote-shell-interpolation
+
+**Logged**: 2026-09-06T17:08:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+JavaScript 模板字符串内嵌远端 shell 脚本时，shell 的 `${stamp}` 被本地调度层先解释，部署脚本未能发出。
+
+### Error
+
+```
+ReferenceError: stamp is not defined
+```
+
+### Context
+
+- 失败发生在本地工具脚本求值阶段，远端没有执行任何命令，生产未停服或改动。
+- 内层 shell 变量与外层 JavaScript 模板字符串共享 `${...}` 语法。
+
+### Suggested Fix
+
+嵌套脚本优先使用不带花括号的 shell 变量形式，或显式转义 `${...}`，发出前检查所有插值边界。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-09-06T17:08:00+08:00
+- **Notes**: 将备份路径改成 `$stamp` 形式后重新执行完整部署脚本。
+
+---
+
+## [ERR-20260906-002] ictw-jobrun-terminal-phase-assumption
+
+**Logged**: 2026-09-06T17:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+生产预检沿用通用终态词 `completed`，把 ICTW 的历史 `done` 记录误计为在途任务。
+
+### Error
+
+```
+active_jobs=163
+```
+
+### Context
+
+- ICTW 的真实 `TERMINAL_PHASES` 是 `done`、`failed`、`cancelled`。
+- 分组复核只发现上述三类终态，实际在途任务为 0。
+
+### Suggested Fix
+
+生产预检必须从当前项目代码读取终态集合，或按已知非终态正向计数；不得套用其他项目的 phase 名称。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: Backend/app/services/write_jobs.py
+
+### Resolution
+
+- **Resolved**: 2026-09-06T17:05:00+08:00
+- **Notes**: 按 `done`、`failed`、`cancelled` 重算并确认零在途。
+
+---
+
+## [ERR-20260906-001] provisioning-device-count-plist-conversion
+
+**Logged**: 2026-09-06T17:02:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+iOS 制品验签脚本把 `plutil -extract ... raw` 的数组输出再次按 plist 转 JSON，导致非门禁的设备数量统计提前终止整段校验。
+
+### Error
+
+```
+Invalid object in plist for JSON format
+```
+
+### Context
+
+- Build 48 的 App 签名、Bundle ID、版本和架构已经通过，失败只发生在 provisioning 设备数量统计。
+- `ProvisionedDevices` 是数组，应直接读取数组长度，不应先以 raw 格式提取后再次交给 `plutil` 解析。
+- 团队开发 Profile 的 `application-identifier` 可以是 `TeamID.*`；应另查 App 签名 entitlement，确认它已收窄到精确 Bundle ID。
+
+### Suggested Fix
+
+使用 `PlistBuddy` 的数组输出计数；不要把 `security cms` 解出的 provisioning plist 转成 JSON。分别校验 Profile 允许范围与 App 精确 entitlement，非关键统计不得遮蔽已经通过的签名门禁。
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+
+- **Resolved**: 2026-09-06T17:02:00+08:00
+- **Notes**: 改用 `PlistBuddy` 读取 `ProvisionedDevices` 并继续剩余制品门禁。
+
+---
+
 ## [ERR-20260830-013] gh-release-view-islatest-field
 
 **Logged**: 2026-08-30T21:10:00+08:00
