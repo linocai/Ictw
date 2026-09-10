@@ -71,6 +71,11 @@ def resolve_capabilities(model_name: str | None, base_url: str | None = None) ->
     """Return only explicitly registered capabilities; unknown models stay inert."""
     model = _normalized_model_name(model_name)
     host_hint = (base_url or "").lower()
+    # DeepSeek V4.1 Flash uses this unversioned official ID (2026-09-10).
+    # Its thinking toggle uses the existing V4 wire protocol; retain the
+    # caller's model ID instead of rewriting it to a legacy alias.
+    if model == "deepseek-flash":
+        return DEEPSEEK_V4_CAPABILITIES
     if "deepseek" in model and "v4" in model and ("pro" in model or "flash" in model):
         return DEEPSEEK_V4_CAPABILITIES
     if model in {"glm-5", "glm-5.0", "glm-5.1", "glm-5.2"}:

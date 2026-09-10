@@ -43,6 +43,58 @@ def test_registered_model_capabilities_are_explicit() -> None:
     assert unknown.thinking_toggle_supported is False
 
 
+@pytest.mark.parametrize("scope", ["global", "book"])
+@pytest.mark.parametrize("agent_role", list(DEFAULT_PERSONAS))
+def test_deepseek_flash_can_be_selected_and_sends_role_thinking_policy(
+    client, auth_headers, scope, agent_role,
+) -> None:
+    from app.db import SessionLocal
+
+    created = client.post("/api/v1/llm_profiles", headers=auth_headers, json={
+        "name": "V4.1", "base_url": "https://api.deepseek.com",
+        "api_key": "test-only-key", "model_name": "deepseek-flash",
+    })
+    assert created.status_code == 201
+    profile_id = created.json()["id"]
+    book_id = None
+    if scope == "book":
+        book = client.post("/api/v1/books", headers=auth_headers, json={"title": "测试书"})
+        book_id = book.json()["id"]
+        response = client.put(
+            f"/api/v1/books/{book_id}/agent-model-bindings/{agent_role}",
+            headers={**auth_headers, "If-Match": "0"},
+            json={"llm_profile_id": profile_id},
+        )
+        assert response.status_code == 200, response.text
+        binding = response.json()["effective_binding"]
+    else:
+        path = f"/api/v1/agent-model-bindings/{agent_role}"
+        revision = client.get(path, headers=auth_headers).json()["content_revision"]
+        response = client.patch(
+            path, headers={**auth_headers, "If-Match": str(revision)},
+            json={"llm_profile_id": profile_id},
+        )
+        assert response.status_code == 200, response.text
+        binding = response.json()
+
+    bounded = agent_role in {"extractor", "inspiration_creator"}
+    assert binding["llm_profile_id"] == profile_id
+    assert binding["effective_thinking_enabled"] is (not bounded)
+    # Exercise the actual runtime factory and wire payload, without calling
+    # the provider: accepting a binding alone does not prove thinking is off.
+    with SessionLocal() as db:
+        runtime = build_llm_client(db, agent_role, book_id=book_id)
+        payload = runtime._payload(system="test", user="test", stream=False, temperature=0.7)
+    assert payload["model"] == "deepseek-flash"
+    assert payload["thinking"] == {"type": "disabled" if bounded else "enabled"}
+    assert "reasoning_effort" not in payload
+    if bounded:
+        assert payload["top_p"] == 0.95
+    else:
+        assert "top_p" not in payload
+        assert "temperature" not in payload
+
+
 @pytest.mark.parametrize(
     ("agent_role", "profile_id", "expected_code"),
     [
