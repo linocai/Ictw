@@ -39,3 +39,12 @@
 - 用户已明确授权本次完整发布。累计核对范围：生产 Backend `65fafff` 到本次工作区；公开客户端 `v2.1.0-build48` 到 Build 51，且核对本机已安装 Build 49。生产所有 app Python 文件与 `65fafff` 无漂移。
 - 累计变更包括 Build 49 本书模型设置、Build 50 通知可见性和 Build 51 Checker 上下文；此前本地全量回归及签名验证仍适用于未再修改的源码。本轮复验签名与发布物哈希。
 - 发布健康接口使用配置中的 API 前缀，即 `/api/v1/health`；根路径 `/health` 的 404 不属于服务故障。
+
+
+### 发布验收追加 Build 52
+
+- Build 51 源码已提交并保留不可变标签 `v2.1.0-build51`。宁波已部署 `a298f69`，但客户端发布实机验收发现打开成稿页会崩溃，未把 Build 51 作为正式 Release 交付。
+- 崩溃为 macOS 27 SDK 的 SwiftUI accessibility label 递归；旧 Build 49 使用 macOS 26.5 SDK，未触发。通过原包对照、独立 DerivedData 重建与去除通知层实验定位后，只把正文标签从外层 Group 移到具体 TextEditor，通知实现完整保留。最终客户端增加为 Build 52，版本仍为 2.1.0。
+- Build 52 双端 Release 构建与 strict/deep 签名检查通过；Mac 为 x86_64 + arm64，安装副本、交付副本及 ZIP 解包可执行体哈希一致。客户端状态门禁再次通过；Backend 未再改动，沿用 220 passed / 12 skipped。
+- 已安装的 Build 52 实机打开成稿章、编辑章、通知历史和本书模型页均正常；本书实际模型显示 deepseek-flash。当前章节没有可重现的失败提示，未为了验证通知制造生产失败或重跑真实内容；错误详情和历史行为由状态回归覆盖。
+- iOS Build 52 真机签名产物已就绪，未导出 IPA；设备开发服务尚不可用，最后安装由用户连接解锁后在 Xcode 完成。

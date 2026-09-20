@@ -159,6 +159,7 @@ private struct V2MacManuscriptText: View {
             } else {
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: bodyBinding)
+                        .accessibilityLabel("正文")
                         .scrollContentBackground(.hidden)
                         .font(V2DeskType.prose())
                         .lineSpacing(V2DeskType.proseLineSpacing)
@@ -176,7 +177,6 @@ private struct V2MacManuscriptText: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .accessibilityLabel(snapshot.isBodyReadOnly ? "已接受的正文" : "正文")
     }
 
     private var bodyBinding: Binding<String> {
