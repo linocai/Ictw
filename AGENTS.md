@@ -46,13 +46,15 @@
 
 ## 当前生产门禁
 
-- 当前双端源码为 `v2.1.0(51)`（通知与 Checker 快修待发布），本机已安装 macOS 为 `v2.1.0(49)`，Backend 源码与宁波生产均为 `v2.1.0`，Alembic head 为 `20260830_0013`。公开 Release 与已交付的 iOS 真机包仍为 Build 48；iOS 安装由用户自行处理。
+- 当前双端源码、本机已安装 macOS 与公开 Release 均为 `v2.1.0(52)`；Backend 源码与宁波生产均为 `v2.1.0`（Checker 修复 `a298f69` 已部署），Alembic head 为 `20260830_0013`。iOS Build 52 真机签名构建已通过，最终安装由用户在 Xcode 操作。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
 - 生产入口为 `https://ictw.linotsai.top`，Backend 位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787` 并由 Nginx Proxy Manager 反代。
 - 香港旧服务已 stopped + disabled；除非先停宁波服务并执行明确回退，否则禁止启动。
 - 当前归档概况、历史重提限制和下一目标以 `PROJECT_PLAN.md` 为准。
 - `KEK_SECRET` 与 `APP_TOKEN` 必须原样、安全迁移，任何命令输出、计划、提交或回复都不得打印其值。
+
+- macOS 27 SDK 下，正文只读 Text／编辑 TextEditor 外层 Group 统一设置 accessibilityLabel 会触发辅助功能递归崩溃；正文标签放到具体 TextEditor。发布必须实机打开成稿页和编辑页，构建及验签不能替代运行验证。
 
 ## 工作区规则
 
