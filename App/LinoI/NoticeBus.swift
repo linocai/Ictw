@@ -22,12 +22,14 @@ final class NoticeBus: ObservableObject {
         let message: String
         let isCritical: Bool
         let tone: NoticeTone
+        let deduplicationKey: String?
         let timestamp = Date()
 
-        init(message: String, isCritical: Bool, tone: NoticeTone? = nil) {
+        init(message: String, isCritical: Bool, tone: NoticeTone? = nil, deduplicationKey: String? = nil) {
             self.message = message
             self.isCritical = isCritical
             self.tone = tone ?? .inferred(from: message, critical: isCritical)
+            self.deduplicationKey = deduplicationKey
         }
     }
 
@@ -35,14 +37,19 @@ final class NoticeBus: ObservableObject {
     @Published private(set) var history: [Notice] = []
     private var automaticDismissTask: Task<Void, Never>?
 
-    func publish(_ message: String, critical: Bool = false, tone: NoticeTone? = nil) {
-        let notice = Notice(message: message, isCritical: critical, tone: tone)
-        automaticDismissTask?.cancel()
-        current = notice
+    func publish(
+        _ message: String, critical: Bool = false, tone: NoticeTone? = nil,
+        deduplicationKey: String? = nil, announce: Bool = true
+    ) {
+        if let deduplicationKey, history.contains(where: { $0.deduplicationKey == deduplicationKey }) { return }
+        let notice = Notice(message: message, isCritical: critical, tone: tone, deduplicationKey: deduplicationKey)
         history.append(notice)
         if history.count > 30 {
             history.removeFirst(history.count - 30)
         }
+        guard announce else { return }
+        automaticDismissTask?.cancel()
+        current = notice
         scheduleAutomaticDismiss(for: notice)
     }
 
@@ -83,7 +90,7 @@ enum NoticeLifecyclePolicy {
     static let automaticDismissDelayNanoseconds: UInt64 = 5_000_000_000
 
     static func dismissesAutomatically(_ notice: NoticeBus.Notice) -> Bool {
-        !notice.isCritical
+        !notice.isCritical && notice.tone != .error
     }
 
     static func canDismissExpiredNotice(
@@ -116,7 +123,7 @@ struct LinoIToast: View {
                         .foregroundStyle(LinoTheme.bg)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
-                    if notice.isCritical {
+                    if !NoticeLifecyclePolicy.dismissesAutomatically(notice) {
                         Button { bus.dismiss() } label: {
                             Image(systemName: "xmark")
                                 .font(.caption.weight(.semibold))
@@ -147,10 +154,10 @@ struct LinoIToast: View {
 
     private func scheduleDismiss(_ notice: NoticeBus.Notice) {
         dismissWorkItem?.cancel()
-        guard !notice.isCritical else { return }
+        guard NoticeLifecyclePolicy.dismissesAutomatically(notice) else { return }
         let item = DispatchWorkItem { bus.dismiss(id: notice.id) }
         dismissWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.6, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + NoticeLifecyclePolicy.automaticDismissDelay, execute: item)
     }
 
     private func toneColor(_ tone: NoticeTone) -> Color {
@@ -168,6 +175,53 @@ struct LinoIToast: View {
         case .success: "checkmark.circle.fill"
         case .warning: "exclamationmark.triangle.fill"
         case .error: "exclamationmark.circle.fill"
+        }
+    }
+}
+
+/// Full, selectable reasons shared by both clients. Only the safe message
+/// from the error presenter is accepted here, never Checker evidence fields.
+struct NoticeDetailSheet: View {
+    let title: String
+    let message: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(message)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
+            }
+            .navigationTitle(title)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
+        #if os(macOS)
+        .frame(width: 640, height: 440)
+        #endif
+    }
+}
+
+struct NoticeHistoryList: View {
+    @EnvironmentObject private var notices: NoticeBus
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                Text("本次打开 App 的最近 30 条通知；章节当前的失败原因也可在章节内查看。")
+                    .font(.caption).foregroundStyle(.secondary)
+                if notices.history.isEmpty { Text("暂无通知") }
+                ForEach(notices.history.reversed()) { notice in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(notice.timestamp.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(notice.message).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Divider()
+                }
+            }.padding(16)
         }
     }
 }

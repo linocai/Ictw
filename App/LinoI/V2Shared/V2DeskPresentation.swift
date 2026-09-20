@@ -137,6 +137,7 @@ struct V2DeskTaskBanner: Equatable, Sendable {
     /// Banner actions are compact secondary affordances. If this equals the
     /// bottom `primaryAction`, platforms must render it in only one location.
     let action: V2DeskPrimaryAction?
+    var detail: String? = nil
 }
 
 enum V2DeskCheckerVerdict: Equatable, Sendable {
@@ -563,18 +564,19 @@ enum V2DeskPresentation {
         if case .cancelled = source.writingPhase {
             return V2DeskTaskBanner(kind: .cancelled, tone: .neutral, text: "已取消，正文没有变化", action: .generate)
         }
-        if case .failed(let code, _, let stage) = source.writingPhase {
+        if case .failed(let code, let message, let stage) = source.writingPhase {
             if stage == .extraction || isAccepted {
-                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆没能整理，这一章仍然是完成的", action: .retryArchive)
+                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆没能整理，这一章仍然是完成的", action: .retryArchive, detail: message)
             }
             if needsSettings(code) {
-                return V2DeskTaskBanner(kind: .generationFailed, tone: .danger, text: "还没有可用的模型", action: .openSettings)
+                return V2DeskTaskBanner(kind: .generationFailed, tone: .danger, text: "模型配置需要处理", action: .openSettings, detail: message)
             }
             return V2DeskTaskBanner(
                 kind: .generationFailed,
                 tone: .danger,
-                text: hasDraft ? "没能写出这一章，正文没有变化" : "没能开始写这一章",
-                action: .retryGeneration
+                text: (stage == .bibleChecking ? "正文检查未通过" : "\(stage?.label ?? "任务")未完成") + (hasDraft ? "，正文没有变化" : ""),
+                action: .retryGeneration,
+                detail: message
             )
         }
         if hasUnavailableCurrentChecker {
@@ -590,7 +592,7 @@ enum V2DeskPresentation {
             case .pending:
                 return V2DeskTaskBanner(kind: .archiving, tone: .accent, text: "正在整理这一章的记忆", action: nil)
             case .attention:
-                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆需要重新整理，这一章仍然是完成的", action: .retryArchive)
+                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆需要重新整理，这一章仍然是完成的", action: .retryArchive, detail: source.chapter?.archive?.errorMessage)
             default:
                 return nil
             }

@@ -260,16 +260,18 @@ private struct V2MacConflictCard: View {
     }
 }
 
-private struct V2MacDeskToast: View {
+struct V2MacDeskToast: View {
     @EnvironmentObject private var notices: NoticeBus
     @Environment(\.colorScheme) private var colorScheme
+
+    @State private var detailNotice: NoticeBus.Notice?
 
     var body: some View {
         Group {
             if let notice = notices.current {
                 HStack(spacing: 9) {
                     V2DeskStatusMark(
-                        marker: V2DeskMarker(kind: .solidDot, tone: notice.isCritical ? .danger : .warning),
+                        marker: V2DeskMarker(kind: .solidDot, tone: notice.tone == .error ? .danger : .warning),
                         diameter: 7
                     )
                     Text(notice.message)
@@ -277,9 +279,15 @@ private struct V2MacDeskToast: View {
                         .foregroundStyle(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
-                    if notice.isCritical {
-                        V2MacDeskIconButton(symbol: "xmark", label: "关闭提示") { notices.dismiss() }
+                    Button("查看详情") { detailNotice = notice }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                    Button { notices.dismiss(id: notice.id) } label: {
+                        Image(systemName: "xmark").frame(width: 28, height: 28)
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .accessibilityLabel("关闭提示")
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .frame(maxWidth: 500, alignment: .leading)
@@ -287,14 +295,10 @@ private struct V2MacDeskToast: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)) }
                 .shadow(color: .black.opacity(0.16), radius: 8, y: 4)
-                .task(id: notice.id) {
-                    guard !notice.isCritical else { return }
-                    try? await Task.sleep(for: .seconds(2.6))
-                    if notices.current?.id == notice.id { notices.dismiss() }
-                }
             }
         }
         .frame(maxWidth: .infinity)
+        .sheet(item: $detailNotice) { NoticeDetailSheet(title: "通知详情", message: $0.message) }
     }
 }
 

@@ -564,11 +564,20 @@ private struct V2IOSTaskBanner: View {
     let networkActionsAvailable: Bool
     @Environment(\.colorScheme) private var colorScheme
 
+    @State private var showingDetails = false
+
     var body: some View {
         HStack(spacing: 9) {
             V2DeskStatusMark(marker: marker, diameter: 7)
             Text(banner.text).font(V2DeskType.control(12.5)).lineLimit(2)
             Spacer(minLength: 6)
+            if let detail = banner.detail, !detail.isEmpty {
+                Button("查看原因") { showingDetails = true }
+                    .buttonStyle(.plain)
+                    .font(V2DeskType.control(12.5, weight: .medium))
+                    .fixedSize()
+                    .frame(minHeight: 32)
+            }
             if let action = banner.action, action != primaryAction {
                 Button(action.title) { perform(action) }
                     .font(V2DeskType.control(12.5, weight: .medium))
@@ -581,6 +590,7 @@ private struct V2IOSTaskBanner: View {
         .padding(.horizontal, 20).padding(.vertical, 9)
         .background(background)
         .overlay(alignment: .bottom) { Rectangle().fill(markerColor.opacity(0.26)).frame(height: 1) }
+        .sheet(isPresented: $showingDetails) { NoticeDetailSheet(title: banner.text, message: banner.detail ?? "") }
     }
 
     private var marker: V2DeskMarker { V2DeskMarker(kind: banner.kind == .cancelled ? .hollowRing : .solidDot, tone: banner.tone) }

@@ -191,6 +191,8 @@ private struct V2MacDeskTaskBanner: View {
     @EnvironmentObject private var sync: ClientSyncStore
     @Environment(\.colorScheme) private var colorScheme
 
+    @State private var showingDetails = false
+
     var body: some View {
         HStack(spacing: 10) {
             V2DeskStatusMark(marker: V2DeskMarker(kind: banner.tone == .neutral ? .hollowRing : .solidDot, tone: banner.tone), diameter: 7)
@@ -198,6 +200,13 @@ private struct V2MacDeskTaskBanner: View {
                 .font(V2DeskType.control(12.5))
                 .foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme))
             Spacer(minLength: 8)
+            if let detail = banner.detail, !detail.isEmpty {
+                Button("查看原因") { showingDetails = true }
+                    .buttonStyle(.plain)
+                    .font(V2DeskType.control(12.5, weight: .medium))
+                    .fixedSize()
+                    .frame(minHeight: 32)
+            }
             if let action = banner.action, action != primaryAction {
                 Button(action.title) { perform(action) }
                     .buttonStyle(V2MacDeskButton(kind: banner.tone == .danger ? .secondary : .quiet, compact: true))
@@ -207,7 +216,8 @@ private struct V2MacDeskTaskBanner: View {
         .padding(.horizontal, 24).padding(.vertical, 9)
         .background(background)
         .overlay(alignment: .bottom) { Rectangle().fill(banner.tone.v2MacColor(scheme: colorScheme).opacity(0.28)).frame(height: 1) }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+        .sheet(isPresented: $showingDetails) { NoticeDetailSheet(title: banner.text, message: banner.detail ?? "") }
     }
 
     private var background: Color {

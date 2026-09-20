@@ -859,10 +859,13 @@ def rerun_checker(
         db.add(candidate)
         db.flush()
     fingerprint = _candidate_fingerprint(chapter, candidate)
-    from app.services.context import checker_user_message
+    from app.services.context import checker_user_message, manual_checker_reference_context
     try:
         raw = CheckerAgent(checker_client, get_persona(db, "checker", book_id=chapter.book_id)).check(
-            checker_user_message(chapter, chapter.draft_text, chapter.user_prompt)
+            checker_user_message(
+                chapter, chapter.draft_text, chapter.user_prompt,
+                reference_context=manual_checker_reference_context(db, chapter),
+            )
         )
         from app.services.write_jobs import _valid_checker_result
         candidate.checker_result = _valid_checker_result(raw, fingerprint)

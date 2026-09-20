@@ -30,6 +30,7 @@ from app.services.context import (
     pack_memory_brief,
     pack_writer_context,
     writer_user_message,
+    writing_reference_context,
 )
 from app.services.archive_v2 import (
     ArchiveFingerprintMismatch,
@@ -392,9 +393,12 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 _mark_chapter_changed(sf, job)
             job.mark_terminal(); return
         from app.services.character_state_projection import projected_fields_before_chapter
-        message = writer_user_message(
-            chapter.book, chapter, memories, previous_ending, bible=job.bible_snapshot,
+        reference_context = writing_reference_context(
+            chapter.book, chapter, memories, previous_ending,
             dynamic_fields_by_character=projected_fields_before_chapter(db, chapter),
+        )
+        message = writer_user_message(
+            chapter.book, chapter, bible=job.bible_snapshot, reference_context=reference_context,
         )
         last_candidate: ChapterDraftCandidate | None = None
         for attempt in (1, 2):
@@ -450,7 +454,9 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 sf,
                 "checker",
                 job.checker.check,
-                checker_user_message(chapter, last_candidate.draft_text, job.bible_snapshot),
+                checker_user_message(
+                    chapter, last_candidate.draft_text, job.bible_snapshot, reference_context=reference_context,
+                ),
             )
             checker_result = _valid_checker_result(raw, fingerprint)
         except LLMError as exc:

@@ -28,6 +28,11 @@ struct V2IOSSettingsView: View {
                     Button(savingConnection ? "正在保存" : "保存并重新连接") { saveConnection() }
                         .disabled(savingConnection || baseURL.v2IOSTrimmed.isEmpty)
                 }
+                Section {
+                    NavigationLink("通知记录") {
+                        NoticeHistoryList().navigationTitle("通知记录")
+                    }
+                }
                 Section("模型") {
                     ForEach(agents.profiles) { profile in
                         NavigationLink { V2IOSProfileEditor(profile: profile) } label: {

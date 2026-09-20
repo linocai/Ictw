@@ -430,13 +430,12 @@ def pack_memory_brief(
     return packed
 
 
-def writer_user_message(
+def writing_reference_context(
     book: Book,
     chapter: Chapter,
     memories: list[MemoryBlock] | None = None,
     previous_ending: str = "",
     *,
-    bible: str | None = None,
     dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     characters = _selected_characters(chapter)
@@ -461,6 +460,29 @@ def writer_user_message(
                 + "\n\n## 其他工作记忆\n"
                 + memory_text
             ),
+        ]
+    )
+
+
+def writer_user_message(
+    book: Book,
+    chapter: Chapter,
+    memories: list[MemoryBlock] | None = None,
+    previous_ending: str = "",
+    *,
+    bible: str | None = None,
+    dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
+    reference_context: str | None = None,
+) -> str:
+    # Freeze this same block for Writer and Checker during a generation.
+    if reference_context is None:
+        reference_context = writing_reference_context(
+            book, chapter, memories, previous_ending,
+            dynamic_fields_by_character=dynamic_fields_by_character,
+        )
+    return "\n\n".join(
+        [
+            reference_context,
             f"# 本章剧情 Bible（原文快照，情节最高权威）\n标题：{chapter.title}\n\n{(bible if bible is not None else chapter.user_prompt).strip()}",
             (
                 "# 最终执行契约\n"
@@ -555,18 +577,41 @@ def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
     )
 
 
-def checker_user_message(chapter: Chapter, draft_text: str, bible: str) -> str:
-    characters = _selected_characters(chapter)
-    allow = "、".join(character.name for character in characters) or "（无已选人物）"
+def manual_checker_reference_context(db: Session, chapter: Chapter) -> str:
+    """Bounded current facts for manual checks; no extra Selector/model call."""
+    from app.services.character_state_projection import projected_fields_before_chapter
+
+    blocks = prefilter_memory_candidates(
+        memory_candidates(db, chapter), chapter=chapter,
+        selected_character_ids={character.id for character in _selected_characters(chapter)},
+    )
+    packed = pack_writer_context(
+        blocks, [block.id for block in blocks if block.memory_type != "previous_ending"],
+        None, MEMORY_BUDGET_CHARS,
+    )
+    return writing_reference_context(
+        chapter.book, chapter, packed.memories, packed.previous_ending,
+        dynamic_fields_by_character=projected_fields_before_chapter(db, chapter),
+    )
+
+
+def checker_user_message(
+    chapter: Chapter, draft_text: str, bible: str, *, reference_context: str,
+) -> str:
     return "\n\n".join(
         [
-            "# 本章剧情 Bible（原文快照）\n" + bible,
-            "# 本章允许人物白名单\n" + allow,
+            reference_context,
+            f"# 本章剧情 Bible（原文快照，情节最高权威）\n标题：{chapter.title}\n\n{bible}",
             "# 待检查正文（原样）\n" + draft_text,
             (
-                "# 检查任务\n只检查 Bible 必要事件遗漏、事件顺序或结果矛盾、以及会影响后续事实的新增人物、"
-                "线索、秘密、冲突或关系变化。文学性的动作、心理、环境和自然衔接不是违规。"
-                "每个 issue 必须同时引用正文和 Bible 证据；没有证据时不要报告 issue。"
+                "# 检查任务\n先核对世界观、人物卡、本章开始前动态状态及有效历史，区分既有事实与本章新增变化。"
+                "已有身份或关系在正文中的自然呈现，不因 Bible 未重复列出就构成新增关系。"
+                "既有恋爱关系不自动授权本章发生表白、分手、婚约等关系变化；历史人物不自动获得白名单权限。"
+                "Bible 决定本章必要事件、顺序与结尾，历史只用于衔接和核对已发生事实；冲突时服从 Bible，"
+                "不得根据历史补入本章未授权的剧情。只检查必要事件遗漏、顺序或结果矛盾、以及会影响后续事实的"
+                "新增人物、线索、秘密、冲突或关系变化。文学性的动作、心理、环境和自然衔接不是违规。"
+                "每个 issue 必须同时引用正文和 Bible 证据，在 reason 中说明具体冲突或新增变化；"
+                "不得把“Bible 未提及”本身当作新增的证据，也不得将参考资料冒充 Bible 引文；没有证据时不要报告 issue。"
             ),
         ]
     )

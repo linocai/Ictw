@@ -346,43 +346,54 @@ struct V2IOSNoticeToast: View {
     @EnvironmentObject private var notices: NoticeBus
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @State private var detailNotice: NoticeBus.Notice?
+
     var body: some View {
-        if let notice = notices.current {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: iconName(for: notice.tone))
-                    .foregroundStyle(iconColor(for: notice.tone))
-                    .accessibilityHidden(true)
-                Text(notice.message)
-                    .font(V2DeskType.control(12))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button {
-                    notices.dismiss(id: notice.id)
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
+        Group {
+            if let notice = notices.current {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: iconName(for: notice.tone))
+                        .foregroundStyle(iconColor(for: notice.tone))
+                        .accessibilityHidden(true)
+                    Text(notice.message)
+                        .font(V2DeskType.control(12))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("详情") { detailNotice = notice }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                        .fixedSize()
+                        .accessibilityLabel("查看通知详情")
+                    Button {
+                        notices.dismiss(id: notice.id)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.bold))
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.82))
+                    .accessibilityLabel("关闭提示")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.82))
-                .accessibilityLabel("关闭提示")
+                .padding(.leading, 14)
+                .padding(.trailing, 6)
+                .padding(.vertical, 8)
+                .frame(maxWidth: 520, alignment: .leading)
+                .background(.black.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(accessibilityLabel(for: notice))
+                // Padding lives inside the branch so an absent notice occupies no
+                // height and never shifts the host's content.
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: notice.id)
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 6)
-            .padding(.vertical, 8)
-            .frame(maxWidth: 520, alignment: .leading)
-            .background(.black.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(accessibilityLabel(for: notice))
-            // Padding lives inside the branch so an absent notice occupies no
-            // height and never shifts the host's content.
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: notice.id)
         }
+        .sheet(item: $detailNotice) { NoticeDetailSheet(title: "通知详情", message: $0.message) }
     }
 
     private func iconName(for tone: NoticeTone) -> String {

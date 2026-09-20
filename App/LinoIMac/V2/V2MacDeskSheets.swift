@@ -37,6 +37,7 @@ struct V2MacSheetFrame<Content: View>: View {
             .padding(.horizontal, 22).frame(height: 48)
             .background(V2DeskPalette.color(.titleBar, scheme: colorScheme))
             V2MacDeskHairline()
+            V2MacDeskToast().padding(.horizontal, 12)
             content
         }
         .frame(width: width)
@@ -342,9 +343,9 @@ private struct V2MacSettingsSheet: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private enum V2MacSettingsSection: String, CaseIterable, Identifiable {
-        case connection, model, personas, writing, appearance
+        case connection, model, personas, writing, appearance, notifications
         var id: String { rawValue }
-        var title: String { switch self { case .connection: "连接"; case .model: "模型"; case .personas: "人格"; case .writing: "写作"; case .appearance: "外观" } }
+        var title: String { switch self { case .connection: "连接"; case .model: "模型"; case .personas: "人格"; case .writing: "写作"; case .appearance: "外观"; case .notifications: "通知" } }
     }
 
     var body: some View {
@@ -365,18 +366,23 @@ private struct V2MacSettingsSheet: View {
                 .padding(.top, 14).frame(width: 168)
                 .background(V2DeskPalette.color(.rail, scheme: colorScheme))
                 V2MacDeskHairline().frame(width: 1, height: nil)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        switch section {
-                        case .connection: V2MacConnectionSettings()
-                        case .model: V2MacModelSettings()
-                        case .personas: V2MacPersonaSettings()
-                        case .writing: V2MacWritingSettings()
-                        case .appearance: V2MacAppearanceSettings()
-                        }
-                    }.padding(22)
+                if section == .notifications {
+                    NoticeHistoryList().frame(maxWidth: .infinity)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            switch section {
+                            case .connection: V2MacConnectionSettings()
+                            case .model: V2MacModelSettings()
+                            case .personas: V2MacPersonaSettings()
+                            case .writing: V2MacWritingSettings()
+                            case .appearance: V2MacAppearanceSettings()
+                            case .notifications: EmptyView()
+                            }
+                        }.padding(22)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
             }
             .frame(height: 560)
         }
@@ -384,7 +390,6 @@ private struct V2MacSettingsSheet: View {
             await agents.load()
             if let id = session.currentBook?.id {
                 _ = await agents.loadBookPersonas(bookID: id)
-                _ = await agents.loadBookModelBindings(bookID: id)
             }
         }
     }
@@ -452,6 +457,7 @@ private struct V2MacConnectionSettings: View {
 }
 
 private struct V2MacModelSettings: View {
+    @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var agents: AgentSettingsStore
     @State private var addProfile = false
     @Environment(\.colorScheme) private var colorScheme
@@ -459,7 +465,7 @@ private struct V2MacModelSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
             V2MacDeskSectionLabel(text: "模型")
-            Text("模型、绑定和参数始终是全局设置。")
+            Text("下方是各角色的全局模型配置。打开一本书后，可为该书单独设置。")
                 .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
             HStack { Text("PROFILE").font(V2DeskType.control(11, weight: .medium)); Spacer(); Button("新增 Profile") { addProfile = true }.buttonStyle(V2MacDeskButton(kind: .secondary, compact: true)) }
             if agents.profiles.isEmpty {
@@ -475,8 +481,11 @@ private struct V2MacModelSettings: View {
             }
             V2MacDeskHairline()
             ForEach(roles, id: \.self) { role in V2MacBindingRow(role: role) }
-            V2MacDeskHairline()
-            V2MacBookModelSettings()
+            if let bookID = session.currentBook?.id {
+                V2MacDeskHairline()
+                V2MacBookModelSettings(bookID: bookID)
+                    .id(bookID)
+            }
         }
         .sheet(isPresented: $addProfile) { V2MacNewProfileSheet() }
     }
@@ -508,6 +517,7 @@ private struct V2MacBindingRow: View {
 }
 
 private struct V2MacBookModelSettings: View {
+    let bookID: String
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var sync: ClientSyncStore
@@ -517,15 +527,20 @@ private struct V2MacBookModelSettings: View {
     @State private var effort = ""
     @State private var temperature = 1.0
     @State private var saving = false
+    @State private var isLoading = true
+    @State private var loadFailed = false
     @State private var confirmRestore = false
     @Environment(\.colorScheme) private var colorScheme
     private let roles = ["memory_selector", "writer", "checker", "extractor", "inspiration_creator"]
 
-    private var row: BookAgentModelBinding? { agents.bookModelBindings.first { $0.agentRole == selectedRole } }
+    private var row: BookAgentModelBinding? {
+        guard session.currentBook?.id == bookID, agents.bookModelBindingsBookID == bookID else { return nil }
+        return agents.bookModelBindings.first { $0.agentRole == selectedRole }
+    }
     private var bounded: Bool { selectedRole == "extractor" || selectedRole == "inspiration_creator" }
     private var effectiveName: String {
-        guard let id = row?.effectiveBinding?.llmProfileId,
-              let profile = agents.profiles.first(where: { $0.id == id }) else { return "未绑定" }
+        guard let id = row?.effectiveBinding?.llmProfileId else { return "未绑定" }
+        guard let profile = agents.profiles.first(where: { $0.id == id }) else { return "模型资料未载入" }
         return "\(profile.name) · \(profile.modelName)"
     }
 
@@ -534,6 +549,28 @@ private struct V2MacBookModelSettings: View {
             V2MacDeskSectionLabel(text: "本书模型覆盖")
             Text("缺省时完整跟随全局；这里保存的是一整份本书配置，而不是字段拼接。")
                 .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+            if isLoading {
+                ProgressView("正在读取本书模型")
+            } else if loadFailed || row == nil {
+                Text("本书模型配置未能载入。")
+                    .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                Button("重新加载") { Task { await loadBindings() } }
+                    .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+            } else {
+                bindingControls
+            }
+        }
+        .task { await loadBindings() }
+        .onChange(of: selectedRole) { _, _ in loadDraft() }
+        .onChange(of: row) { _, _ in loadDraft() }
+        .confirmationDialog("恢复跟随全局？", isPresented: $confirmRestore) {
+            Button("恢复跟随全局", role: .destructive) { Task { await restore() } }
+            Button("取消", role: .cancel) {}
+        } message: { Text("本书的完整模型覆盖会移除；以后启动的任务重新使用全局配置。") }
+    }
+
+    private var bindingControls: some View {
+        VStack(alignment: .leading, spacing: 11) {
             Picker("角色", selection: $selectedRole) { ForEach(roles, id: \.self) { Text($0.v2AgentLabel).tag($0) } }
                 .pickerStyle(.segmented)
             HStack {
@@ -572,13 +609,16 @@ private struct V2MacBookModelSettings: View {
                     .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(saving || !sync.networkActionsAvailable)
             }
         }
-        .onAppear(perform: loadDraft)
-        .onChange(of: selectedRole) { _, _ in loadDraft() }
-        .onChange(of: row) { _, _ in loadDraft() }
-        .confirmationDialog("恢复跟随全局？", isPresented: $confirmRestore) {
-            Button("恢复跟随全局", role: .destructive) { Task { await restore() } }
-            Button("取消", role: .cancel) {}
-        } message: { Text("本书的完整模型覆盖会移除；以后启动的任务重新使用全局配置。") }
+    }
+
+    private func loadBindings() async {
+        isLoading = true
+        loadFailed = false
+        let loaded = await agents.loadBookModelBindings(bookID: bookID)
+        guard !Task.isCancelled else { return }
+        loadFailed = !loaded
+        if loaded { loadDraft() }
+        isLoading = false
     }
 
     private func loadDraft() {
@@ -590,7 +630,7 @@ private struct V2MacBookModelSettings: View {
     }
 
     private func save() async {
-        guard let bookID = session.currentBook?.id else { return }
+        guard session.currentBook?.id == bookID, row != nil else { return }
         saving = true
         let binding = AgentModelBindingValues(
             llmProfileId: profileID.isEmpty ? nil : profileID,
@@ -608,7 +648,7 @@ private struct V2MacBookModelSettings: View {
     }
 
     private func restore() async {
-        guard let bookID = session.currentBook?.id else { return }
+        guard session.currentBook?.id == bookID, row != nil else { return }
         saving = true
         _ = await agents.clearBookModelBinding(bookID: bookID, role: selectedRole)
         saving = false

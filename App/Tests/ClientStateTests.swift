@@ -560,6 +560,15 @@ private func testRejectedCandidateKeepsSpecificCheckerReasonsSeparate() throws {
         status.specificFailureReason == "Checker 未通过：新增了 Bible 未授权剧情",
         "Checker issue reasons must override the generic rejection copy without duplication"
     )
+    let presented = LinoErrorPresenter.present(jobFailure: status)
+    let failed = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: try makeChapter(),
+        writingPhase: .failed(code: status.errorCode, message: presented.message, stage: .bibleChecking)
+    ))
+    try expect(failed.taskBanner?.text.hasPrefix("正文检查未通过") == true, "a Checker blocker must identify the actual failing stage")
+    try expect(failed.taskBanner?.detail == presented.message, "the persistent chapter banner must preserve complete reasons")
+    try expect(presented.message.contains("新增了 Bible 未授权剧情"), "notification must retain the specific safe reason")
+    try expect(!presented.message.contains("候选证据") && !presented.message.contains("Bible 证据"), "rejected manuscript evidence must never appear in a notification")
     try expect(
         status.failedCandidateCheckerResult?.displayVerdict == "violation",
         "rejected candidate result must stay available separately"
@@ -1507,6 +1516,7 @@ private func testRewriteImpactPreviewDecodesSnakeCase() throws {
 
 @main
 private struct ClientStateTestRunner {
+    @MainActor
     static func main() throws {
         try testLegacySynopsisDecodesAsCanonicalSummary()
         try testConnectionDefaultMigrationPreservesCustomEndpoint()

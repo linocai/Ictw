@@ -1360,9 +1360,17 @@ final class ChapterEditorStore: ObservableObject {
                 jobID: status.jobId
             )
         }
-        if announce {
-            session.notices.publish(presented.message, critical: presented.critical, tone: .error)
-        }
+        let location = currentChapter.map { chapter in
+            let book = session.currentBook.map { "《\($0.title)》" } ?? ""
+            return "\(book)第 \(chapter.index) 章\n"
+        } ?? ""
+        // Restored terminal outcomes go into history without replaying a
+        // toast on every chapter load or window activation.
+        let noticeKey = "job-failure:\(chapterId):\(status.jobId ?? presented.message)"
+        session.notices.publish(
+            location + presented.message, critical: presented.critical, tone: .error,
+            deduplicationKey: noticeKey, announce: announce
+        )
         Task { [weak self] in
             await self?.refreshChapterAfterFailure(chapterId)
         }
@@ -1463,7 +1471,7 @@ final class ChapterEditorStore: ObservableObject {
         default:
             if status.kind == "extract" { return .extraction }
             switch status.errorCode {
-            case "checker_failed": return .bibleChecking
+            case "checker_failed", "checker_rejected": return .bibleChecking
             default: return .drafting
             }
         }
