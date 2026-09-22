@@ -178,10 +178,16 @@ final class ChapterDraftCache {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        directory = base.appendingPathComponent("LinoI/ChapterDrafts", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    init(directory: URL? = nil) {
+        if let directory {
+            self.directory = directory
+        } else if let root = DebugRuntimeConfiguration.dataRoot {
+            self.directory = root.appendingPathComponent("ChapterDrafts", isDirectory: true)
+        } else {
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            self.directory = base.appendingPathComponent("LinoI/ChapterDrafts", isDirectory: true)
+        }
+        try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
     func load(chapterId: String) -> LocalChapterDraft? {

@@ -75,6 +75,7 @@ private struct V2IOSSyncStatusBar: View {
                     if let failure = sync.persistenceFailure { Text(failure) }
                     else if !sync.isOnline { Text("已打开的资料仍可阅读和编辑") }
                     else if !sync.conflicts.isEmpty { Text("比较后决定采用哪个版本") }
+                    else if sync.failedMutationCount > 0 { Text("有本机修改被服务器拒绝，查看原因后可重试") }
                     else { Text("恢复网络后会安全提交") }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right").font(.caption.weight(.semibold))
@@ -92,6 +93,7 @@ private struct V2IOSSyncStatusBar: View {
     private var state: V2DeskSyncPill.State? {
         if sync.hasPersistentSyncFailure { return .persistenceFailed }
         if !sync.conflicts.isEmpty { return .conflict(sync.conflicts.count) }
+        if sync.failedMutationCount > 0 { return .failed(sync.failedMutationCount) }
         if !sync.isOnline { return .offline }
         if sync.isFlushing { return .refreshing }
         if sync.pendingCount > 0 { return .pending(sync.pendingCount) }
@@ -124,11 +126,15 @@ private struct V2IOSSyncCenter: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if !sync.isOnline { V2DeskOfflineExplanation() }
-                    if sync.pendingCount > 0, !sync.hasPersistentSyncFailure {
-                        Text("\(sync.pendingCount) 项本机修改会在恢复连接后按原始编辑基线安全提交。")
+                    if sync.automaticallyFlushableMutationCount > 0, !sync.hasPersistentSyncFailure {
+                        Text("\(sync.automaticallyFlushableMutationCount) 项本机修改会在恢复连接后按原始编辑基线安全提交。")
                             .font(V2DeskType.control(12)).foregroundStyle(Color.secondary)
                     }
-                    if sync.isOnline, sync.pendingCount > 0 {
+                    if sync.failedMutationCount > 0 {
+                        Text("以下本机修改未被服务器接受；内容仍保留在本机。")
+                            .font(V2DeskType.control(12)).foregroundStyle(Color.secondary)
+                    }
+                    if sync.isOnline, sync.automaticallyFlushableMutationCount > 0 {
                         Button("立即尝试同步") { Task { await flushPendingAndRefresh() } }
                             .disabled(sync.isFlushing)
                     }
@@ -156,6 +162,32 @@ private struct V2IOSSyncCenter: View {
                                     .accessibilityHint("本机与服务器修改的是不同字段，可安全合并后再提交")
                                 }
                                 V2IOSConflictDiff(conflict: conflict)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                if !sync.failedMutations.isEmpty {
+                    Section("需要处理的同步") {
+                        ForEach(sync.failedMutations) { mutation in
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text(sync.resourceLabel(for: mutation))
+                                    .font(V2DeskType.control(13, weight: .medium))
+                                if let failure = mutation.failure {
+                                    Text(failure.message)
+                                        .font(V2DeskType.control(12))
+                                        .foregroundStyle(Color.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    if failure.kind == .authentication {
+                                        Text("请先在设置中修正连接或 Token，再尝试同步。")
+                                            .font(V2DeskType.control(12)).foregroundStyle(Color.secondary)
+                                    }
+                                }
+                                Button("重试同步") {
+                                    guard sync.retry(mutation) else { return }
+                                    Task { await flushPendingAndRefresh() }
+                                }
+                                .disabled(sync.isFlushing || !sync.isOnline)
                             }
                             .padding(.vertical, 4)
                         }
@@ -197,6 +229,7 @@ private struct V2IOSSyncCenter: View {
     private var currentState: V2DeskSyncPill.State {
         if sync.hasPersistentSyncFailure { return .persistenceFailed }
         if !sync.conflicts.isEmpty { return .conflict(sync.conflicts.count) }
+        if sync.failedMutationCount > 0 { return .failed(sync.failedMutationCount) }
         if !sync.isOnline { return .offline }
         if sync.isFlushing { return .refreshing }
         if sync.pendingCount > 0 { return .pending(sync.pendingCount) }
@@ -325,9 +358,9 @@ struct V2IOSConnectionView: View {
         session.token = token.v2IOSTrimmed
         session.saveConnection()
         Task {
-            await bookshelf.load()
+            let didLoadShelf = await bookshelf.load()
             connecting = false
-            if bookshelf.books.isEmpty && !bookshelf.isLoading { notices.publish("已连接，可以新建第一本书。") }
+            if didLoadShelf, bookshelf.books.isEmpty { notices.publish("已连接，可以新建第一本书。") }
         }
     }
 }

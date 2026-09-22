@@ -426,7 +426,7 @@ def test_health_reports_current_version(client, auth_headers):
     from app.main import APP_VERSION
 
     assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == APP_VERSION
-    assert APP_VERSION == "2.1.0"
+    assert APP_VERSION == "2.1.1"
 
 
 # --- B8 migration from the production revision --------------------------------

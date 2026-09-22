@@ -75,6 +75,7 @@ struct V2IOSChapterReaderView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var sync: ClientSyncStore
     @State private var isMoving = false
 
     let summary: ChapterSummary
@@ -82,6 +83,14 @@ struct V2IOSChapterReaderView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let banner = snapshot.taskBanner {
+                V2IOSTaskBanner(
+                    banner: banner,
+                    primaryAction: snapshot.primaryAction,
+                    perform: performReaderAction,
+                    networkActionsAvailable: sync.networkActionsAvailable
+                )
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     Text("第 \(chapter.index) 章")
@@ -133,9 +142,40 @@ struct V2IOSChapterReaderView: View {
                 staleCheckedSnapshot: editor.staleCheckedSnapshot,
                 saveState: editor.saveState,
                 connectionInterrupted: editor.pollingConnectionInterrupted,
+                taskMonitoringMessage: editor.taskMonitoringMessage,
+                preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
                 isLastChapterInBook: V2DeskChapterPosition.isLastChapter(chapter.id, in: workspace.chapters)
             )
         ).commands
+    }
+
+    private var snapshot: V2DeskSnapshot {
+        V2DeskPresentation.make(
+            V2DeskEditorSource(
+                chapter: chapter,
+                writingPhase: editor.writingPhase,
+                checkerResult: editor.checkerResult,
+                checkerAppliesToVisibleDraft: editor.checkerAppliesToVisibleDraft,
+                checkerRefreshing: editor.checkerRefreshing,
+                staleCheckedSnapshot: editor.staleCheckedSnapshot,
+                saveState: editor.saveState,
+                connectionInterrupted: editor.pollingConnectionInterrupted,
+                taskMonitoringMessage: editor.taskMonitoringMessage,
+                preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
+                isLastChapterInBook: V2DeskChapterPosition.isLastChapter(chapter.id, in: workspace.chapters)
+            )
+        )
+    }
+
+    private func performReaderAction(_ action: V2DeskPrimaryAction) {
+        switch action {
+        case .retryArchive:
+            Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
+        case .refreshTaskStatus:
+            Task { if let chapter = await editor.refreshTaskStatus() { workspace.upsert(chapter) } }
+        default:
+            break
+        }
     }
 
     @ViewBuilder private var readerDock: some View {
@@ -302,7 +342,7 @@ struct V2IOSChapterDeskView: View {
             Button("仍然接受", role: .destructive) { Task { if let chapter = await editor.accept(overrideChecker: true) { workspace.upsert(chapter) } } }
             Button("返回", role: .cancel) {}
         } message: {
-            Text("检查发现的问题不会再提醒你；正文和本章意图会保留，随后会单独整理记忆。")
+            Text(editor.preflightAcceptanceMessage ?? "检查发现的问题不会再提醒你；正文和本章意图会保留，随后会单独整理记忆。")
         }
     }
 
@@ -316,6 +356,8 @@ struct V2IOSChapterDeskView: View {
             staleCheckedSnapshot: editor.staleCheckedSnapshot,
             saveState: editor.saveState,
             connectionInterrupted: editor.pollingConnectionInterrupted,
+            taskMonitoringMessage: editor.taskMonitoringMessage,
+            preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
             isLastChapterInBook: V2DeskChapterPosition.isLastChapter(editor.currentChapter?.id, in: workspace.chapters)
         )
     }
@@ -342,6 +384,7 @@ struct V2IOSChapterDeskView: View {
         case .acceptWithWarning: showingAcceptWarning = true
         case .startNewChapter: Task { await workspace.createChapter() }
         case .retryArchive: Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
+        case .refreshTaskStatus: Task { if let chapter = await editor.refreshTaskStatus() { workspace.upsert(chapter) } }
         case .openSettings: showingSettings = true
         case .none: break
         }
@@ -616,7 +659,9 @@ private struct V2IOSActionDock: View {
                     .frame(width: 48, height: 48)
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
             }.buttonStyle(.plain).accessibilityLabel("查看\(alternateFace.title)")
-            V2IOSPrimaryButton(title: primary.title, disabled: primary == .none || !networkActionsAvailable, action: primaryAction)
+            if primary != .none {
+                V2IOSPrimaryButton(title: primary.title, disabled: !networkActionsAvailable, action: primaryAction)
+            }
             Button(action: inspirationAction) {
                 Text("✦").font(.system(size: 17)).foregroundStyle(V2DeskPalette.color(.accent, scheme: colorScheme)).frame(width: 48, height: 48).overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
             }

@@ -117,7 +117,7 @@ enum InspirationErrorCopy {
                 return "当前后端版本还不支持灵感创造师，请先更新后端。"
             }
             return body.isEmpty ? "灵感服务暂时不可用，请稍后重试。" : body
-        case .validation(let code, let backendMessage, _):
+        case .validation(_, let code, let backendMessage, _, _):
             switch code {
             case "llm_profile_not_configured":
                 return "灵感创造师还没有可用模型。请先到“设置 → Agent”为它绑定一个 Profile。"

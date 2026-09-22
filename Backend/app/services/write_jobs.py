@@ -321,15 +321,21 @@ def _persist_candidate(db: Session, job: WriteJob, chapter: Chapter, text: str, 
     return candidate
 
 
-def _valid_checker_result(raw: Any, fingerprint: str) -> dict[str, Any]:
+def _valid_checker_result(raw: Any, fingerprint: str, *, bible_required: bool = True) -> dict[str, Any]:
     if not isinstance(raw, dict) or raw.get("verdict") not in {"passed", "suspect", "violation"}:
         raise ValueError("Checker 返回结构无效")
+    if not isinstance(raw.get("issues"), list):
+        raise ValueError("Checker 缺少有效问题列表")
     issues: list[dict[str, str]] = []
-    for item in raw.get("issues", []):
+    for item in raw["issues"]:
         if not isinstance(item, dict):
             continue
-        required = [item.get(key) for key in ("kind", "draft_evidence", "bible_evidence", "reason")]
-        if all(isinstance(value, str) and value.strip() for value in required):
+        required = [item.get(key) for key in ("kind", "draft_evidence", "reason")]
+        bible_evidence = item.get("bible_evidence")
+        # Imported prose may have no chapter requirements. Keep evidence for
+        # other checks without demanding a fabricated quote from an empty Bible.
+        valid_bible = isinstance(bible_evidence, str) and (bool(bible_evidence.strip()) if bible_required else True)
+        if valid_bible and all(isinstance(value, str) and value.strip() for value in required):
             issues.append({key: item[key].strip() for key in ("kind", "draft_evidence", "bible_evidence", "reason")})
     if raw["verdict"] == "violation" and not issues:
         return {"verdict": "suspect", "issues": [], "draft_fingerprint": fingerprint, "invalid_evidence": True}

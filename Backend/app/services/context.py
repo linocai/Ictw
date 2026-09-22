@@ -598,6 +598,24 @@ def manual_checker_reference_context(db: Session, chapter: Chapter) -> str:
 def checker_user_message(
     chapter: Chapter, draft_text: str, bible: str, *, reference_context: str,
 ) -> str:
+    if not bible.strip():
+        return "\n\n".join([
+            reference_context,
+            f"# 本章剧情 Bible\n标题：{chapter.title}\n未提供本章写作要求。",
+            "# 待检查正文（原样）\n" + draft_text,
+            (
+                "# 检查任务\n本章 Bible 为空，跳过“是否符合本章写作要求”这一项："
+                "不检查相对于 Bible 的必要事件遗漏、顺序、结尾或剧情越界。"
+                "不得因 Bible 为空、未提供写作要求或无法对照 Bible 而报告 issue 或给出 suspect、violation。"
+                "不得将标题、历史参考或从正文推断出的意图当作补造的 Bible。"
+                "其余检查照常：只基于已提供的世界观、人物卡、章前状态、有效历史及正文，"
+                "核对确有证据的事实矛盾、正文内部矛盾和人物授权问题；没有资料时不得猜测。"
+                "历史人物不会自动获得本章出场权限；文学性细节不是违规。"
+                "每个 issue 的 draft_evidence 引用正文原文，reason 说明具体矛盾及对应资料证据，"
+                "bible_evidence 留为空字符串，不得编造 Bible 引文。"
+                "没有其他有证据的问题时返回 passed，issues 为空数组。"
+            ),
+        ])
     return "\n\n".join(
         [
             reference_context,

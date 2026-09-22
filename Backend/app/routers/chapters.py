@@ -55,7 +55,10 @@ from app.services.personas import get_persona
 from app.services.audit import record_llm_call
 from app.services.character_state_projection import projected_fields_before_chapter, rebuild_book_projection
 from app.services.inspiration_context import InspirationContextError, build_inspiration_context
-from app.services.write_jobs import WriteJob, WriteJobConflict, record_job_phase, write_registry
+from app.services.write_jobs import (
+    WriteJob, WriteJobConflict, _error_context, _valid_checker_result,
+    record_job_phase, write_registry,
+)
 from app.services.write_ownership import cancel_local_writer_jobs, invalidate_writer_inputs
 from app.services.archive_v2 import (
     archive_input_fingerprint,
@@ -833,7 +836,7 @@ def rerun_checker(
             status_code=409,
             detail={
                 "code": "checker_preflight_failed",
-                "message": "当前正文未通过确定性校验，未调用 Bible 检查",
+                "message": "当前正文未通过确定性校验，未调用 Bible 检查：" + _violation_summary(violations),
                 "violations": violations,
             },
         )
@@ -860,21 +863,69 @@ def rerun_checker(
         db.flush()
     fingerprint = _candidate_fingerprint(chapter, candidate)
     from app.services.context import checker_user_message, manual_checker_reference_context
+    started_at = None
+    error_code = None
+    upstream_reason = None
     try:
-        raw = CheckerAgent(checker_client, get_persona(db, "checker", book_id=chapter.book_id)).check(
-            checker_user_message(
-                chapter, chapter.draft_text, chapter.user_prompt,
-                reference_context=manual_checker_reference_context(db, chapter),
-            )
+        agent = CheckerAgent(checker_client, get_persona(db, "checker", book_id=chapter.book_id))
+        message = checker_user_message(
+            chapter, chapter.draft_text, chapter.user_prompt,
+            reference_context=manual_checker_reference_context(db, chapter),
         )
-        from app.services.write_jobs import _valid_checker_result
-        candidate.checker_result = _valid_checker_result(raw, fingerprint)
-    except Exception as exc:  # Checker never changes a candidate, including upstream failures.
-        candidate.checker_result = {"status": "unavailable", "draft_fingerprint": fingerprint, "error_code": getattr(exc, "code", "checker_failed")}
+        started_at = time.monotonic()
+        raw = agent.check(message)
+        try:
+            candidate.checker_result = _valid_checker_result(
+                raw, fingerprint, bible_required=bool(chapter.user_prompt.strip())
+            )
+        except (ValueError, TypeError):
+            raise LLMError("Invalid Checker result", code="checker_invalid_response") from None
+    except Exception as exc:  # Failure cannot change or expose candidate prose.
+        candidate.checker_result = _manual_checker_failure(exc, checker_client, fingerprint)
+        error_code = candidate.checker_result["error_code"]
+        upstream_reason = candidate.checker_result["error_context"].get("upstream_reason")
+    duration_ms = int((time.monotonic() - started_at) * 1000) if started_at is not None else None
     candidate.bible_sha256 = hashlib.sha256(chapter.user_prompt.encode()).hexdigest()
     candidate.draft_fingerprint = fingerprint
-    db.commit(); db.refresh(candidate)
+    db.commit()
+    # Candidate creation holds a SQLite write transaction. Audit only after
+    # releasing it; an independent audit session must never contend with us.
+    if duration_ms is not None:
+        record_llm_call(
+            SessionLocal, agent_role="checker", client=checker_client,
+            duration_ms=duration_ms, error_code=error_code,
+            chapter_id=chapter_id, upstream_reason=upstream_reason,
+        )
+    db.refresh(candidate)
     return CheckerRunRead.model_validate(candidate).model_copy(update={"draft_text": ""})
+
+
+def _manual_checker_failure(exc: Exception, client, fingerprint: str) -> dict:
+    messages = {
+        "llm_content_blocked": "上游模型拦截了本次检查请求",
+        "llm_timeout": "检查模型请求超时",
+        "llm_transport": "无法连接检查模型服务",
+        "llm_rate_limited": "检查模型触发限流",
+        "llm_upstream_unavailable": "检查模型服务暂时不可用",
+        "llm_upstream_rejected": "检查模型服务拒绝了请求",
+        "llm_output_truncated": "检查模型输出被截断",
+        "llm_empty_candidate": "检查模型没有返回有效内容",
+        "llm_invalid_response": "检查模型返回的数据格式无效",
+        "checker_invalid_response": "检查模型未返回有效检查结论",
+        "llm_upstream_error": "检查模型调用失败",
+    }
+    context = {"agent_role": "checker", "model_name": str(getattr(client, "model_name", "") or "")}
+    code, message = "checker_failed", "本次检查未能完成，请重试"
+    if isinstance(exc, LLMError):
+        # Never return str(exc): SDK/JSON errors may embed credentials or prose.
+        exc.agent_role, exc.model_name = "checker", context["model_name"]
+        context.update(_error_context(exc))
+        code = exc.code if exc.code in messages else "llm_upstream_error"
+        message = messages[code]
+    return {
+        "status": "unavailable", "draft_fingerprint": fingerprint,
+        "error_code": code, "error_message": message, "error_context": context,
+    }
 
 
 def _start_archive_job(

@@ -19,6 +19,15 @@ final class AppSession: ObservableObject {
     }
 
     func bootstrap() async {
+        #if DEBUG
+        if DebugRuntimeConfiguration.isIsolated {
+            // The validation configuration is all-or-nothing: never fill a
+            // missing test value from the author's production keychain.
+            baseURL = DebugRuntimeConfiguration.value(for: "LINOI_DEBUG_BASE_URL") ?? ""
+            token = DebugRuntimeConfiguration.value(for: "LINOI_DEBUG_TOKEN") ?? ""
+            return
+        }
+        #endif
         let migration = ConnectionEndpoint.migratedBaseURL(
             saved: UserDefaults.standard.string(forKey: "linoi.baseURL")
         )
@@ -27,9 +36,8 @@ final class AppSession: ObservableObject {
         }
         let savedToken = KeychainStore.get("appToken")
         #if DEBUG
-        let environment = ProcessInfo.processInfo.environment
-        baseURL = environment["LINOI_DEBUG_BASE_URL"] ?? migration.value
-        token = environment["LINOI_DEBUG_TOKEN"] ?? savedToken
+        baseURL = DebugRuntimeConfiguration.value(for: "LINOI_DEBUG_BASE_URL") ?? migration.value
+        token = DebugRuntimeConfiguration.value(for: "LINOI_DEBUG_TOKEN") ?? savedToken
         #else
         baseURL = migration.value
         token = savedToken
@@ -37,6 +45,9 @@ final class AppSession: ObservableObject {
     }
 
     func saveConnection() {
+        #if DEBUG
+        if DebugRuntimeConfiguration.isIsolated { return }
+        #endif
         UserDefaults.standard.set(baseURL, forKey: "linoi.baseURL")
         KeychainStore.set(token, for: "appToken")
     }
@@ -61,11 +72,15 @@ final class BookshelfStore: ObservableObject {
         books = sync.cache.books()
     }
 
-    func load() async {
+    /// `true` only means the shelf was actually read from the configured
+    /// backend. A warm cache, an empty shelf, or a skipped no-token load must
+    /// never be used as proof that a new connection succeeded.
+    @discardableResult
+    func load() async -> Bool {
         // Cold start is local-first: a Ningbo outage must not turn a book the
         // author already opened into an empty shelf.
         if books.isEmpty { books = sync.cache.books() }
-        guard !session.token.isEmpty else { sync.markOffline(); return }
+        guard !session.token.isEmpty else { sync.markOffline(); return false }
         isLoading = true
         defer { isLoading = false }
         do {
@@ -73,9 +88,11 @@ final class BookshelfStore: ObservableObject {
             books = try await session.api.request("/books")
             sync.cache.saveBooks(books)
             sync.markOnline()
+            return true
         } catch {
             if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
+            return false
         }
     }
 
@@ -289,13 +306,15 @@ final class WorkspaceStore: ObservableObject {
             sync.markOnline()
             return true
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH", baseRevision: book.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
-            } else if case APIError.transport = error {
-                sync.markOffline()
-                sync.enqueue(kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH", baseRevision: book.contentRevision, payload: payload, baseSnapshot: base)
+                session.notices.publish(error)
+            } else if !sync.enqueueDirectFailure(
+                error, kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH",
+                baseRevision: book.contentRevision, payload: payload, baseSnapshot: base
+            ) {
+                session.notices.publish("书籍修改未能安全进入同步队列，请保留当前页面后重试。", critical: true)
             }
-            session.notices.publish(error)
             return false
         }
     }
@@ -415,13 +434,15 @@ final class CharactersStore: ObservableObject {
             sync.markOnline()
             return true
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH", baseRevision: character.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
-            } else if case APIError.transport = error {
-                sync.markOffline()
-                sync.enqueue(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH", baseRevision: character.contentRevision, payload: payload, baseSnapshot: base)
+                session.notices.publish(error)
+            } else if !sync.enqueueDirectFailure(
+                error, kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH",
+                baseRevision: character.contentRevision, payload: payload, baseSnapshot: base
+            ) {
+                session.notices.publish("人物修改未能安全进入同步队列，请保留当前页面后重试。", critical: true)
             }
-            session.notices.publish(error)
             return false
         }
     }
@@ -436,7 +457,7 @@ final class CharactersStore: ObservableObject {
             ensureSelection()
             return true
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "DELETE", baseRevision: character.contentRevision, payload: EmptyMutationPayload(), baseSnapshot: character, error: conflict, api: session.api)
             } else if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
@@ -474,24 +495,25 @@ final class CharactersStore: ObservableObject {
                 session.notices.publish(error)
                 return false
             }
+            guard sync.enqueueDirectFailure(
+                error, kind: .characterEvent, id: event.id,
+                path: "/character-events/\(event.id)", method: "PATCH",
+                baseRevision: event.contentRevision,
+                payload: payload, baseSnapshot: base
+            ) else {
+                session.notices.publish("人物记录未能安全保存在本机，请保留编辑框后重试。", critical: true)
+                return false
+            }
             if case APIError.transport = error {
-                sync.markOffline()
-                guard sync.enqueue(
-                    kind: .characterEvent, id: event.id,
-                    path: "/character-events/\(event.id)", method: "PATCH",
-                    baseRevision: event.contentRevision,
-                    payload: payload, baseSnapshot: base
-                ) else {
-                    session.notices.publish("人物记录未能安全保存在本机，请保留编辑框后重试。", critical: true)
-                    return false
-                }
                 var local = event
                 local.eventText = text
                 applyEventUpdate(local)
                 session.notices.publish("当前离线，人物记录已保存在本机，恢复网络后会安全同步。")
                 return true
             }
-            session.notices.publish(error)
+            var local = event
+            local.eventText = text
+            applyEventUpdate(local)
             return false
         }
     }
@@ -507,7 +529,7 @@ final class CharactersStore: ObservableObject {
             sync.markOnline()
         } catch {
             if case APIError.transport = error { sync.markOffline() }
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .characterEvent, id: event.id, path: "/character-events/\(event.id)", method: "DELETE",
                     readPath: "/character-events/\(event.id)", readStrategy: .direct,
@@ -546,6 +568,10 @@ final class ChapterEditorStore: ObservableObject {
     @Published private(set) var writingPhase: ChapterWritingPhase = .idle
     @Published private(set) var saveState: ChapterSaveState = .synced
     @Published private(set) var pollingConnectionInterrupted = false
+    /// A stopped monitor is deliberately separate from a failed server job.
+    /// It carries a safe reason and enables a read-only refresh without
+    /// inventing a terminal outcome.
+    @Published private(set) var taskMonitoringMessage: String?
     /// Latest deterministic validation explanation. It never represents a
     /// model edit; failed candidates remain backend-only audit records.
     @Published private(set) var currentValidationReason: String?
@@ -557,6 +583,9 @@ final class ChapterEditorStore: ObservableObject {
     @Published private(set) var failedCandidateCheckerResult: CheckerResult?
     @Published private(set) var checkerAppliesToVisibleDraft = false
     @Published private(set) var checkerRefreshing = false
+    /// A length-only deterministic preflight can be consciously accepted;
+    /// character/empty-body failures never set this value.
+    @Published private(set) var preflightAcceptanceMessage: String?
     /// Local-only previous result, retained after edits strictly as stale
     /// context. It can never unlock acceptance or be sent back to Backend.
     @Published private(set) var staleCheckedSnapshot: CheckedDraftSnapshot?
@@ -570,7 +599,10 @@ final class ChapterEditorStore: ObservableObject {
     private let cache = ChapterDraftCache()
     private var pollingTask: Task<Void, Never>?
     private var pollingChapterId: String?
+    private var pollingMonitorID: UUID?
     private var pollingErrorNotified = false
+    private var actionOperationID: UUID?
+    private var taskRefreshRequestID: UUID?
     private var localEditRevision: UInt64 = 0
 
     init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
@@ -613,15 +645,41 @@ final class ChapterEditorStore: ObservableObject {
         )
     }
 
+    private func beginAction() -> UUID {
+        let operationID = UUID()
+        actionOperationID = operationID
+        return operationID
+    }
+
+    private func actionIsCurrent(_ operationID: UUID, chapterID: String, revision: UInt64) -> Bool {
+        actionOperationID == operationID
+            && currentChapter?.id == chapterID
+            && localEditRevision == revision
+    }
+
+    private func invalidateInFlightOperations() {
+        actionOperationID = nil
+        taskRefreshRequestID = nil
+    }
+
     func load(_ summary: ChapterSummary) async {
         guard persistLocalDraftIfNeeded() else { return }
+        if currentChapter?.id != summary.id {
+            invalidateInFlightOperations()
+            if let pollingChapterId, pollingChapterId != summary.id {
+                stopPolling(for: pollingChapterId)
+            }
+        }
         isLoading = true
         restoredLocalDraft = false
         pollingConnectionInterrupted = false
+        taskMonitoringMessage = nil
         memoryContext = nil
         checkerResult = nil
         failedCandidateCheckerResult = nil
         checkerAppliesToVisibleDraft = false
+        checkerRefreshing = false
+        preflightAcceptanceMessage = nil
         staleCheckedSnapshot = nil
         defer { isLoading = false }
         // Offline-first reading. A local snapshot is safe to render because it
@@ -694,6 +752,7 @@ final class ChapterEditorStore: ObservableObject {
         if keyPath == \Chapter.title || keyPath == \Chapter.userPrompt || keyPath == \Chapter.draftText {
             markCheckerStale()
         }
+        preflightAcceptanceMessage = nil
         clearTaskOutcome(chapterID: chapter.id)
         if saveState != .unsaved {
             saveState = .unsaved
@@ -708,6 +767,7 @@ final class ChapterEditorStore: ObservableObject {
         currentChapter = chapter
         localEditRevision &+= 1
         markCheckerStale()
+        preflightAcceptanceMessage = nil
         clearTaskOutcome(chapterID: chapter.id)
         if saveState != .unsaved {
             saveState = .unsaved
@@ -763,25 +823,39 @@ final class ChapterEditorStore: ObservableObject {
             saveState = .synced
             return saved
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH", baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
                 saveState = .remoteSaveFailed(message: "章节已在另一设备更新；本机内容已保留，等待比较。", localDraftPreserved: localSnapshotSaved)
                 session.notices.publish("章节已在另一设备更新；本机内容已保留。")
                 return nil
             }
-            if case APIError.transport = error {
-                sync.markOffline()
-                sync.enqueue(kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH", baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base)
-                saveState = .localDraft
-                session.notices.publish("当前离线，修改已保存在本机，恢复网络后会安全同步。")
-                return nil
-            }
             let presented = LinoErrorPresenter.present(error: error)
-            saveState = .remoteSaveFailed(
-                message: presented.message,
-                localDraftPreserved: localSnapshotSaved
+            let queued = sync.enqueueDirectFailure(
+                error, kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH",
+                baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base
             )
-            session.notices.publish(presented.message, critical: presented.critical, tone: .error)
+            switch (localSnapshotSaved, queued) {
+            case (false, false):
+                saveState = .localSaveFailed(message: "正文和待同步副本都未能安全写入本机，请立即复制正文后重试。")
+                session.notices.publish("正文和待同步副本都未能安全写入本机，请立即复制正文后重试。", critical: true)
+            case (true, false):
+                saveState = .remoteSaveFailed(
+                    message: "本机草稿已保存，但未能进入自动同步队列：\(presented.message)",
+                    localDraftPreserved: true
+                )
+                session.notices.publish("本机草稿已保存，但未能进入自动同步队列：\(presented.message)", critical: true, tone: .error)
+            case (false, true):
+                saveState = .remoteSaveFailed(
+                    message: "本机草稿缓存未写入，但待同步副本已保存：\(presented.message)",
+                    localDraftPreserved: true
+                )
+            case (true, true):
+                if case APIError.transport = error {
+                    saveState = .localDraft
+                } else {
+                    saveState = .remoteSaveFailed(message: presented.message, localDraftPreserved: true)
+                }
+            }
             return nil
         }
     }
@@ -795,6 +869,7 @@ final class ChapterEditorStore: ObservableObject {
             checkerResult = nil
             failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = false
+            preflightAcceptanceMessage = nil
             cache.saveClean(imported)
             ChapterTaskOutcomeStore.clear(chapterID: imported.id)
             writingPhase = .idle
@@ -828,6 +903,7 @@ final class ChapterEditorStore: ObservableObject {
         checkerResult = nil
         failedCandidateCheckerResult = nil
         checkerAppliesToVisibleDraft = false
+        preflightAcceptanceMessage = nil
         memoryContext = nil
         guard await save() != nil else { return nil }
         return await startWrite(replaceDraft: replace)
@@ -839,16 +915,24 @@ final class ChapterEditorStore: ObservableObject {
     func accept(overrideChecker: Bool = false) async -> Chapter? {
         guard !writingPhase.isActive else { return nil }
         guard let saved = await save() else { return nil }
+        let operationID = beginAction()
+        let startingRevision = localEditRevision
+        let noticeLocation = noticeLocation(for: saved)
         pendingExemptionNames = []
         currentValidationReason = nil
         failedCandidateCheckerResult = nil
+        preflightAcceptanceMessage = nil
         ChapterTaskOutcomeStore.clear(chapterID: saved.id)
-        writingPhase = .extracting
+        // No chapter is accepted until the server confirms it. In particular,
+        // do not borrow Extractor's finalized semantics for a rejected accept
+        // request: that was the root cause of the false “completed” UI.
+        writingPhase = .accepting
         do {
             let status = try await session.api.accept(
                 chapterId: saved.id, contentRevision: saved.contentRevision,
                 overrideChecker: overrideChecker
             )
+            guard actionIsCurrent(operationID, chapterID: saved.id, revision: startingRevision) else { return nil }
             applyJobStatus(status, chapterId: saved.id)
             if !Self.isTerminalPhase(status.phase) {
                 pollJob(chapterId: saved.id)
@@ -856,10 +940,60 @@ final class ChapterEditorStore: ObservableObject {
             return currentChapter
         } catch {
             _ = await recordActionRevisionConflictIfNeeded(error, chapter: saved)
-            if await adoptRunningJobIfNeeded(error, chapterId: saved.id) {
+            if await adoptRunningJobIfNeeded(
+                error, chapterId: saved.id, operationID: operationID, revision: startingRevision
+            ) {
                 return currentChapter
             }
-            applyStartFailure(error, chapterId: saved.id, intendedStage: .extraction)
+            if Self.acceptanceResultMayBeUnknown(error) {
+                switch await reconcileAcceptanceAfterUncertainResult(
+                    chapterId: saved.id, operationID: operationID, revision: startingRevision
+                ) {
+                case .observed:
+                    return actionIsCurrent(operationID, chapterID: saved.id, revision: startingRevision)
+                        ? currentChapter
+                        : nil
+                case .unknown(let observationError):
+                    markAcceptanceResultUnknown(
+                        observationError,
+                        chapter: saved,
+                        operationID: operationID,
+                        revision: startingRevision,
+                        noticeLocation: noticeLocation
+                    )
+                    return nil
+                }
+            }
+            if let message = Self.preflightAcceptanceOverrideMessage(from: error) {
+                _ = publishStartFailure(
+                    error,
+                    chapter: saved,
+                    operationID: operationID,
+                    noticeLocation: noticeLocation,
+                    action: "接受正文"
+                )
+                // The server has explicitly rejected this first attempt, so
+                // it is safe to leave the request phase. Only the narrow
+                // server-approved length rules expose a second, confirmed
+                // accept; character and empty-body failures remain blockers.
+                guard actionIsCurrent(operationID, chapterID: saved.id, revision: startingRevision) else {
+                    return nil
+                }
+                checkerResult = nil
+                checkerAppliesToVisibleDraft = false
+                preflightAcceptanceMessage = message
+                writingPhase = .idle
+                return nil
+            }
+            applyStartFailure(
+                error,
+                chapter: saved,
+                intendedStage: .acceptance,
+                operationID: operationID,
+                revision: startingRevision,
+                noticeLocation: noticeLocation,
+                action: "接受正文"
+            )
             return nil
         }
     }
@@ -868,43 +1002,150 @@ final class ChapterEditorStore: ObservableObject {
     /// accepted. This never re-runs Checker or asks the user to accept again.
     func retryArchive() async -> Chapter? {
         guard !writingPhase.isActive else { return nil }
-        guard let saved = await save(), saved.status == "finalized" else { return nil }
-        ChapterTaskOutcomeStore.clear(chapterID: saved.id)
+        guard let accepted = currentChapter, accepted.status == "finalized" else { return nil }
+        // Archive retry has no author-input transition. Calling `save()` here
+        // would issue a chapter PATCH before the archive-only endpoint and
+        // could submit a local divergence through a recovery button. Keep the
+        // accepted revision authoritative and let a normal edit/reopen flow
+        // resolve any divergence first.
+        guard !hasLocalInputDivergence else {
+            session.notices.publish("本机正文或章节输入尚未与服务器一致；请先处理该修改后再重新整理记忆。", tone: .error)
+            return nil
+        }
+        let operationID = beginAction()
+        let startingRevision = localEditRevision
+        let noticeLocation = noticeLocation(for: accepted)
+        ChapterTaskOutcomeStore.clear(chapterID: accepted.id)
         writingPhase = .extracting
         do {
             let status = try await session.api.retryArchive(
-                chapterId: saved.id, contentRevision: saved.contentRevision
+                chapterId: accepted.id, contentRevision: accepted.contentRevision
             )
-            applyJobStatus(status, chapterId: saved.id)
+            guard actionIsCurrent(operationID, chapterID: accepted.id, revision: startingRevision) else { return nil }
+            applyJobStatus(status, chapterId: accepted.id)
             if !Self.isTerminalPhase(status.phase) {
-                pollJob(chapterId: saved.id)
+                pollJob(chapterId: accepted.id)
             }
             return currentChapter
         } catch {
-            _ = await recordActionRevisionConflictIfNeeded(error, chapter: saved)
-            if await adoptRunningJobIfNeeded(error, chapterId: saved.id) {
+            _ = await recordActionRevisionConflictIfNeeded(error, chapter: accepted)
+            if await adoptRunningJobIfNeeded(
+                error, chapterId: accepted.id, operationID: operationID, revision: startingRevision
+            ) {
                 return currentChapter
             }
-            applyStartFailure(error, chapterId: saved.id, intendedStage: .extraction)
+            applyStartFailure(
+                error,
+                chapter: accepted,
+                intendedStage: .extraction,
+                operationID: operationID,
+                revision: startingRevision,
+                noticeLocation: noticeLocation,
+                action: "重新整理记忆"
+            )
+            return nil
+        }
+    }
+
+    /// Refreshes only public chapter/job state after a response was lost or
+    /// automatic monitoring stopped. It never repeats accept/write/archive.
+    @discardableResult
+    func refreshTaskStatus() async -> Chapter? {
+        guard let chapter = currentChapter else { return nil }
+        let chapterID = chapter.id
+        let requestID = UUID()
+        let startingRevision = localEditRevision
+        let noticeLocation = noticeLocation(for: chapter)
+        taskRefreshRequestID = requestID
+        do {
+            let remote: Chapter = try await session.api.request("/chapters/\(chapterID)")
+            guard taskRefreshRequestID == requestID,
+                  currentChapter?.id == chapterID,
+                  localEditRevision == startingRevision else { return nil }
+            if !hasLocalInputDivergence {
+                currentChapter = remote
+                sync.cache.saveChapter(remote)
+                cache.saveClean(remote)
+                saveState = .synced
+            }
+            let status = try await session.api.jobStatus(chapterId: chapterID)
+            guard taskRefreshRequestID == requestID,
+                  currentChapter?.id == chapterID,
+                  localEditRevision == startingRevision else { return nil }
+            switch ChapterJobReconciler.decide(
+                status: status,
+                chapter: remote,
+                hasLocalInputDivergence: hasLocalInputDivergence
+            ) {
+            case .active:
+                applyJobStatus(status, chapterId: chapterID)
+                pollJob(chapterId: chapterID)
+            case .currentTerminal:
+                applyJobStatus(status, chapterId: chapterID)
+            case .obsoleteTerminal, .unverifiedTerminal, .none:
+                if !writingPhase.isFailed { writingPhase = .idle }
+                pollingConnectionInterrupted = false
+                taskMonitoringMessage = nil
+            }
+            sync.markOnline()
+            return currentChapter
+        } catch {
+            let presented = LinoErrorPresenter.present(error: error)
+            session.notices.publish(
+                noticeLocation + "任务状态暂时无法更新：\(presented.message)",
+                critical: presented.critical,
+                tone: .error,
+                deduplicationKey: ChapterTaskMonitoringNoticeKey.refresh(
+                    chapterID: chapterID,
+                    requestID: requestID
+                )
+            )
+            guard taskRefreshRequestID == requestID,
+                  currentChapter?.id == chapterID,
+                  localEditRevision == startingRevision else { return nil }
+            pollingConnectionInterrupted = true
+            taskMonitoringMessage = presented.message
             return nil
         }
     }
 
     func rerunChecker() async -> CheckerResult? {
         guard !writingPhase.isActive else { return nil }
+        let operationID = beginAction()
         checkerRefreshing = true
-        defer { checkerRefreshing = false }
+        defer {
+            if actionOperationID == operationID {
+                checkerRefreshing = false
+            }
+        }
         // The editor keeps keystrokes in memory until an explicit transition.
         // Checker must therefore flush that exact text first; otherwise the
         // backend checks the previous server draft while the UI incorrectly
         // presents the result as belonging to the edited text.
         guard let chapter = await save() else { return nil }
+        let runID = UUID().uuidString
         let startingRevision = localEditRevision
+        let noticeLocation = noticeLocation(for: chapter)
         do {
             let response = try await session.api.rerunChecker(
                 chapterId: chapter.id, contentRevision: chapter.contentRevision
             )
-            guard currentChapter?.id == chapter.id else { return nil }
+            if let result = response.checkerResult,
+               !result.hasConcreteVerdict {
+                let presented = LinoErrorPresenter.present(checkerUnavailable: result)
+                // Completion notices belong to the action that caused them,
+                // not to whichever chapter happens to be open by the time a
+                // slow checker returns.
+                session.notices.publish(
+                    noticeLocation + "手动复查未完成：\(presented.message)",
+                    critical: presented.critical,
+                    tone: .error,
+                    deduplicationKey: "manual-check:\(chapter.id):\(runID)"
+                )
+            }
+            guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else {
+                return response.checkerResult
+            }
             guard ChapterRefreshReconciler.shouldReplaceLocal(
                 startingRevision: startingRevision,
                 currentRevision: localEditRevision,
@@ -913,14 +1154,37 @@ final class ChapterEditorStore: ObservableObject {
             checkerResult = response.checkerResult
             failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = response.checkerResult != nil
+            preflightAcceptanceMessage = nil
             if let result = response.checkerResult, let checked = currentChapter, result.hasConcreteVerdict {
                 let snapshot = CheckedDraftSnapshot(chapter: checked, checkerResult: result)
                 if cache.saveCheckedSnapshot(snapshot) { staleCheckedSnapshot = snapshot }
+                // A successful recheck resolves only an earlier local accept
+                // refusal. Without clearing that terminal phase, the old
+                // "接受正文未完成" banner keeps masking the fresh verdict and
+                // the author cannot issue the next accept request.
+                if case .failed(_, _, .acceptance) = writingPhase {
+                    ChapterTaskOutcomeStore.clear(chapterID: checked.id)
+                    writingPhase = .idle
+                    currentValidationReason = nil
+                    pendingExemptionNames = []
+                }
             }
             return response.checkerResult
         } catch {
             _ = await recordActionRevisionConflictIfNeeded(error, chapter: chapter)
-            session.notices.publish(error)
+            let presented = LinoErrorPresenter.present(error: error)
+            session.notices.publish(
+                noticeLocation + "手动复查未完成：\(presented.message)",
+                critical: presented.critical,
+                tone: .error,
+                deduplicationKey: "manual-check:\(chapter.id):\(runID)"
+            )
+            if actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision),
+               let message = Self.preflightAcceptanceOverrideMessage(from: error) {
+                checkerResult = nil
+                checkerAppliesToVisibleDraft = false
+                preflightAcceptanceMessage = message
+            }
             return nil
         }
     }
@@ -963,6 +1227,7 @@ final class ChapterEditorStore: ObservableObject {
             checkerResult = nil
             failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = false
+            preflightAcceptanceMessage = nil
             cache.saveClean(reopened)
             ChapterTaskOutcomeStore.clear(chapterID: reopened.id)
             writingPhase = .idle
@@ -1063,6 +1328,7 @@ final class ChapterEditorStore: ObservableObject {
             pendingExemptionNames = []
             currentValidationReason = nil
             failedCandidateCheckerResult = nil
+            preflightAcceptanceMessage = nil
             if currentChapter?.id == deletingId {
                 currentChapter = nil
             }
@@ -1123,6 +1389,9 @@ final class ChapterEditorStore: ObservableObject {
 
     private func startWrite(replaceDraft: Bool) async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
+        let operationID = beginAction()
+        let startingRevision = localEditRevision
+        let noticeLocation = noticeLocation(for: chapter)
         ChapterTaskOutcomeStore.clear(chapterID: chapter.id)
         writingPhase = .selectingMemory
         do {
@@ -1130,6 +1399,7 @@ final class ChapterEditorStore: ObservableObject {
                 chapterId: chapter.id, replaceDraft: replaceDraft,
                 contentRevision: chapter.contentRevision
             )
+            guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
             applyJobStatus(status, chapterId: chapter.id)
             if !Self.isTerminalPhase(status.phase) {
                 pollJob(chapterId: chapter.id)
@@ -1137,10 +1407,20 @@ final class ChapterEditorStore: ObservableObject {
             return currentChapter
         } catch {
             _ = await recordActionRevisionConflictIfNeeded(error, chapter: chapter)
-            if await adoptRunningJobIfNeeded(error, chapterId: chapter.id) {
+            if await adoptRunningJobIfNeeded(
+                error, chapterId: chapter.id, operationID: operationID, revision: startingRevision
+            ) {
                 return currentChapter
             }
-            applyStartFailure(error, chapterId: chapter.id, intendedStage: .memorySelection)
+            applyStartFailure(
+                error,
+                chapter: chapter,
+                intendedStage: .memorySelection,
+                operationID: operationID,
+                revision: startingRevision,
+                noticeLocation: noticeLocation,
+                action: "开始写作"
+            )
             return nil
         }
     }
@@ -1173,11 +1453,15 @@ final class ChapterEditorStore: ObservableObject {
 
     private func pollJob(chapterId: String) {
         pollingTask?.cancel()
+        let monitorID = UUID()
+        let location = currentChapter.map { noticeLocation(for: $0) } ?? ""
         pollingChapterId = chapterId
+        pollingMonitorID = monitorID
         pollingErrorNotified = false
         pollingConnectionInterrupted = false
+        taskMonitoringMessage = nil
         pollingTask = Task { [weak self] in
-            await self?.runPolling(chapterId: chapterId)
+            await self?.runPolling(chapterId: chapterId, monitorID: monitorID, noticeLocation: location)
         }
     }
 
@@ -1186,31 +1470,93 @@ final class ChapterEditorStore: ObservableObject {
         pollingTask?.cancel()
         pollingTask = nil
         pollingChapterId = nil
+        pollingMonitorID = nil
         pollingConnectionInterrupted = false
+        taskMonitoringMessage = nil
     }
 
-    private func runPolling(chapterId: String) async {
+    private func runPolling(chapterId: String, monitorID: UUID, noticeLocation: String) async {
+        var consecutiveTransientFailures = 0
         while !Task.isCancelled {
+            var delayNanoseconds = ChapterTaskPollingPolicy.normalDelayNanoseconds
             do {
                 let status = try await session.api.jobStatus(chapterId: chapterId)
-                guard !Task.isCancelled, pollingChapterId == chapterId else { return }
+                guard !Task.isCancelled,
+                      pollingChapterId == chapterId,
+                      pollingMonitorID == monitorID else { return }
                 pollingErrorNotified = false
+                consecutiveTransientFailures = 0
                 pollingConnectionInterrupted = false
+                taskMonitoringMessage = nil
                 applyJobStatus(status, chapterId: chapterId)
                 if Self.isTerminalPhase(status.phase) {
                     pollingChapterId = nil
+                    pollingMonitorID = nil
                     return
                 }
             } catch {
-                guard !Task.isCancelled, pollingChapterId == chapterId else { return }
-                pollingConnectionInterrupted = true
-                if !pollingErrorNotified {
-                    pollingErrorNotified = true
-                    session.notices.publish(LinoErrorPresenter.connectionInterrupted)
+                guard !Task.isCancelled,
+                      pollingChapterId == chapterId,
+                      pollingMonitorID == monitorID else { return }
+                let presented = LinoErrorPresenter.present(error: error)
+                if Self.shouldRetryPolling(after: error) {
+                    consecutiveTransientFailures += 1
+                    pollingConnectionInterrupted = true
+                    taskMonitoringMessage = presented.message
+                    if !pollingErrorNotified {
+                        pollingErrorNotified = true
+                        session.notices.publish(
+                            noticeLocation + "\(LinoErrorPresenter.connectionInterrupted)\n\(presented.message)",
+                            tone: .error,
+                            deduplicationKey: ChapterTaskMonitoringNoticeKey.transient(
+                                chapterID: chapterId,
+                                monitorID: monitorID
+                            )
+                        )
+                    }
+                    guard let retryDelay = ChapterTaskPollingPolicy.retryDelayNanoseconds(
+                        afterConsecutiveFailures: consecutiveTransientFailures
+                    ) else {
+                        pollingTask = nil
+                        pollingChapterId = nil
+                        pollingMonitorID = nil
+                        session.notices.publish(
+                            noticeLocation + "任务状态自动重试已停止：\(presented.message)",
+                            critical: presented.critical,
+                            tone: .error,
+                            deduplicationKey: ChapterTaskMonitoringNoticeKey.stopped(
+                                chapterID: chapterId,
+                                monitorID: monitorID
+                            )
+                        )
+                        return
+                    }
+                    delayNanoseconds = retryDelay
+                } else {
+                    // Authentication, a missing job, a deterministic 4xx, and
+                    // incompatible payloads cannot become healthy by polling
+                    // the same endpoint forever. The server job may still be
+                    // running, so retain its last known phase and stop only
+                    // this local observer.
+                    pollingConnectionInterrupted = true
+                    taskMonitoringMessage = presented.message
+                    pollingTask = nil
+                    pollingChapterId = nil
+                    pollingMonitorID = nil
+                    session.notices.publish(
+                        noticeLocation + "任务状态暂时无法更新：\(presented.message)",
+                        critical: presented.critical,
+                        tone: .error,
+                        deduplicationKey: ChapterTaskMonitoringNoticeKey.stopped(
+                            chapterID: chapterId,
+                            monitorID: monitorID
+                        )
+                    )
+                    return
                 }
             }
             do {
-                try await Task.sleep(nanoseconds: 2_500_000_000)
+                try await Task.sleep(nanoseconds: delayNanoseconds)
             } catch {
                 return
             }
@@ -1231,6 +1577,7 @@ final class ChapterEditorStore: ObservableObject {
     ) {
         guard currentChapter?.id == chapterId else { return }
         pollingConnectionInterrupted = false
+        taskMonitoringMessage = nil
         if let context = status.memoryContext { memoryContext = context }
         switch status.phase {
         case "selecting_memory":
@@ -1288,6 +1635,7 @@ final class ChapterEditorStore: ObservableObject {
             writingPhase = .idle
             pendingExemptionNames = []
             currentValidationReason = nil
+            taskMonitoringMessage = nil
             if let warning = status.completionWarning {
                 session.notices.publish(warning)
             }
@@ -1328,6 +1676,13 @@ final class ChapterEditorStore: ObservableObject {
         announce: Bool
     ) {
         let presented = LinoErrorPresenter.present(jobFailure: status)
+        // Extractor runs only after the server accepted the manuscript. A
+        // terminal Extractor failure can arrive before an intermediate
+        // `extracting` snapshot, so carry that authoritative fact into the
+        // local chapter before persisting its retryable outcome.
+        if status.kind == "extract" {
+            setCurrentChapterStatus("finalized", chapterId: chapterId)
+        }
         if status.kind == "write" {
             failedCandidateCheckerResult = status.failedCandidateCheckerResult
             checkerResult = status.visibleCheckerResult
@@ -1378,18 +1733,25 @@ final class ChapterEditorStore: ObservableObject {
 
     private func applyStartFailure(
         _ error: Error,
-        chapterId: String,
-        intendedStage: ChapterGenerationStage
+        chapter: Chapter,
+        intendedStage: ChapterGenerationStage,
+        operationID: UUID,
+        revision: UInt64,
+        noticeLocation: String,
+        action: String
     ) {
-        guard currentChapter?.id == chapterId else {
-            session.notices.publish(error)
-            return
-        }
+        let presented = publishStartFailure(
+            error,
+            chapter: chapter,
+            operationID: operationID,
+            noticeLocation: noticeLocation,
+            action: action
+        )
+        guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return }
         pendingExemptionNames = []
-        let presented = LinoErrorPresenter.present(error: error)
         let code = LinoErrorPresenter.code(for: error)
         if let apiError = error as? APIError,
-           case let .validation(validationCode, _, names) = apiError,
+           case let .validation(_, validationCode, _, names, _) = apiError,
            validationCode == "unselected_characters_in_bible" {
             pendingExemptionNames = names
             writingPhase = .failed(code: validationCode, message: presented.message, stage: intendedStage)
@@ -1404,7 +1766,148 @@ final class ChapterEditorStore: ObservableObject {
                 pendingExemptionNames: pendingExemptionNames
             )
         }
-        session.notices.publish(presented.message, critical: presented.critical, tone: .error)
+    }
+
+    private func publishStartFailure(
+        _ error: Error,
+        chapter: Chapter,
+        operationID: UUID,
+        noticeLocation: String,
+        action: String
+    ) -> (message: String, critical: Bool) {
+        let presented = LinoErrorPresenter.present(error: error)
+        // An operation can be rejected after its initiating chapter has been
+        // left. Its notice remains useful history, but the departed operation
+        // must not change the new chapter's local state.
+        session.notices.publish(
+            noticeLocation + "\(action)未完成：\(presented.message)",
+            critical: presented.critical,
+            tone: .error,
+            deduplicationKey: "start-failure:\(chapter.id):\(operationID.uuidString)"
+        )
+        return presented
+    }
+
+    private static func acceptanceResultMayBeUnknown(_ error: Error) -> Bool {
+        if error is DecodingError { return true }
+        guard let apiError = error as? APIError else { return false }
+        switch apiError {
+        case .transport:
+            return true
+        case .http(let status, _):
+            return status == 408 || status == 429 || status >= 500
+        case .validation(let status, _, _, _, _):
+            return status == 408 || status == 429 || status >= 500
+        default:
+            return false
+        }
+    }
+
+    private enum AcceptanceReconciliation {
+        case observed
+        case unknown(Error)
+    }
+
+    /// Resolves an ambiguous accept response without issuing another accept.
+    /// A failed read remains explicitly unknown; it is never persisted as a
+    /// rejected acceptance because the server may already have finalized the
+    /// prose before the response disappeared.
+    private func reconcileAcceptanceAfterUncertainResult(
+        chapterId: String,
+        operationID: UUID,
+        revision: UInt64
+    ) async -> AcceptanceReconciliation {
+        do {
+            let remote: Chapter = try await session.api.request("/chapters/\(chapterId)")
+            guard actionIsCurrent(operationID, chapterID: chapterId, revision: revision) else {
+                return .observed
+            }
+            if !hasLocalInputDivergence {
+                currentChapter = remote
+                sync.cache.saveChapter(remote)
+                cache.saveClean(remote)
+                saveState = .synced
+            }
+            if let status = try? await session.api.jobStatus(chapterId: chapterId),
+               actionIsCurrent(operationID, chapterID: chapterId, revision: revision) {
+                switch ChapterJobReconciler.decide(
+                    status: status,
+                    chapter: remote,
+                    hasLocalInputDivergence: hasLocalInputDivergence
+                ) {
+                case .active:
+                    applyJobStatus(status, chapterId: chapterId)
+                    pollJob(chapterId: chapterId)
+                case .currentTerminal:
+                    applyJobStatus(status, chapterId: chapterId)
+                case .obsoleteTerminal, .unverifiedTerminal, .none:
+                    writingPhase = .idle
+                }
+            } else if remote.status == "finalized" {
+                writingPhase = (remote.archive?.status == "pending" || remote.archive?.status == "extracting")
+                    ? .extracting : .idle
+            } else {
+                writingPhase = .idle
+                session.notices.publish(
+                    "接受请求没有在服务器完成，正文仍可继续修改后再接受。",
+                    tone: .error,
+                    deduplicationKey: "accept-not-completed:\(chapterId):\(operationID.uuidString)"
+                )
+            }
+            sync.markOnline()
+            return .observed
+        } catch {
+            return .unknown(error)
+        }
+    }
+
+    private func markAcceptanceResultUnknown(
+        _ observationError: Error,
+        chapter: Chapter,
+        operationID: UUID,
+        revision: UInt64,
+        noticeLocation: String
+    ) {
+        let presented = LinoErrorPresenter.present(error: observationError)
+        session.notices.publish(
+            noticeLocation + "接受结果暂未确认：\(presented.message)",
+            critical: presented.critical,
+            tone: .error,
+            deduplicationKey: "accept-unknown:\(chapter.id):\(operationID.uuidString)"
+        )
+        guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return }
+        // Keep `.accepting`: a second accept could duplicate an operation the
+        // server already started. Only the read-only refresh can resolve it.
+        pollingConnectionInterrupted = true
+        taskMonitoringMessage = "接受结果暂未确认：\(presented.message)"
+    }
+
+    private static func preflightAcceptanceOverrideMessage(from error: Error) -> String? {
+        guard let apiError = error as? APIError,
+              case let .validation(_, code, _, _, violations) = apiError,
+              ["checker_preflight_failed", "accept_preflight_failed", "accept_override_required"].contains(code),
+              ChapterPreflightOverridePolicy.permitsExplicitAcceptance(violations) else { return nil }
+        return LinoErrorPresenter.present(error: apiError).message
+    }
+
+    private func noticeLocation(for chapter: Chapter) -> String {
+        let book = session.currentBook.map { "《\($0.title)》" } ?? ""
+        return "\(book)第 \(chapter.index) 章\n"
+    }
+
+    private static func shouldRetryPolling(after error: Error) -> Bool {
+        if error is DecodingError { return false }
+        guard let apiError = error as? APIError else { return false }
+        switch apiError {
+        case .transport:
+            return true
+        case .http(let status, _):
+            return status == 408 || status == 429 || status >= 500
+        case .validation(let status, _, _, _, _):
+            return status == 408 || status == 429 || status >= 500
+        default:
+            return false
+        }
     }
 
     @discardableResult
@@ -1425,13 +1928,18 @@ final class ChapterEditorStore: ObservableObject {
     /// A 409 `write_running` means another client (or a previous request whose
     /// response was lost) already owns the chapter job. Adopt its latest
     /// snapshot instead of turning a healthy in-flight job into a local error.
-    private func adoptRunningJobIfNeeded(_ error: Error, chapterId: String) async -> Bool {
+    private func adoptRunningJobIfNeeded(
+        _ error: Error,
+        chapterId: String,
+        operationID: UUID,
+        revision: UInt64
+    ) async -> Bool {
         guard let apiError = error as? APIError,
-              case let .validation(code, _, _) = apiError,
+              case let .validation(_, code, _, _, _) = apiError,
               code == "write_running" else { return false }
         do {
             let status = try await session.api.jobStatus(chapterId: chapterId)
-            guard currentChapter?.id == chapterId else { return true }
+            guard actionIsCurrent(operationID, chapterID: chapterId, revision: revision) else { return true }
             applyJobStatus(status, chapterId: chapterId)
             if Self.isTerminalPhase(status.phase) {
                 if status.chapter == nil {
@@ -1459,22 +1967,8 @@ final class ChapterEditorStore: ObservableObject {
         return messages.joined(separator: "；")
     }
 
-    private static func failureStage(from status: WriteJobStatus) -> ChapterGenerationStage {
-        if ["writer_validation_failed", "writer_minimum_failed"].contains(status.errorCode) {
-            return .deterministicValidation
-        }
-        switch status.errorContext?.agentRole {
-        case "memory_selector": return .memorySelection
-        case "writer": return .drafting
-        case "checker": return .bibleChecking
-        case "extractor": return .extraction
-        default:
-            if status.kind == "extract" { return .extraction }
-            switch status.errorCode {
-            case "checker_failed", "checker_rejected": return .bibleChecking
-            default: return .drafting
-            }
-        }
+    private static func failureStage(from status: WriteJobStatus) -> ChapterGenerationStage? {
+        ChapterJobFailureStage.resolve(status)
     }
 
     private static func isActiveJobPhase(_ phase: String) -> Bool {
@@ -1532,6 +2026,7 @@ final class ChapterEditorStore: ObservableObject {
         pendingExemptionNames = []
         failedCandidateCheckerResult = nil
         pollingConnectionInterrupted = false
+        taskMonitoringMessage = nil
     }
 
     private var hasLocalInputDivergence: Bool {
@@ -1613,6 +2108,7 @@ final class InspirationCreatorStore: ObservableObject {
         pacingBoundary = normalizedBoundary
         let frozen = InspirationSnapshot(chapter, pacingBoundary: normalizedBoundary)
         let token = UUID()
+        let noticeLocation = session.currentBook.map { "《\($0.title)》第 \(chapter.index) 章\n" } ?? ""
         requestToken = token
         snapshot = frozen
         cards = []
@@ -1637,8 +2133,21 @@ final class InspirationCreatorStore: ObservableObject {
                 cards = response.cards
                 isLoading = false
             } catch {
-                guard !Task.isCancelled, requestToken == token, activeChapterID == frozen.chapterID else { return }
-                errorMessage = InspirationErrorCopy.message(for: error)
+                // Moving to another chapter only clears that chapter's local
+                // panel. It must not silence a real failure from the request
+                // the author already started; only explicit stop/cancellation
+                // suppresses this completion notice.
+                guard !Task.isCancelled else { return }
+                let message = InspirationErrorCopy.message(for: error)
+                let presented = LinoErrorPresenter.present(error: error)
+                session.notices.publish(
+                    noticeLocation + "灵感生成未完成：\(message)",
+                    critical: presented.critical,
+                    tone: .error,
+                    deduplicationKey: "inspiration:\(frozen.chapterID):\(token.uuidString)"
+                )
+                guard requestToken == token, activeChapterID == frozen.chapterID else { return }
+                errorMessage = message
                 isLoading = false
             }
         }
@@ -1657,9 +2166,9 @@ final class InspirationCreatorStore: ObservableObject {
 
     func clearIfChapterChanged(to chapterID: String?) {
         guard activeChapterID != chapterID else { return }
-        requestToken = UUID()
-        requestTask?.cancel()
-        requestTask = nil
+        // Navigation does not cancel an author-initiated request. Its result
+        // may no longer belong in this panel, but a failure must still reach
+        // the global notice history with the frozen chapter location.
         activeChapterID = chapterID
         snapshot = nil
         cards = []
@@ -1772,7 +2281,7 @@ final class AgentSettingsStore: ObservableObject {
             replaceBookPersona(saved, bookID: bookID)
             return true
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(kind: .agentPersona, id: role, path: "/books/\(bookID)/agent-personas/\(role)", method: "PUT", readPath: "/books/\(bookID)/agent-personas/\(role)", readStrategy: .direct, baseRevision: revision ?? 0, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
             }
             session.notices.publish(error)
@@ -1793,7 +2302,7 @@ final class AgentSettingsStore: ObservableObject {
             // equal text values.
             return await loadBookPersonas(bookID: bookID)
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(kind: .agentPersona, id: role, path: "/books/\(bookID)/agent-personas/\(role)", method: "DELETE", readPath: "/books/\(bookID)/agent-personas/\(role)", readStrategy: .direct, baseRevision: revision ?? 0, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(), error: conflict, api: session.api)
             }
             session.notices.publish(error)
@@ -1843,11 +2352,12 @@ final class AgentSettingsStore: ObservableObject {
                 "/books/\(bookID)/agent-model-bindings/\(role)", method: "PUT", body: binding,
                 ifMatch: revision ?? 0, allowZeroRevision: revision == nil
             )
+            guard session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
             replaceBookModelBinding(saved, bookID: bookID)
             sync.markOnline()
             return true
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(kind: .modelBinding, id: role, path: "/books/\(bookID)/agent-model-bindings/\(role)", method: "PUT", readPath: "/books/\(bookID)/agent-model-bindings/\(role)", readStrategy: .direct, baseRevision: revision ?? 0, payload: binding, baseSnapshot: base, error: conflict, api: session.api)
             }
             if case APIError.transport = error { sync.markOffline() }
@@ -1866,7 +2376,7 @@ final class AgentSettingsStore: ObservableObject {
             )
             return await loadBookModelBindings(bookID: bookID)
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(kind: .modelBinding, id: role, path: "/books/\(bookID)/agent-model-bindings/\(role)", method: "DELETE", readPath: "/books/\(bookID)/agent-model-bindings/\(role)", readStrategy: .direct, baseRevision: revision ?? 0, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(), error: conflict, api: session.api)
             }
             if case APIError.transport = error { sync.markOffline() }
@@ -1914,7 +2424,7 @@ final class AgentSettingsStore: ObservableObject {
             bindings = try await session.api.request("/agent-model-bindings")
             return true
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .llmProfile, id: profile.id, path: "/llm_profiles/\(profile.id)", method: "PATCH",
                     readPath: "/llm_profiles/\(profile.id)", readStrategy: .direct,
@@ -1938,7 +2448,7 @@ final class AgentSettingsStore: ObservableObject {
             profiles.removeAll { $0.id == profile.id }
             bindings = try await session.api.request("/agent-model-bindings")
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .llmProfile, id: profile.id, path: "/llm_profiles/\(profile.id)", method: "DELETE",
                     readPath: "/llm_profiles/\(profile.id)", readStrategy: .direct,
@@ -1976,7 +2486,7 @@ final class AgentSettingsStore: ObservableObject {
                 bindings.append(binding)
             }
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .modelBinding, id: role, path: "/agent-model-bindings/\(role)", method: "PATCH",
                     readPath: "/agent-model-bindings/\(role)", readStrategy: .direct,
@@ -2009,7 +2519,7 @@ final class AgentSettingsStore: ObservableObject {
                 bindings.append(binding)
             }
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .modelBinding, id: role, path: "/agent-model-bindings/\(role)", method: "PATCH",
                     readPath: "/agent-model-bindings/\(role)", readStrategy: .direct,
@@ -2042,7 +2552,7 @@ final class AgentSettingsStore: ObservableObject {
                 bindings.append(binding)
             }
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .modelBinding, id: role, path: "/agent-model-bindings/\(role)", method: "PATCH",
                     readPath: "/agent-model-bindings/\(role)", readStrategy: .direct,
@@ -2062,7 +2572,7 @@ final class AgentSettingsStore: ObservableObject {
                 personas[idx] = saved
             }
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .agentPersona, id: persona.agentRole, path: "/agent-personas/\(persona.agentRole)", method: "PATCH",
                     readPath: "/agent-personas/\(persona.agentRole)", readStrategy: .direct,
@@ -2081,7 +2591,7 @@ final class AgentSettingsStore: ObservableObject {
                 personas[idx] = saved
             }
         } catch {
-            if case let conflict as APIError = error {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .agentPersona, id: role, path: "/agent-personas/\(role)/reset", method: "POST",
                     readPath: "/agent-personas/\(role)", readStrategy: .direct,

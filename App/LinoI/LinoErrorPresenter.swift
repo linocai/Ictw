@@ -37,7 +37,27 @@ enum LinoErrorPresenter {
             modelName: context?.modelName,
             reason: reason,
             rawDetail: context?.upstreamReason ?? context?.blockReason,
-            suggestion: entry?.suggestion,
+            suggestion: code == "interrupted" ? interruptedSuggestion(for: status) : entry?.suggestion,
+            code: code
+        )
+        return (message, isCritical(code: code, blockReason: context?.blockReason))
+    }
+
+    /// A manual `/check` returns HTTP 200 even when the model did not provide
+    /// a usable conclusion. Present that state with the same safe model/error
+    /// vocabulary as background jobs, without treating it as evidence.
+    static func present(checkerUnavailable result: CheckerResult) -> (message: String, critical: Bool) {
+        let code = result.errorCode
+        let context = result.errorContext
+        let entry = code.flatMap(tableEntry)
+        let reported = result.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let reason = reported.isEmpty ? (entry?.reason ?? "这次检查没有得到可用结论") : reported
+        let message = compose(
+            agentRole: context?.agentRole ?? "checker",
+            modelName: context?.modelName,
+            reason: reason,
+            rawDetail: context?.upstreamReason ?? context?.blockReason,
+            suggestion: entry?.suggestion ?? "请稍后重新复查",
             code: code
         )
         return (message, isCritical(code: code, blockReason: context?.blockReason))
@@ -68,8 +88,8 @@ enum LinoErrorPresenter {
             return (message, false)
         case .http(let statusCode, let body):
             return presentHTTP(statusCode: statusCode, body: body)
-        case .validation(let code, let message, let names):
-            return presentValidation(code: code, message: message, names: names)
+        case .validation(_, let code, let message, let names, let violations):
+            return presentValidation(code: code, message: message, names: names, violations: violations)
         case .writeConflict:
             return ("内容已在其他设备更新；本机修改已保留，请比较后决定。", true)
         }
@@ -88,8 +108,8 @@ enum LinoErrorPresenter {
         case .transport:
             return "transport"
         case .http(let statusCode, _):
-            return statusCode == 401 ? "unauthorized" : "http_\(statusCode)"
-        case .validation(let code, _, _):
+            return [401, 403].contains(statusCode) ? "unauthorized" : "http_\(statusCode)"
+        case .validation(_, let code, _, _, _):
             return code
         case .writeConflict:
             return "write_conflict"
@@ -111,7 +131,7 @@ enum LinoErrorPresenter {
     /// complete, Chinese, actionable sentence and passes through unchanged;
     /// anything else falls back to the raw body untouched.
     private static func presentHTTP(statusCode: Int, body: String) -> (message: String, critical: Bool) {
-        if statusCode == 401, let entry = tableEntry(for: "unauthorized") {
+        if [401, 403].contains(statusCode), let entry = tableEntry(for: "unauthorized") {
             let message = compose(
                 agentRole: nil, modelName: nil,
                 reason: entry.reason, rawDetail: nil,
@@ -152,10 +172,27 @@ enum LinoErrorPresenter {
     /// (when present) is appended the same way the old `APIError.
     /// errorDescription` did, so nothing regresses for callers that used to
     /// read that computed property directly.
-    private static func presentValidation(code: String, message: String, names: [String]) -> (message: String, critical: Bool) {
+    private static func presentValidation(code: String, message: String, names: [String], violations: [Violation]) -> (message: String, critical: Bool) {
         let entry = tableEntry(for: code)
         var reason = entry?.reason ?? message
-        if !names.isEmpty {
+        // New servers already fold the safe violation summary into `message`.
+        // Old ones do not, so append it once without duplicating either shape.
+        let violationText = violations.compactMap { violation -> String? in
+            let base = violation.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !base.isEmpty else { return nil }
+            var text = base
+            if let currentChars = violation.currentChars, !text.contains(String(currentChars)) {
+                text += "（当前 \(currentChars) 字）"
+            }
+            if let violationNames = violation.names, !violationNames.isEmpty,
+               !text.contains(violationNames.joined(separator: "、")) {
+                text += "：\(violationNames.joined(separator: "、"))"
+            }
+            return text
+        }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.joined(separator: "；")
+        if !violationText.isEmpty, !reason.contains(violationText) {
+            reason += "：\(violationText)"
+        } else if !names.isEmpty, !reason.contains(names.joined(separator: "、")) {
             reason += "：\(names.joined(separator: "、"))"
         }
         let composed = compose(
@@ -214,6 +251,17 @@ enum LinoErrorPresenter {
               let names = violations?.first(where: { $0.code == "unselected_character" })?.names,
               !names.isEmpty else { return reason }
         return "\(reason)，其中包含未获准人物：\(names.joined(separator: "、"))"
+    }
+
+    private static func interruptedSuggestion(for status: WriteJobStatus) -> String {
+        switch ChapterJobFailureStage.resolve(status) {
+        case .extraction:
+            return "请重新整理记忆"
+        case .memorySelection, .drafting, .deterministicValidation, .bibleChecking:
+            return "请重新生成"
+        case .completed, .acceptance, .none:
+            return "请刷新任务状态确认后再继续"
+        }
     }
 
     // MARK: - Criticality
@@ -319,6 +367,10 @@ enum LinoErrorPresenter {
             return Entry(reason: "同书存在无法区分的重名人物", suggestion: "请先为重名人物改名或补充区分信息")
         case "bible_empty":
             return Entry(reason: "本章剧情 Bible 不能为空", suggestion: "请先填写本章剧情 Bible")
+        case "checker_override_required":
+            return Entry(reason: "当前正文没有可用的 Bible 检查结论", suggestion: "请先重新复查；如需忽略检查，再明确选择仍然接受")
+        case "checker_preflight_failed":
+            return Entry(reason: "接受前的程序校验未通过", suggestion: "请按原因修正正文或人物后再接受")
 
         // violations 明细 code（拼进 revision_failed 的 detail；单独枚举以便任何
         // 按 code 查表的调用点复用同一口径）

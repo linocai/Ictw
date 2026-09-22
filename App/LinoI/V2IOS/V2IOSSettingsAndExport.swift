@@ -164,7 +164,9 @@ struct V2IOSBookSettingsView: View {
                 }
                 Section {
                     ForEach(roles, id: \.self) { key in
-                        NavigationLink { V2IOSBookModelEditor(role: key) } label: {
+                        NavigationLink {
+                            if let bookID = session.currentBook?.id { V2IOSBookModelEditor(role: key, bookID: bookID) }
+                        } label: {
                             HStack {
                                 Text(roleName(key))
                                 Spacer()
@@ -179,7 +181,7 @@ struct V2IOSBookSettingsView: View {
                 }
                 Section {
                     Button("全局模型与人格") { showingGlobal = true }
-                } footer: { Text("模型、程序协议、绑定和参数始终是全局设置。") }
+                } footer: { Text("全局设置提供默认配置；本书模型可单独覆盖模型和参数。") }
             }
             // Keep notices inside the navigation content so the toast starts
             // below the title bar. Hosting it outside NavigationStack makes
@@ -370,65 +372,86 @@ private struct V2IOSBookPersonaEditor: View {
 
 private struct V2IOSBookModelEditor: View {
     let role: String
+    let bookID: String
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var sync: ClientSyncStore
-    @State private var profileID = ""
-    @State private var thinking = false
-    @State private var effort = ""
-    @State private var temperature = 1.0
+    @State private var draft = BookModelSettingsDraft(role: "writer")
     @State private var saving = false
+    @State private var loading = true
+    @State private var loadFailed = false
     @State private var confirmingRestore = false
 
-    private var row: BookAgentModelBinding? { agents.bookModelBindings.first(where: { $0.agentRole == role }) }
-    private var effective: AgentModelBindingValues? { row?.effectiveBinding }
-    private var bounded: Bool { role == "extractor" || role == "inspiration_creator" }
+    private var row: BookAgentModelBinding? {
+        guard session.currentBook?.id == bookID, agents.bookModelBindingsBookID == bookID else { return nil }
+        return agents.bookModelBindings.first { $0.agentRole == role }
+    }
+    private var selectedProfile: Binding<String> {
+        Binding(get: { draft.profileID }, set: { draft.selectProfile($0, profiles: agents.profiles, row: row) })
+    }
+    private var thinking: Binding<Bool> {
+        Binding(get: { draft.thinkingEnabled }, set: { draft.thinking = $0 })
+    }
+    private var temperature: Binding<Double> {
+        Binding(get: { draft.temperature ?? 1 }, set: { draft.temperature = $0 })
+    }
     private var selectedProfileName: String {
-        guard let id = effective?.llmProfileId,
+        guard let id = row?.effectiveBinding?.llmProfileId,
               let profile = agents.profiles.first(where: { $0.id == id }) else { return "未绑定" }
         return "\(profile.name) · \(profile.modelName)"
     }
 
     var body: some View {
         Form {
-            Section("实际生效") {
-                LabeledContent("来源", value: row?.source == "book" ? "本书覆盖" : "跟随全局")
-                LabeledContent("模型", value: selectedProfileName)
-                LabeledContent("深度思考", value: effective?.effectiveThinkingEnabled == true ? "开启" : "关闭")
-            }
-            Section("本书覆盖") {
-                Picker("模型", selection: $profileID) {
-                    Text("未绑定").tag("")
-                    ForEach(agents.profiles) { profile in Text("\(profile.name) · \(profile.modelName)").tag(profile.id) }
+            if loading {
+                ProgressView("正在读取本书模型")
+            } else if loadFailed || row == nil {
+                Text("本书模型配置未能载入。")
+                Button("重新加载") { Task { await load() } }
+            } else {
+                Section("实际生效") {
+                    LabeledContent("来源", value: row?.source == "book" ? "本书覆盖" : "跟随全局")
+                    LabeledContent("模型", value: selectedProfileName)
+                    LabeledContent("深度思考", value: row?.effectiveBinding?.effectiveThinkingEnabled.map { $0 ? "开启" : "关闭" } ?? "模型默认")
                 }
-                Toggle("启用思考", isOn: $thinking)
-                    .disabled(bounded || !(row?.capabilities.thinkingToggleSupported ?? false))
-                if bounded {
-                    Text("这个角色的深度思考由服务端固定关闭。")
-                        .font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary)
-                }
-                if !bounded, let levels = row?.capabilities.reasoningEffortLevels, !levels.isEmpty {
-                    Picker("思考强度", selection: $effort) {
-                        Text("模型默认").tag("")
-                        ForEach(levels, id: \.self) { Text($0).tag($0) }
+                Section("本书覆盖") {
+                    Picker("模型", selection: selectedProfile) {
+                        Text("请选择模型").tag("")
+                        ForEach(agents.profiles) { profile in Text("\(profile.name) · \(profile.modelName)").tag(profile.id) }
                     }
-                    .disabled(!thinking)
+                    Toggle("深度思考", isOn: thinking).disabled(!draft.thinkingAdjustable)
+                    if let explanation = draft.thinkingExplanation { Text(explanation).font(.footnote).foregroundStyle(.secondary) }
+                    if !draft.effortLevels.isEmpty {
+                        Picker("思考强度", selection: $draft.effort) {
+                            Text("模型默认").tag("")
+                            ForEach(draft.effortLevels, id: \.self) { Text($0).tag($0) }
+                        }.disabled(!draft.effortAdjustable)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("温度")
+                            Spacer()
+                            Text(draft.temperatureAdjustable ? draft.temperature.map { String(format: "%.2f", $0) } ?? "模型默认" : "不生效")
+                                .monospacedDigit().foregroundStyle(.secondary)
+                        }
+                        Slider(value: temperature, in: 0...2, step: 0.05).disabled(!draft.temperatureAdjustable)
+                        if let explanation = draft.temperatureExplanation { Text(explanation).font(.footnote).foregroundStyle(.secondary) }
+                        if draft.temperatureAdjustable && draft.temperature != nil {
+                            Button("温度使用模型默认") { draft.temperature = nil }
+                        }
+                    }
+                    if let reason = draft.blockingReason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
+                }.disabled(saving)
+                Section {
+                    Button(saving ? "正在保存" : "保存本书覆盖", action: save)
+                        .disabled(saving || draft.payload == nil || !sync.networkActionsAvailable)
+                    if row?.source == "book" {
+                        Button("恢复跟随全局", role: .destructive) { confirmingRestore = true }
+                            .disabled(saving || !sync.networkActionsAvailable)
+                    }
+                    if !sync.networkActionsAvailable { V2DeskOfflineExplanation() }
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack { Text("Temperature"); Spacer(); Text(String(format: "%.2f", temperature)).monospacedDigit().foregroundStyle(Color.secondary) }
-                    Slider(value: $temperature, in: 0...2, step: 0.05)
-                        .disabled(bounded || !(row?.capabilities.temperatureEffectiveWhenThinking ?? true) && !thinking)
-                }
-            }
-            Section {
-                Button(saving ? "正在保存" : "保存本书覆盖", action: save)
-                    .disabled(saving || !sync.networkActionsAvailable)
-                if row?.source == "book" {
-                    Button("恢复跟随全局", role: .destructive) { confirmingRestore = true }
-                        .disabled(saving || !sync.networkActionsAvailable)
-                }
-                if !sync.networkActionsAvailable { V2DeskOfflineExplanation() }
             }
         }
         .v2IOSNoticeOverlay()
@@ -436,43 +459,35 @@ private struct V2IOSBookModelEditor: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction).disabled(saving) } }
-        .onAppear(perform: loadDraft)
-        .onChange(of: row) { _, _ in loadDraft() }
+        .task { await load() }
+        .onChange(of: agents.profiles) { _, _ in draft.refreshCapabilities(profiles: agents.profiles, row: row) }
         .confirmationDialog("恢复跟随全局？", isPresented: $confirmingRestore, titleVisibility: .visible) {
             Button("恢复跟随全局", role: .destructive) { restore() }
             Button("取消", role: .cancel) {}
         } message: { Text("这本书的完整模型覆盖会移除；以后启动的任务重新使用全局配置。") }
     }
 
-    private func loadDraft() {
-        let source = row?.bookBinding ?? row?.effectiveBinding
-        profileID = source?.llmProfileId ?? ""
-        thinking = bounded ? false : (source?.thinkingEnabled ?? false)
-        effort = source?.reasoningEffort ?? ""
-        temperature = source?.temperature ?? 1.0
+    private func loadDraft() { draft = BookModelSettingsDraft(role: role, row: row, profiles: agents.profiles) }
+    private func load() async {
+        loading = true
+        await agents.load()
+        loadFailed = !(await agents.loadBookModelBindings(bookID: bookID))
+        if !loadFailed { loadDraft() }
+        loading = false
     }
-
     private func save() {
-        guard let bookID = session.currentBook?.id else { return }
+        guard row != nil, let binding = draft.payload else { return }
         saving = true
-        let binding = AgentModelBindingValues(
-            llmProfileId: profileID.isEmpty ? nil : profileID,
-            thinkingEnabled: bounded ? false : thinking,
-            reasoningEffort: effort.isEmpty ? nil : effort,
-            temperature: temperature,
-            effectiveThinkingEnabled: nil,
-            effectiveReasoningEffort: nil,
-            effectiveTemperature: nil,
-            contentRevision: nil
-        )
         Task {
-            if await agents.saveBookModelBinding(bookID: bookID, role: role, binding: binding) { loadDraft() }
+            if await agents.saveBookModelBinding(bookID: bookID, role: role, binding: binding) {
+                loadDraft()
+                session.notices.publish("本书模型设置已保存。")
+            }
             saving = false
         }
     }
-
     private func restore() {
-        guard let bookID = session.currentBook?.id else { return }
+        guard row != nil else { return }
         saving = true
         Task {
             if await agents.clearBookModelBinding(bookID: bookID, role: role) { loadDraft() }

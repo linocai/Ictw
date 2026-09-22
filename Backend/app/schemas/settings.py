@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from app.schemas.common import ORMModel
 
@@ -127,6 +127,13 @@ class LLMProfileRead(ORMModel):
     created_at: datetime
     updated_at: datetime
     content_revision: int = 1
+
+    @computed_field
+    @property
+    def capabilities(self) -> "ModelCapabilitiesRead":
+        # Expose capabilities before binding, using the same runtime authority.
+        from app.services.model_capabilities import resolve_capabilities
+        return ModelCapabilitiesRead(**resolve_capabilities(self.model_name, self.base_url).as_dict())
 
 
 class AgentModelBindingRead(ORMModel):

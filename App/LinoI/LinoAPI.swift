@@ -5,7 +5,7 @@ enum APIError: LocalizedError, Equatable {
     case notConfigured
     case badURL
     case http(Int, String)
-    case validation(code: String, message: String, names: [String])
+    case validation(statusCode: Int, code: String, message: String, names: [String], violations: [Violation])
     case transport(String)
     /// The server deliberately omits the competing content. Clients must
     /// re-read the normal public resource before presenting a comparison.
@@ -16,7 +16,7 @@ enum APIError: LocalizedError, Equatable {
         case .notConfigured: "请先配置后端地址和 Bearer Token"
         case .badURL: "后端地址无效"
         case .http(let code, let body): body.isEmpty ? "HTTP \(code)" : body
-        case .validation(_, let message, let names):
+        case .validation(_, _, let message, let names, _):
             names.isEmpty ? message : "\(message)：\(names.joined(separator: "、"))"
         case .transport(let message): message
         case .writeConflict:
@@ -66,7 +66,13 @@ struct APIClient {
                     )
                 }
                 if let structured = Self.structuredError(from: data) {
-                    throw APIError.validation(code: structured.code, message: structured.message, names: structured.names)
+                    throw APIError.validation(
+                        statusCode: http.statusCode,
+                        code: structured.code,
+                        message: structured.message,
+                        names: structured.names,
+                        violations: structured.violations
+                    )
                 }
                 throw APIError.http(http.statusCode, Self.errorMessage(from: data))
             }
@@ -147,7 +153,7 @@ struct APIClient {
 
     /// Extracts a `{code, message, details.names}` structured error payload
     /// (the shape used by preflight/job failures) when present.
-    static func structuredError(from data: Data) -> (code: String, message: String, names: [String])? {
+    static func structuredError(from data: Data) -> (code: String, message: String, names: [String], violations: [Violation])? {
         guard !data.isEmpty,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let detail = object["detail"] as? [String: Any],
@@ -155,7 +161,15 @@ struct APIClient {
               let message = detail["message"] as? String else { return nil }
         let details = detail["details"] as? [String: Any]
         let names = details?["names"] as? [String] ?? []
-        return (code, message, names)
+        let violations: [Violation]
+        if let raw = detail["violations"],
+           let violationData = try? JSONSerialization.data(withJSONObject: raw),
+           let decoded = try? JSONDecoder.lino.decode([Violation].self, from: violationData) {
+            violations = decoded
+        } else {
+            violations = []
+        }
+        return (code, message, names, violations)
     }
 
     private static func errorMessage(from data: Data) -> String {
@@ -171,12 +185,10 @@ struct APIClient {
                 let names = nested?["names"] as? [String] ?? []
                 return names.isEmpty ? message : "\(message)：\(names.joined(separator: "、"))"
             }
-            if let detailData = try? JSONSerialization.data(withJSONObject: detail),
-               let text = String(data: detailData, encoding: .utf8) {
-                return text
-            }
         }
-        return String(data: data, encoding: .utf8) ?? ""
+        // Do not surface a raw JSON/HTML response: it may contain a proxy
+        // page or unsafe payload rather than the backend's public detail.
+        return ""
     }
 
     private static func writeConflict(from data: Data) -> (resourceType: String, resourceId: String, submittedRevision: Int, currentRevision: Int)? {

@@ -134,3 +134,88 @@ def test_manual_reference_excludes_failed_archive_and_current_or_future_states(c
         assert "未来动态不得回灌" not in reference
         assert "未来秘密" not in reference
         assert "江川是林夕的男朋友" in reference
+
+
+@pytest.mark.parametrize("bible", ["", " \n\t\u3000"])
+def test_empty_bible_skips_requirements_and_allows_normal_accept(client, auth_headers, wait_for_terminal, bible):
+    chapter_id = make_story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        chapter.user_prompt = bible
+        chapter.draft_text = "林夕与江川等雨停。" + "雨滴落下。" * 1000
+        db.commit()
+
+    class NoBibleChecker:
+        def complete_json(self, *, system, user, **kwargs):
+            assert "跳过是否符合本章写作要求的检查" in system
+            assert "跳过“是否符合本章写作要求”这一项" in user
+            assert "每个 issue 必须同时引用正文和 Bible 证据" not in user
+            assert "Bible 决定本章必要事件" not in user
+            assert "江川是林夕的男朋友" in user and "现代小镇" in user
+            assert "林夕已经归还钥匙" in user
+            assert "历史人物不会自动获得本章出场权限" in user
+            return {"verdict": "passed", "issues": []}
+
+    client.app.dependency_overrides[get_checker_client] = NoBibleChecker
+    checked = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
+    assert checked.status_code == 200
+    assert checked.json()["checker_result"]["verdict"] == "passed"
+    assert checked.json()["checker_result"]["issues"] == []
+    accepted = client.post(f"/api/v1/chapters/{chapter_id}/accept", headers=auth_headers)
+    assert accepted.status_code == 200, accepted.text
+    wait_for_terminal(client, chapter_id, auth_headers)
+
+
+def test_empty_bible_keeps_other_issues_and_acceptance_gate(client, auth_headers):
+    chapter_id = make_story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        chapter.user_prompt = ""
+        chapter.draft_text = "林夕施展超自然力量，让雨停下。" + "雨滴落下。" * 1000
+        db.commit()
+    issue = {"kind": "contradiction", "draft_evidence": "林夕施展超自然力量", "bible_evidence": "",
+             "reason": "世界观明确为现代小镇、没有超自然力量，与正文冲突。"}
+
+    class ContradictionChecker:
+        def complete_json(self, **kwargs):
+            return {"verdict": "violation", "issues": [issue]}
+
+    client.app.dependency_overrides[get_checker_client] = ContradictionChecker
+    checked = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
+    assert checked.status_code == 200
+    result = checked.json()["checker_result"]
+    assert result["verdict"] == "violation" and result["issues"] == [issue]
+    assert not result.get("invalid_evidence")
+    refused = client.post(f"/api/v1/chapters/{chapter_id}/accept", headers=auth_headers)
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "checker_override_required"
+
+
+def test_empty_bible_keeps_character_preflight_and_generation_requirement(client, auth_headers):
+    chapter_id = make_story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        chapter.user_prompt = ""
+        chapter.draft_text = "远客来到屋檐下。" + "雨滴落下。" * 1000
+        db.commit()
+    checker = RecordingChecker()
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    checked = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
+    assert checked.status_code == 409
+    assert any(v["code"] == "unselected_character" for v in checked.json()["detail"]["violations"])
+    assert checker.user == ""
+    generated = client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers)
+    assert generated.status_code == 409
+    assert generated.json()["detail"]["code"] == "bible_empty"
+
+
+def test_nonempty_bible_retains_requirements_and_evidence_contract():
+    from app.services.context import checker_user_message
+    from app.services.write_jobs import _valid_checker_result
+    message = checker_user_message(Chapter(title="等雨"), "正文", "两人一起回家。", reference_context="已有资料")
+    assert "Bible 决定本章必要事件、顺序与结尾" in message
+    assert "每个 issue 必须同时引用正文和 Bible 证据" in message
+    assert "跳过“是否符合本章写作要求”这一项" not in message
+    invalid = {"verdict": "violation", "issues": [{"kind": "missing_event", "draft_evidence": "两人留下",
+                                                 "bible_evidence": "", "reason": "没有回家"}]}
+    assert _valid_checker_result(invalid, "snapshot")["invalid_evidence"] is True

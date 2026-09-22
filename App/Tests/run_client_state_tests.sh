@@ -216,7 +216,7 @@ for race_host in \
     -F 'editor.currentChapter?.id == chapterID' "$race_host"
 done
 
-xcrun swiftc -parse-as-library \
+xcrun swiftc -swift-version 6 -parse-as-library \
   "$app_dir/LinoI/LinoModels.swift" \
   "$app_dir/LinoI/LinoAPI.swift" \
   "$app_dir/LinoI/ChapterDraftCache.swift" \
@@ -226,6 +226,7 @@ xcrun swiftc -parse-as-library \
   "$app_dir/LinoI/LinoTheme.swift" \
   "$app_dir/LinoI/LinoErrorPresenter.swift" \
   "$app_dir/LinoI/NoticeBus.swift" \
+  "$app_dir/LinoI/LinoStores.swift" \
   "$test_dir/V202NoticeLifecycleTests.swift" \
   "$test_dir/ClientStateTests.swift" \
   -o "$test_binary"

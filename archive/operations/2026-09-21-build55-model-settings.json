@@ -1,0 +1,123 @@
+{
+  "date": "2026-09-21",
+  "version": "2.1.1",
+  "build": 55,
+  "baseline": "main d469a3f2d49978afb341e050acaf13598b1b23af plus inherited uncommitted Build54 workspace; only the listed delta belongs to this quickfix",
+  "scope": {
+    "App/LinoI/LinoModels.swift": {
+      "before": "8906dfaea72af78954bdb907c14944e0a3a430d5e9ba8a1b4e820d0dd5571bb7",
+      "after": "58028995a47e3646f8f81caee663680adc0051a3333f9e36c16c105c809db93b"
+    },
+    "App/LinoI/LinoStores.swift": {
+      "before": "cf7eccef4bf08a81b3e0d529400979d3a94dbd7369904ae02e164440ef4d8793",
+      "after": "aadbc3550c99117f2a1dc2c5f8e0facc56c2f72ad243cc0866d6f93547ce3217"
+    },
+    "App/LinoI/V2IOS/V2IOSSettingsAndExport.swift": {
+      "before": "2a304b8f07a9f81b04b8cf75526d7aeb6709ebe6bc3436c3726c10f7147618f9",
+      "after": "a7fcee91f0e1a01296d9daff80e90f0b86799c89de4161a5f9a9c697d187bdae"
+    },
+    "App/LinoIMac/V2/V2MacDeskSheets.swift": {
+      "before": "2730f4301081bd53b1273cc43cf1f005b36f5020ac9bdba581edfe45fde1c12d",
+      "after": "fca233b71f9edefcf89d93f70997713fa852b793528a10625f737f4015660492"
+    },
+    "App/LinoI.xcodeproj/project.pbxproj": {
+      "before": "382c03169a00aae33ed640ab8e2a07eddd6a473755ddf25fe88098c0ef5b0bd0",
+      "after": "d6c5437fdbfb3c9bd1d888af60664a44814d50f95fd093fe2049d67ca4725097"
+    },
+    "App/Tests/ClientStateTests.swift": {
+      "before": "6f5d5857dd5b79c7d88ec3117971e9b19546fcc48848817fce00f66a466cbdc8",
+      "after": "54b6a0fbadf7a7852e4e32a8998f31bd6ec24ace2fbf751041b74603f4fe4b44"
+    },
+    "Backend/app/schemas/settings.py": {
+      "before": "3041e9496837ddb2928db33a9516de4d4f2aa0d2975d9a49046fdda3bd0551d6",
+      "after": "998479e8d8010876b4600797d0b653bcbdbcdef24042bb57eb1ec9f8886644ab"
+    },
+    "Backend/tests/test_build55_model_settings.py": {
+      "before": null,
+      "after": "7c6394f6b805d177ac152aff291fe3ca8b9c892dcd2f5ad1ebf6381fe197c003"
+    }
+  },
+  "tests": {
+    "backend": "16 passed: tests/test_build55_model_settings.py (8) + tests/test_v2_1_reliability_api.py (8)",
+    "client": "ClientState gate passed, including new draft capability/serialization cases",
+    "builds": "LinoI iOS simulator and LinoIMac Debug builds passed with Xcode27 / SDK27, minimum OS27.0, 2.1.1(55), unsigned",
+    "mac_ui": [
+      "DeepSeek default thinking on; temperature disabled with explanation",
+      "Turning thinking off enables temperature",
+      "422 save failure displays precise notice and retains unsaved temperature 1.00",
+      "Switch to Gemini immediately locks thinking on, enables effort, disables temperature; actual save succeeded",
+      "Extractor fixed thinking off, editable temperature; saved effective false / nil effort / temperature1.0 confirmed by isolated backend GET"
+    ],
+    "ios_ui": "Not exercised; compiled target + shared draft regression only",
+    "independent_review": "Not requested; no independent review claimed"
+  },
+  "release": {
+    "committed": false,
+    "deployed": false,
+    "replaced_installed_app": false,
+    "requires_backend_update": "Profile responses now expose capabilities for unsaved model selection; no migration"
+  },
+  "apple_support": {
+    "checked_at": "2026-09-21T01:40:06.628398+00:00",
+    "devices": [
+      {
+        "model": "iPhone17,3",
+        "os": "",
+        "build": "",
+        "validated": false,
+        "reason": "No local support cache; this connection record needs no cleanup"
+      },
+      {
+        "model": "iPhone18,4",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": false,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+        "reason": "Device unavailable; cached OS information cannot authorize deletion"
+      },
+      {
+        "model": "iPhone19,2",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": false,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+        "reason": "Device unavailable; cached OS information cannot authorize deletion"
+      }
+    ],
+    "candidates": [],
+    "deleted": [],
+    "user_confirmed_unused_models": [],
+    "unused_reason": "",
+    "pending_devices": [
+      "iPhone18,4",
+      "iPhone19,2"
+    ],
+    "status": "partial"
+  },
+  "cleanup": {
+    "status": "complete",
+    "owned_roots": [
+      {
+        "path": "/tmp/ictw-build55-model-settings",
+        "before_kib": 523808,
+        "after_kib": 0
+      },
+      {
+        "path": "/Users/linotsai/Library/Caches/com.lino.ictw.validation55",
+        "before_kib": 628,
+        "after_kib": 0
+      },
+      {
+        "path": "/Users/linotsai/Library/Preferences/com.lino.ictw.validation55.plist",
+        "before_kib": 4,
+        "after_kib": 0
+      }
+    ],
+    "entry_count": 7620,
+    "verified_manifest_sha256": "1f0f175c8c43ba40eef0eb38f4ff6bda7023abea4d79904337262e7758eb2c8d",
+    "retained": "Regression sources and this concise evidence only; no test DB, test app, build tree or raw log retained",
+    "remote": "No remote operations or temporary directories",
+    "processes": "Isolated UI app exited and localhost server stopped; no open owned files",
+    "temporary_directories": "Owned /tmp tree removed; client gate deletes its mktemp binary and pytest fixtures remove own standalone temporary databases. No matching validation55 paths in user/system temporary roots."
+  }
+}

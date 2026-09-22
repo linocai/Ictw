@@ -54,6 +54,7 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
     case startNewChapter
     case retryGeneration
     case retryArchive
+    case refreshTaskStatus
     case openSettings
     case none
 
@@ -67,6 +68,7 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
         case .startNewChapter: "开始新一章"
         case .retryGeneration: "重试"
         case .retryArchive: "重试整理"
+        case .refreshTaskStatus: "刷新任务状态"
         case .openSettings: "去设置"
         case .none: ""
         }
@@ -120,6 +122,7 @@ enum V2DeskReadingOrder {
 enum V2DeskBannerKind: Equatable, Sendable {
     case writing
     case checking
+    case accepting
     case proseUpdated
     case cancelled
     case generationFailed
@@ -319,6 +322,13 @@ struct V2DeskEditorSource {
     let staleCheckedSnapshot: CheckedDraftSnapshot?
     let saveState: ChapterSaveState
     let connectionInterrupted: Bool
+    /// A stopped or retrying local job monitor. The backend job itself is not
+    /// inferred failed from this value.
+    let taskMonitoringMessage: String?
+    /// A `/check` preflight that contains only server-overridable length
+    /// rules. It enables one explicitly confirmed accept, never a default
+    /// bypass or a character-attribution override.
+    let preflightAcceptanceMessage: String?
     /// Computed by each platform from its own `workspace.chapters` via
     /// `V2DeskChapterPosition.isLastChapter` — never derived in here.
     ///
@@ -338,6 +348,8 @@ struct V2DeskEditorSource {
         staleCheckedSnapshot: CheckedDraftSnapshot?,
         saveState: ChapterSaveState,
         connectionInterrupted: Bool,
+        taskMonitoringMessage: String? = nil,
+        preflightAcceptanceMessage: String? = nil,
         isLastChapterInBook: Bool
     ) {
         self.chapter = chapter
@@ -348,6 +360,8 @@ struct V2DeskEditorSource {
         self.staleCheckedSnapshot = staleCheckedSnapshot
         self.saveState = saveState
         self.connectionInterrupted = connectionInterrupted
+        self.taskMonitoringMessage = taskMonitoringMessage
+        self.preflightAcceptanceMessage = preflightAcceptanceMessage
         self.isLastChapterInBook = isLastChapterInBook
     }
 }
@@ -503,14 +517,24 @@ enum V2DeskPresentation {
         currentVerdict: V2DeskCheckerVerdict
     ) -> V2DeskPrimaryAction {
         if source.writingPhase.isGenerating { return .cancelGeneration }
+        // Extraction and accept acknowledgement have no cancellation route.
+        // Keeping their primary action empty prevents a duplicate accept or a
+        // premature “start next chapter” while the server state is pending.
+        if source.writingPhase.isActive { return .none }
         if isAccepted { return .startNewChapter }
         if case .failed(let code, _, let stage) = source.writingPhase {
+            if stage == nil { return .refreshTaskStatus }
             if stage == .extraction { return .retryArchive }
+            if stage == .acceptance {
+                if needsSettings(code) { return .openSettings }
+                return code == "checker_override_required" ? .rerunChecker : .none
+            }
             return needsSettings(code) ? .openSettings : .retryGeneration
         }
         if case .cancelled = source.writingPhase { return .generate }
         if source.checkerRefreshing { return .none }
         guard hasDraft else { return .generate }
+        if source.preflightAcceptanceMessage != nil { return .acceptWithWarning }
         guard hasCurrentChecker else { return .rerunChecker }
         switch currentVerdict {
         case .passed: return .accept
@@ -551,9 +575,18 @@ enum V2DeskPresentation {
             return V2DeskTaskBanner(
                 kind: .connectionInterrupted,
                 tone: .warning,
-                text: "任务状态暂时无法更新，正文仍保留在这里",
-                action: nil
+                text: source.writingPhase.currentStage == .acceptance
+                    ? "接受结果暂未确认，正文仍保留在这里"
+                    : "任务状态暂未确认，正文仍保留在这里",
+                action: .refreshTaskStatus,
+                detail: source.taskMonitoringMessage
             )
+        }
+        if case .accepting = source.writingPhase {
+            return V2DeskTaskBanner(kind: .accepting, tone: .accent, text: "正在确认接受正文", action: nil)
+        }
+        if case .extracting = source.writingPhase {
+            return V2DeskTaskBanner(kind: .archiving, tone: .accent, text: "正在整理这一章的记忆", action: nil)
         }
         if source.writingPhase.isGenerating {
             return V2DeskTaskBanner(kind: .writing, tone: .accent, text: "正在写这一章", action: .cancelGeneration)
@@ -561,12 +594,47 @@ enum V2DeskPresentation {
         if source.checkerRefreshing {
             return V2DeskTaskBanner(kind: .checking, tone: .accent, text: "正在复查这一章", action: nil)
         }
+        if let message = source.preflightAcceptanceMessage {
+            return V2DeskTaskBanner(
+                kind: .checkerUnavailable,
+                tone: .warning,
+                text: "正文较短，需要明确确认后接受",
+                action: .acceptWithWarning,
+                detail: message
+            )
+        }
         if case .cancelled = source.writingPhase {
             return V2DeskTaskBanner(kind: .cancelled, tone: .neutral, text: "已取消，正文没有变化", action: .generate)
         }
         if case .failed(let code, let message, let stage) = source.writingPhase {
+            if stage == nil {
+                return V2DeskTaskBanner(
+                    kind: .connectionInterrupted,
+                    tone: .warning,
+                    text: "任务中断，尚不清楚停在哪一步",
+                    action: .refreshTaskStatus,
+                    detail: message
+                )
+            }
             if stage == .extraction || isAccepted {
                 return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆没能整理，这一章仍然是完成的", action: .retryArchive, detail: message)
+            }
+            if stage == .acceptance {
+                let action: V2DeskPrimaryAction?
+                if needsSettings(code) {
+                    action = .openSettings
+                } else if code == "checker_override_required" {
+                    action = .rerunChecker
+                } else {
+                    action = nil
+                }
+                return V2DeskTaskBanner(
+                    kind: .generationFailed,
+                    tone: .danger,
+                    text: "接受正文未完成，正文没有变化",
+                    action: action,
+                    detail: message
+                )
             }
             if needsSettings(code) {
                 return V2DeskTaskBanner(kind: .generationFailed, tone: .danger, text: "模型配置需要处理", action: .openSettings, detail: message)
@@ -580,11 +648,13 @@ enum V2DeskPresentation {
             )
         }
         if hasUnavailableCurrentChecker {
+            let detail = source.checkerResult.map { LinoErrorPresenter.present(checkerUnavailable: $0).message }
             return V2DeskTaskBanner(
                 kind: .checkerUnavailable,
                 tone: .warning,
                 text: "这次没能检查",
-                action: .acceptWithWarning
+                action: .rerunChecker,
+                detail: detail
             )
         }
         if isAccepted {

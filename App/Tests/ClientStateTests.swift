@@ -97,11 +97,26 @@ private func testAPIEndpointBearerAndStructuredConfigurationError() throws {
     try expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-token", "Bearer header must be retained")
 
     let body = try JSONSerialization.data(withJSONObject: [
-        "detail": ["code": "llm_profile_not_configured", "message": "该 Agent 尚未完成可用模型配置", "details": ["agent_role": "writer"]],
+        "detail": [
+            "code": "checker_preflight_failed",
+            "message": "接受前的程序校验未通过：正文3字，少于4000",
+            "details": ["agent_role": "writer"],
+            "violations": [["code": "word_count", "message": "正文3字，少于4000", "current_chars": 3]],
+        ],
     ])
     let structured = APIClient.structuredError(from: body)
-    try expect(structured?.code == "llm_profile_not_configured", "configuration code must decode as structured API error")
-    try expect(structured?.message == "该 Agent 尚未完成可用模型配置", "configuration message must remain user-displayable")
+    try expect(structured?.code == "checker_preflight_failed", "preflight code must decode as structured API error")
+    try expect(structured?.violations.first?.currentChars == 3, "preflight violations must keep the safe current-character count")
+    if let structured {
+        let presented = LinoErrorPresenter.present(error: APIError.validation(
+            statusCode: 409, code: structured.code, message: structured.message,
+            names: structured.names, violations: structured.violations
+        ))
+        try expect(presented.message.contains("正文3字，少于4000"), "preflight presentation must name the failing safe rule")
+        try expect(!presented.message.contains("HTTP"), "preflight presentation must not discard structured detail into a generic HTTP failure")
+    } else {
+        throw TestFailure.assertion("structured preflight response must decode")
+    }
 
     let conditional = try api.preparedRequest("/chapters/chapter-1", method: "PATCH", ifMatch: 7)
     try expect(conditional.value(forHTTPHeaderField: "If-Match") == "\"7\"", "v2.1 writes must send a quoted content revision")
@@ -203,6 +218,33 @@ private func testPendingMutationReplaysOriginalJSONShape() throws {
     let object = try JSONSerialization.jsonObject(with: replayed) as? [String: Any]
     try expect(object?["title"] as? String == "离线标题", "pending replay must keep the original top-level fields")
     try expect(object?["value"] == nil, "pending replay must not wrap the payload in a synthetic value field")
+}
+
+private func testPendingMutationShowsSafeResourceLocation() throws {
+    let payload = try JSONSerialization.data(withJSONObject: ["title": "雨夜来信"])
+    let baseline = try JSONSerialization.data(withJSONObject: [
+        "book_id": "book-1", "index": 4, "title": "旧标题",
+    ])
+    let chapter = PendingMutation(
+        id: UUID(), resourceKind: .chapter, resourceID: "chapter-1",
+        path: "/chapters/chapter-1", method: "PATCH",
+        readPath: "/chapters/chapter-1", readStrategy: .direct,
+        baseRevision: 7, payload: payload, baseSnapshot: baseline, createdAt: Date()
+    )
+    try expect(
+        chapter.resourceLabel(bookTitle: "故障验收") == "《故障验收》章节：第 4 章《雨夜来信》",
+        "a failed queued chapter write must identify its book and chapter without exposing prose"
+    )
+
+    let book = PendingMutation(
+        id: UUID(), resourceKind: .book, resourceID: "book-2",
+        path: "/books/book-2", method: "PATCH",
+        readPath: "/books/book-2", readStrategy: .direct,
+        baseRevision: 4,
+        payload: try JSONSerialization.data(withJSONObject: ["title": "第二本书"]),
+        baseSnapshot: Data("{}".utf8), createdAt: Date()
+    )
+    try expect(book.resourceLabel == "书籍：第二本书", "a failed queued book write must identify the affected title")
 }
 
 private func testLocalDraftRoundTripPreservesAuthorInputs() throws {
@@ -342,9 +384,11 @@ private func testInspirationSnapshotStalenessAppendAndUndo() throws {
 private func testInspirationErrorsUseAuthorFacingCopy() throws {
     let configuration = InspirationErrorCopy.message(
         for: APIError.validation(
+            statusCode: 409,
             code: "llm_profile_not_configured",
             message: "该 Agent 尚未完成可用模型配置",
-            names: []
+            names: [],
+            violations: []
         )
     )
     try expect(configuration.contains("设置 → Agent"), "configuration copy must tell the author where to act")
@@ -352,9 +396,11 @@ private func testInspirationErrorsUseAuthorFacingCopy() throws {
 
     let unselectedCharacter = InspirationErrorCopy.message(
         for: APIError.validation(
+            statusCode: 409,
             code: "inspiration_unselected_character",
             message: "server fallback",
-            names: []
+            names: [],
+            violations: []
         )
     )
     try expect(
@@ -373,13 +419,14 @@ private func testInspirationErrorsUseAuthorFacingCopy() throws {
 
 private func makeStatus(
     phase: String,
-    outcomeCurrent: Bool?
+    outcomeCurrent: Bool?,
+    kind: String? = nil
 ) -> WriteJobStatus {
     WriteJobStatus(
         chapterId: "chapter-1",
         jobId: "job-1",
         outcomeCurrent: outcomeCurrent,
-        kind: phase == "extracting" ? "extract" : "write",
+        kind: kind ?? (phase == "extracting" ? "extract" : "write"),
         phase: phase,
         attempt: nil,
         errorCode: phase == "failed" ? "revision_failed" : nil,
@@ -402,6 +449,34 @@ private func testCurrentServerFailureIsApplied() throws {
     try expect(decision == .currentTerminal, "current cross-device failure must be applied")
 }
 
+private func testInterruptedJobUsesRecordedPhase() throws {
+    var validating = makeStatus(phase: "failed", outcomeCurrent: true)
+    validating.errorCode = "interrupted"
+    validating.errorContext = JobErrorContext(
+        agentRole: "writer", modelName: "writer-model", upstreamReason: nil,
+        finishReason: nil, blockReason: nil, httpStatus: nil,
+        completionWarning: nil, droppedStateComponents: nil, interruptedPhase: "validating"
+    )
+    try expect(
+        ChapterJobFailureStage.resolve(validating) == .deterministicValidation,
+        "an interrupted validation must not be presented as Writer generation"
+    )
+
+    var unknown = validating
+    unknown.errorContext?.interruptedPhase = "future_phase"
+    try expect(
+        ChapterJobFailureStage.resolve(unknown) == nil,
+        "an unknown interrupted phase must remain unknown instead of guessing Writer"
+    )
+
+    var legacy = validating
+    legacy.errorContext?.interruptedPhase = nil
+    try expect(
+        ChapterJobFailureStage.resolve(legacy) == nil,
+        "a legacy interruption without phase must remain unknown"
+    )
+}
+
 private func testOldOrFinalizedServerFailureIsDiscarded() throws {
     let draft = try makeChapter()
     let stale = ChapterJobReconciler.decide(
@@ -412,12 +487,19 @@ private func testOldOrFinalizedServerFailureIsDiscarded() throws {
     try expect(stale == .obsoleteTerminal, "server-marked stale failure must be discarded")
 
     let finalized = try makeChapter(status: "finalized")
-    let finalizedFailure = ChapterJobReconciler.decide(
+    let finalizedWriteFailure = ChapterJobReconciler.decide(
         status: makeStatus(phase: "failed", outcomeCurrent: true),
         chapter: finalized,
         hasLocalInputDivergence: false
     )
-    try expect(finalizedFailure == .obsoleteTerminal, "failure must never override finalized chapter")
+    try expect(finalizedWriteFailure == .obsoleteTerminal, "old write failure must never override finalized prose")
+
+    let finalizedExtractFailure = ChapterJobReconciler.decide(
+        status: makeStatus(phase: "failed", outcomeCurrent: true, kind: "extract"),
+        chapter: finalized,
+        hasLocalInputDivergence: false
+    )
+    try expect(finalizedExtractFailure == .currentTerminal, "the current extractor failure must remain visible on a finalized chapter")
 }
 
 private func testOldServerFailureRemainsLocalOnly() throws {
@@ -510,9 +592,27 @@ private func testCachedFailureInvalidatesOnAnyInputChangeOrFinalization() throws
     )
     var finalized = chapter
     finalized.status = "finalized"
+    finalized.archive = ChapterArchive(
+        status: "failed", archiveSchema: "v2", revisionId: nil, revision: nil,
+        summary: "", facts: [], stateDeltaCount: 0,
+        errorCode: "extract_failed", errorMessage: "归档失败",
+        canRetry: false, latestAttemptStatus: "failed", inactivePreview: nil
+    )
     try expect(
         ChapterTaskOutcomeStore.load(chapter: finalized, defaults: defaults) == nil,
-        "cached extraction failure must not override finalized state"
+        "a finalized chapter without a current retryable archive failure must discard cached state"
+    )
+
+    ChapterTaskOutcomeStore.save(
+        phase: .failed(code: "extract_failed", message: "归档失败", stage: .extraction),
+        chapter: chapter,
+        defaults: defaults
+    )
+    finalized.archive?.canRetry = true
+    let restored = ChapterTaskOutcomeStore.load(chapter: finalized, defaults: defaults)
+    try expect(
+        restored == nil,
+        "a finalized chapter must use its current server archive reason, never an unverifiable cached extractor failure"
     )
 }
 
@@ -884,6 +984,7 @@ private func makeV2DeskSource(
     staleSnapshot: CheckedDraftSnapshot? = nil,
     saveState: ChapterSaveState = .synced,
     connectionInterrupted: Bool = false,
+    preflightAcceptanceMessage: String? = nil,
     isLastChapterInBook: Bool = false
 ) -> V2DeskEditorSource {
     V2DeskEditorSource(
@@ -895,6 +996,7 @@ private func makeV2DeskSource(
         staleCheckedSnapshot: staleSnapshot,
         saveState: saveState,
         connectionInterrupted: connectionInterrupted,
+        preflightAcceptanceMessage: preflightAcceptanceMessage,
         isLastChapterInBook: isLastChapterInBook
     )
 }
@@ -1030,7 +1132,7 @@ private func testV2DeskCheckerCurrentStaleAndUnavailableStates() throws {
     try expect(unavailableCurrent.taskBanner?.kind == .checkerUnavailable, "a completed unavailable check must be author-visible")
     try expect(unavailableCurrent.taskBanner?.tone == .warning, "a completed unavailable check must use warning semantics")
     try expect(unavailableCurrent.taskBanner?.text == "这次没能检查", "unavailable Checker copy must state the failed check without machine detail")
-    try expect(unavailableCurrent.taskBanner?.action == .acceptWithWarning, "unavailable Checker acceptance must remain a distinct confirmed secondary action")
+    try expect(unavailableCurrent.taskBanner?.action == .rerunChecker, "unavailable Checker must offer an explicit retry before any acceptance action")
     try expect(unavailableCurrent.evidence == .unavailable, "unavailable Checker data must never become current evidence")
 
     let unavailableCurrentWithHistory = V2DeskPresentation.make(makeV2DeskSource(
@@ -1040,7 +1142,7 @@ private func testV2DeskCheckerCurrentStaleAndUnavailableStates() throws {
         staleSnapshot: snapshot
     ))
     try expect(unavailableCurrentWithHistory.primaryAction == .rerunChecker, "historical evidence must not change unavailable Checker primary action")
-    try expect(unavailableCurrentWithHistory.taskBanner?.action == .acceptWithWarning, "historical evidence must not turn warning acceptance into the primary action")
+    try expect(unavailableCurrentWithHistory.taskBanner?.action == .rerunChecker, "historical evidence must not turn a failed check into an acceptance action")
     guard case .stale = unavailableCurrentWithHistory.evidence else {
         throw TestFailure.assertion("unavailable current Checker data must retain historical evidence only as stale")
     }
@@ -1065,6 +1167,42 @@ private func testV2DeskCheckerCurrentStaleAndUnavailableStates() throws {
         checkerRefreshing: true
     ))
     try expect(unavailableWithoutHistory.evidence == .unavailable, "unavailable Checker data without a real snapshot must not invent evidence")
+}
+
+private func testAcceptanceFailureNeverRetriesGeneration() throws {
+    let chapter = try makeChapter()
+    let checkerRequired = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        writingPhase: .failed(
+            code: "checker_override_required",
+            message: "Bible 检查未通过、失效或不可用；请明确忽略后接受",
+            stage: .acceptance
+        )
+    ))
+    try expect(checkerRequired.primaryAction == .rerunChecker, "a rejected accept must return to Checker, never rewrite the chapter")
+    try expect(checkerRequired.taskBanner?.text == "接受正文未完成，正文没有变化", "a rejected accept must say the manuscript remains a draft")
+    try expect(checkerRequired.taskBanner?.action == .rerunChecker, "Checker-required acceptance failure must provide only the recheck action")
+
+    let preflight = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        writingPhase: .failed(
+            code: "checker_preflight_failed",
+            message: "接受前校验发现人物选择问题",
+            stage: .acceptance
+        )
+    ))
+    try expect(preflight.primaryAction == .none, "a deterministic acceptance rejection must not send another request before the author edits")
+    try expect(preflight.taskBanner?.action == nil, "a deterministic acceptance rejection must not expose generation or archive retry")
+
+    let legacy = ChapterEditorPresentationState.make(
+        phase: .failed(code: "checker_preflight_failed", message: "失败", stage: .acceptance),
+        chapterStatus: "draft_ready",
+        checkerVerdict: nil,
+        validationReason: nil,
+        saveState: .synced,
+        connectionInterrupted: false
+    )
+    try expect(legacy.recoveryAction == nil, "legacy presentation must not map an acceptance failure to regenerate")
 }
 
 private func testV2DeskAcceptedArchiveIsolationAndAttention() throws {
@@ -1220,7 +1358,7 @@ private func testV2DeskLocalSaveConnectionAndModelConfiguration() throws {
 
     let disconnected = V2DeskPresentation.make(makeV2DeskSource(chapter: chapter, connectionInterrupted: true))
     try expect(disconnected.taskBanner?.kind == .connectionInterrupted, "connection interruption must be visible without discarding prose")
-    try expect(disconnected.taskBanner?.action == nil, "connection interruption must not invent a server command")
+    try expect(disconnected.taskBanner?.action == .refreshTaskStatus, "connection interruption must offer a read-only status refresh")
 
     for code in [
         "llm_profile_not_configured",
@@ -1463,6 +1601,87 @@ private func testV2DeskReopenConfirmationMessageCombinations() throws {
     }
 }
 
+private func testReasonOnlyCheckerIssuesRemainDecodable() throws {
+    let payload: [String: Any] = [
+        "verdict": "violation",
+        "issues": [["kind": "new_plot", "reason": "与本章剧情 Bible 不一致"]],
+    ]
+    let data = try JSONSerialization.data(withJSONObject: payload)
+    let result = try JSONDecoder().decode(CheckerResult.self, from: data)
+    try expect(result.issues?.count == 1, "a redacted job Checker issue must not discard its whole result")
+    try expect(result.issues?.first?.kind == "new_plot", "a redacted issue must retain its safe kind")
+    try expect(result.issues?.first?.reason == "与本章剧情 Bible 不一致", "a redacted issue must retain its safe reason")
+    try expect(result.issues?.first?.draftEvidence.isEmpty == true && result.issues?.first?.bibleEvidence.isEmpty == true, "redacted job issues must not invent manuscript or Bible excerpts")
+}
+
+@MainActor
+private func testTaskMonitoringNoticeIdentityAndBackoff() throws {
+    let notices = NoticeBus()
+    let monitorOne = UUID()
+    let monitorTwo = UUID()
+    notices.publish("第一次监测失败", tone: .error, deduplicationKey: ChapterTaskMonitoringNoticeKey.transient(chapterID: "chapter-1", monitorID: monitorOne), announce: false)
+    notices.publish("第一次监测失败", tone: .error, deduplicationKey: ChapterTaskMonitoringNoticeKey.transient(chapterID: "chapter-1", monitorID: monitorOne), announce: false)
+    try expect(notices.history.count == 1, "one monitor must not spam duplicate transient notices")
+    notices.publish("新任务监测失败", tone: .error, deduplicationKey: ChapterTaskMonitoringNoticeKey.transient(chapterID: "chapter-1", monitorID: monitorTwo), announce: false)
+    try expect(notices.history.count == 2, "a new monitor for the same chapter must retain a new history entry")
+    notices.publish("手动刷新失败", tone: .error, deduplicationKey: ChapterTaskMonitoringNoticeKey.refresh(chapterID: "chapter-1", requestID: UUID()), announce: false)
+    notices.publish("再次手动刷新失败", tone: .error, deduplicationKey: ChapterTaskMonitoringNoticeKey.refresh(chapterID: "chapter-1", requestID: UUID()), announce: false)
+    try expect(notices.history.count == 4, "each explicit refresh must retain its own failure history")
+    try expect(ChapterTaskPollingPolicy.retryDelayNanoseconds(afterConsecutiveFailures: 1) == 500_000_000, "the first transient poll retry must back off briefly")
+    try expect(ChapterTaskPollingPolicy.retryDelayNanoseconds(afterConsecutiveFailures: 3) == 3_000_000_000, "the final transient retry must stay bounded")
+    try expect(ChapterTaskPollingPolicy.retryDelayNanoseconds(afterConsecutiveFailures: 4) == nil, "polling must stop after its bounded retry budget")
+}
+
+private func testAcceptanceAndExtractionPendingPresentation() throws {
+    let chapter = try makeChapter()
+    let accepting = V2DeskPresentation.make(makeV2DeskSource(chapter: chapter, writingPhase: .accepting))
+    try expect(accepting.primaryAction == .none, "an accept acknowledgement must not offer a duplicate accept")
+    try expect(accepting.taskBanner?.kind == .accepting && accepting.taskBanner?.text == "正在确认接受正文", "accepting must name the accept acknowledgement rather than archive work")
+
+    let extracting = V2DeskPresentation.make(makeV2DeskSource(chapter: chapter, writingPhase: .extracting))
+    try expect(extracting.primaryAction == .none, "an active archive retry must not expose a second retry")
+    try expect(extracting.taskBanner?.kind == .archiving && extracting.taskBanner?.text == "正在整理这一章的记忆", "an active Extractor must override an old archive failure card")
+
+    let unknownAccept = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: chapter,
+        writingPhase: .accepting,
+        connectionInterrupted: true
+    ))
+    try expect(unknownAccept.taskBanner?.text == "接受结果暂未确认，正文仍保留在这里", "a lost accept result must remain explicitly unknown and read-only refreshable")
+    try expect(unknownAccept.taskBanner?.action == .refreshTaskStatus, "an unknown accept result must offer only read-only status refresh")
+}
+
+private func testLengthOnlyPreflightRequiresExplicitAcceptance() throws {
+    let lengthOnly = [Violation(code: "minimum_length", message: "正文 3 字，少于最低要求 4000 字", names: nil, currentChars: 3)]
+    try expect(ChapterPreflightOverridePolicy.permitsExplicitAcceptance(lengthOnly), "only a server-approved length preflight may offer explicit acceptance")
+    let withCharacter = lengthOnly + [Violation(code: "unselected_character", message: "正文含未选人物", names: ["林夕"], currentChars: nil)]
+    try expect(!ChapterPreflightOverridePolicy.permitsExplicitAcceptance(withCharacter), "a character attribution failure must never be overridable")
+    let snapshot = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: try makeChapter(),
+        preflightAcceptanceMessage: "接受前的程序校验未通过：正文 3 字，少于最低要求 4000 字"
+    ))
+    try expect(snapshot.primaryAction == .acceptWithWarning, "a length-only preflight must expose the confirmed accept route")
+    try expect(snapshot.taskBanner?.action == .acceptWithWarning, "the length override must be reachable from the persistent banner")
+}
+
+private func testUnknownInterruptedStageDoesNotGuessWriter() throws {
+    let state = ChapterEditorPresentationState.make(
+        phase: .failed(code: "interrupted", message: "服务重启", stage: nil),
+        chapterStatus: "draft_ready",
+        checkerVerdict: nil,
+        validationReason: nil,
+        saveState: .synced,
+        connectionInterrupted: false
+    )
+    try expect(state.steps.first(where: { $0.stage == .drafting })?.state != .failed, "an unknown interrupted phase must not mark Writer drafting as failed")
+    let snapshot = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: try makeChapter(),
+        writingPhase: .failed(code: "interrupted", message: "服务重启", stage: nil)
+    ))
+    try expect(snapshot.primaryAction == .refreshTaskStatus, "an unknown interrupted phase must offer status refresh, not rewrite")
+    try expect(snapshot.taskBanner?.text == "任务中断，尚不清楚停在哪一步", "an unknown interrupted phase must stay explicitly unknown")
+}
+
 private func testChapterRewriteOutcomeSeparatesPartialFailureFromNoOp() throws {
     let chapter = try makeChapter(status: "writing")
 
@@ -1514,10 +1733,77 @@ private func testRewriteImpactPreviewDecodesSnakeCase() throws {
     try expect(preview.affectedChapters.first?.title == "第四章", "affected chapter title must decode")
 }
 
+private func testBookModelSettingsDraftCapabilitiesAndPayload() throws {
+    func profile(_ id: String, toggle: Bool, required: Bool = false, temp: Bool, levels: [String]) throws -> LLMProfile {
+        let json: [String: Any] = ["id": id, "name": id, "capabilities": [
+            "thinking_toggle_supported": toggle, "thinking_can_disable": toggle,
+            "thinking_required": required, "temperature_effective_when_thinking": temp,
+            "reasoning_effort_levels": levels]]
+        return try JSONDecoder().decode(LLMProfile.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+    let deep = try profile("deep", toggle: true, temp: false, levels: ["high", "max"])
+    let glm = try profile("glm", toggle: true, temp: true, levels: ["high", "max"])
+    let gemini = try profile("gemini", toggle: false, required: true, temp: false, levels: ["minimal", "low", "medium", "high"])
+    let unknown = try profile("unknown", toggle: false, temp: true, levels: [])
+    let profiles = [deep, glm, gemini, unknown]
+    var draft = BookModelSettingsDraft(role: "writer")
+    try expect(draft.payload == nil, "unselected profile must not send a null model ID")
+    draft.selectProfile("deep", profiles: profiles, row: nil)
+    try expect(draft.thinkingEnabled && !draft.temperatureAdjustable, "DeepSeek's unset thinking is effectively enabled, disabling temperature")
+    draft.temperature = 0.7
+    draft.effort = "max"
+    try expect(draft.payload?.temperature == nil && draft.payload?.reasoningEffort == "max", "thinking requests must omit incompatible temperature")
+    draft.thinking = false
+    try expect(draft.temperatureAdjustable && draft.payload?.temperature == 0.7, "turning thinking off must enable temperature")
+    try expect(draft.payload?.reasoningEffort == nil, "turning thinking off must omit stale effort")
+    draft.selectProfile("gemini", profiles: profiles, row: nil)
+    try expect(draft.thinkingEnabled && !draft.thinkingAdjustable && draft.effortAdjustable, "required thinking must appear on and retain effort controls")
+    try expect(draft.effort.isEmpty && draft.temperature == nil && !draft.temperatureAdjustable, "switching profile must clear stale settings and refresh capabilities")
+    draft.effort = "medium"
+    try expect(draft.payload?.thinkingEnabled == nil && draft.payload?.reasoningEffort == "medium", "required-thinking model must not be sent false")
+    draft.selectProfile("unknown", profiles: profiles, row: nil)
+    draft.thinking = false
+    draft.effort = "high"
+    draft.temperature = 0.6
+    try expect(draft.payload?.thinkingEnabled == nil && draft.payload?.reasoningEffort == nil && draft.payload?.temperature == 0.6, "unknown models accept temperature without invented reasoning fields")
+    draft.selectProfile("glm", profiles: profiles, row: nil)
+    draft.temperature = 0.4
+    try expect(draft.thinkingEnabled && draft.temperatureAdjustable && draft.payload?.temperature == 0.4, "GLM supports temperature together with thinking")
+    draft.temperature = nil
+    let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(draft.payload!)) as! [String: Any]
+    try expect(encoded["temperature"] is NSNull && encoded["effective_thinking_enabled"] == nil, "model-default temperature must remain null, with no response-only fields")
+
+    for role in ["extractor", "inspiration_creator"] {
+        var bounded = BookModelSettingsDraft(role: role)
+        bounded.selectProfile("deep", profiles: profiles, row: nil)
+        bounded.effort = "max"
+        bounded.temperature = 0.2
+        try expect(!bounded.thinkingEnabled && !bounded.thinkingAdjustable && bounded.temperatureAdjustable, "bounded role locks thinking, not temperature")
+        try expect(bounded.payload?.thinkingEnabled == false && bounded.payload?.reasoningEffort == nil && bounded.payload?.temperature == 0.2, "bounded role emits a valid non-thinking payload")
+        bounded.selectProfile("gemini", profiles: profiles, row: nil)
+        try expect(bounded.payload == nil && bounded.blockingReason != nil, "model that cannot disable thinking must explain and block bounded save")
+    }
+
+    let rowJSON: [String: Any] = ["agent_role": "writer", "source": "global", "effective_binding": [
+        "llm_profile_id": "legacy", "thinking_enabled": NSNull(), "effective_thinking_enabled": true, "temperature": NSNull()
+    ], "capabilities": ["thinking_toggle_supported": true, "thinking_can_disable": true,
+                         "temperature_effective_when_thinking": false, "reasoning_effort_levels": ["high", "max"]]]
+    let row = try JSONDecoder().decode(BookAgentModelBinding.self, from: JSONSerialization.data(withJSONObject: rowJSON))
+    let legacy = try JSONDecoder().decode(LLMProfile.self, from: Data(#"{"id":"legacy"}"#.utf8))
+    let inherited = BookModelSettingsDraft(role: "writer", row: row, profiles: [legacy])
+    try expect(inherited.thinkingEnabled && inherited.temperature == nil && inherited.payload?.thinkingEnabled == true, "opening and saving inherited defaults must not disable thinking or invent temperature")
+    var missing = BookModelSettingsDraft(role: "writer")
+    missing.selectProfile("legacy", profiles: [legacy], row: nil)
+    try expect(missing.payload == nil && missing.blockingReason != nil, "missing profile capability data must be explained, not guessed")
+    missing.refreshCapabilities(profiles: [], row: nil)
+    try expect(missing.payload == nil, "deleted profile must never remain saveable")
+}
+
 @main
 private struct ClientStateTestRunner {
     @MainActor
     static func main() throws {
+        try testBookModelSettingsDraftCapabilitiesAndPayload()
         try testLegacySynopsisDecodesAsCanonicalSummary()
         try testConnectionDefaultMigrationPreservesCustomEndpoint()
         try testAPIEndpointBearerAndStructuredConfigurationError()
@@ -1525,13 +1811,17 @@ private struct ClientStateTestRunner {
         try testLegacyCharactersDefaultMissingRevisions()
         try testAuthorFacingCompatibilityErrorsAndShelfDates()
         try testPendingMutationReplaysOriginalJSONShape()
+        try testPendingMutationShowsSafeResourceLocation()
         try testLocalDraftRoundTripPreservesAuthorInputs()
         try testOfflineSnapshotCacheKeepsResourcesSeparate()
         try testSyncCacheReportsWriteFailure()
         try testInspirationResponseAndEmptySnapshotRequestDecode()
         try testInspirationSnapshotStalenessAppendAndUndo()
         try testInspirationErrorsUseAuthorFacingCopy()
+        try testReasonOnlyCheckerIssuesRemainDecodable()
+        try testTaskMonitoringNoticeIdentityAndBackoff()
         try testCurrentServerFailureIsApplied()
+        try testInterruptedJobUsesRecordedPhase()
         try testOldOrFinalizedServerFailureIsDiscarded()
         try testOldServerFailureRemainsLocalOnly()
         try testNewerLocalInputsDiscardServerTerminal()
@@ -1554,6 +1844,10 @@ private struct ClientStateTestRunner {
         try testV2DeskUsesFixedThreeFacesAndOnePrimaryAction()
         try testV2DeskGenerationCancelAndFailurePreserveVisibleProse()
         try testV2DeskCheckerCurrentStaleAndUnavailableStates()
+        try testAcceptanceFailureNeverRetriesGeneration()
+        try testAcceptanceAndExtractionPendingPresentation()
+        try testLengthOnlyPreflightRequiresExplicitAcceptance()
+        try testUnknownInterruptedStageDoesNotGuessWriter()
         try testV2DeskAcceptedArchiveIsolationAndAttention()
         try testV2DeskReadingOrderSeparatesNavigationFromCreation()
         try testV2DeskLocalSaveConnectionAndModelConfiguration()

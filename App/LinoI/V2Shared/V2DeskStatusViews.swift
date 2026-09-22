@@ -79,6 +79,7 @@ struct V2DeskSyncPill: View {
         case offline
         case pending(Int)
         case conflict(Int)
+        case failed(Int)
         case persistenceFailed
         case synced
 
@@ -88,6 +89,7 @@ struct V2DeskSyncPill: View {
             case .offline: "离线浏览"
             case .pending(let count): count == 1 ? "1 项未同步" : "\(count) 项未同步"
             case .conflict(let count): count == 1 ? "1 项待处理冲突" : "\(count) 项待处理冲突"
+            case .failed(let count): count == 1 ? "1 项同步需要处理" : "\(count) 项同步需要处理"
             case .persistenceFailed: "本机保存需要处理"
             case .synced: "已同步"
             }
@@ -99,6 +101,7 @@ struct V2DeskSyncPill: View {
             case .offline: .warning
             case .pending: .warning
             case .conflict: .danger
+            case .failed: .danger
             case .persistenceFailed: .danger
             case .synced: .success
             }
@@ -110,6 +113,7 @@ struct V2DeskSyncPill: View {
             case .offline: "wifi.slash"
             case .pending: "arrow.up.circle"
             case .conflict: "exclamationmark.triangle"
+            case .failed: "exclamationmark.arrow.triangle.2.circlepath"
             case .persistenceFailed: "externaldrive.badge.exclamationmark"
             case .synced: "checkmark.circle"
             }

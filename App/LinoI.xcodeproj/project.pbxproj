@@ -15,7 +15,6 @@
 		A00000000000000000000104 /* NoticeBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000124 /* NoticeBus.swift */; };
 		A00000000000000000000105 /* ChapterDraftCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000125 /* ChapterDraftCache.swift */; };
 		A00000000000000000000106 /* LinoStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000126 /* LinoStores.swift */; };
-		A00000000000000000000136 /* ClientSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000146 /* ClientSyncStore.swift */; };
 		A00000000000000000000107 /* LinoComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000127 /* LinoComponents.swift */; };
 		A00000000000000000000108 /* ShelfViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000128 /* ShelfViews.swift */; };
 		A00000000000000000000109 /* WorkspaceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000129 /* WorkspaceViews.swift */; };
@@ -25,11 +24,11 @@
 		A00000000000000000000113 /* ReadingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000133 /* ReadingViews.swift */; };
 		A00000000000000000000114 /* LinoErrorPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000134 /* LinoErrorPresenter.swift */; };
 		A00000000000000000000115 /* InspirationCreator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000135 /* InspirationCreator.swift */; };
+		A00000000000000000000136 /* ClientSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000146 /* ClientSyncStore.swift */; };
 		B00000000000000000000201 /* LinoStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000126 /* LinoStores.swift */; };
 		B00000000000000000000202 /* LinoAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000123 /* LinoAPI.swift */; };
 		B00000000000000000000203 /* LinoModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000122 /* LinoModels.swift */; };
 		B00000000000000000000204 /* ChapterDraftCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000125 /* ChapterDraftCache.swift */; };
-		B00000000000000000000233 /* ClientSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000146 /* ClientSyncStore.swift */; };
 		B00000000000000000000205 /* NoticeBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000124 /* NoticeBus.swift */; };
 		B00000000000000000000206 /* LinoTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000121 /* LinoTheme.swift */; };
 		B00000000000000000000207 /* LinoComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000127 /* LinoComponents.swift */; };
@@ -43,6 +42,7 @@
 		B00000000000000000000218 /* MacWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000322 /* MacWorkspaceView.swift */; };
 		B00000000000000000000219 /* MacChapterSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000323 /* MacChapterSidebar.swift */; };
 		B00000000000000000000220 /* MacChapterEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000324 /* MacChapterEditor.swift */; };
+		B00000000000000000000221 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000321 /* Assets.xcassets */; };
 		B00000000000000000000222 /* MacRightPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000325 /* MacRightPanel.swift */; };
 		B00000000000000000000223 /* MacCharacterTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000326 /* MacCharacterTab.swift */; };
 		B00000000000000000000224 /* MacBookSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000327 /* MacBookSettingsTab.swift */; };
@@ -54,7 +54,7 @@
 		B00000000000000000000230 /* LinoErrorPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000134 /* LinoErrorPresenter.swift */; };
 		B00000000000000000000231 /* InspirationCreator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000135 /* InspirationCreator.swift */; };
 		B00000000000000000000232 /* MacInspirationTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000334 /* MacInspirationTab.swift */; };
-		B00000000000000000000221 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000321 /* Assets.xcassets */; };
+		B00000000000000000000233 /* ClientSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000146 /* ClientSyncStore.swift */; };
 		C00000000000000000000001 /* V2DeskTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000301 /* V2DeskTokens.swift */; };
 		C00000000000000000000002 /* V2DeskPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000302 /* V2DeskPresentation.swift */; };
 		C00000000000000000000003 /* V2DeskStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000303 /* V2DeskStatusViews.swift */; };
@@ -86,7 +86,6 @@
 		A00000000000000000000124 /* NoticeBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoticeBus.swift; sourceTree = "<group>"; };
 		A00000000000000000000125 /* ChapterDraftCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChapterDraftCache.swift; sourceTree = "<group>"; };
 		A00000000000000000000126 /* LinoStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoStores.swift; sourceTree = "<group>"; };
-		A00000000000000000000146 /* ClientSyncStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientSyncStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000127 /* LinoComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoComponents.swift; sourceTree = "<group>"; };
 		A00000000000000000000128 /* ShelfViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfViews.swift; sourceTree = "<group>"; };
 		A00000000000000000000129 /* WorkspaceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceViews.swift; sourceTree = "<group>"; };
@@ -96,7 +95,8 @@
 		A00000000000000000000133 /* ReadingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingViews.swift; sourceTree = "<group>"; };
 		A00000000000000000000134 /* LinoErrorPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoErrorPresenter.swift; sourceTree = "<group>"; };
 		A00000000000000000000135 /* InspirationCreator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspirationCreator.swift; sourceTree = "<group>"; };
-		B00000000000000000000310 /* LinoIMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LinoIMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000146 /* ClientSyncStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientSyncStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000310 /* LinoIMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = LinoIMac.app; path = ICTW.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000311 /* LinoIMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinoIMacApp.swift; sourceTree = "<group>"; };
 		B00000000000000000000312 /* MacShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShell.swift; sourceTree = "<group>"; };
 		B00000000000000000000313 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -106,6 +106,7 @@
 		B00000000000000000000317 /* MacBookshelfView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBookshelfView.swift; sourceTree = "<group>"; };
 		B00000000000000000000318 /* MacNewBookSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNewBookSheet.swift; sourceTree = "<group>"; };
 		B00000000000000000000319 /* MacConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacConnectionView.swift; sourceTree = "<group>"; };
+		B00000000000000000000321 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B00000000000000000000322 /* MacWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceView.swift; sourceTree = "<group>"; };
 		B00000000000000000000323 /* MacChapterSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChapterSidebar.swift; sourceTree = "<group>"; };
 		B00000000000000000000324 /* MacChapterEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChapterEditor.swift; sourceTree = "<group>"; };
@@ -118,7 +119,6 @@
 		B00000000000000000000332 /* MacCommandBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCommandBus.swift; sourceTree = "<group>"; };
 		B00000000000000000000333 /* MacSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsSheet.swift; sourceTree = "<group>"; };
 		B00000000000000000000334 /* MacInspirationTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacInspirationTab.swift; sourceTree = "<group>"; };
-		B00000000000000000000321 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C00000000000000000000301 /* V2DeskTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskTokens.swift; sourceTree = "<group>"; };
 		C00000000000000000000302 /* V2DeskPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskPresentation.swift; sourceTree = "<group>"; };
 		C00000000000000000000303 /* V2DeskStatusViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskStatusViews.swift; sourceTree = "<group>"; };
@@ -492,7 +492,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -546,7 +546,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
@@ -560,7 +560,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 56;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -570,7 +570,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.1.0;
+				MARKETING_VERSION = 2.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -586,7 +586,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 56;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LinoI/Info.plist;
@@ -595,7 +595,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.1.0;
+				MARKETING_VERSION = 2.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -612,7 +612,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 56;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -621,8 +621,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 2.1.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 2.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;
@@ -638,7 +638,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 56;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -647,8 +647,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 2.1.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 2.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;

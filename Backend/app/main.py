@@ -21,7 +21,7 @@ from app.services.content_revisions import bump_content_revision
 # reads it back to confirm the running build. `EXPECTED_ALEMBIC_HEAD` is
 # asserted against the real migration head by the test suite, so it cannot
 # drift silently.
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 EXPECTED_ALEMBIC_HEAD = "20260830_0013"
 
 
@@ -40,6 +40,15 @@ async def lifespan(app: FastAPI):
 def recover_interrupted_chapters(db) -> None:
     runs = db.scalars(select(JobRun).where(JobRun.phase.notin_(["done", "failed", "cancelled"]))).all()
     for run in runs:
+        roles = {
+            "selecting_memory": "memory_selector", "writing": "writer",
+            "validating": "writer", "checking": "checker", "extracting": "extractor",
+        }
+        if run.phase in roles:
+            run.error_context = {
+                **(run.error_context or {}),
+                "interrupted_phase": run.phase, "agent_role": roles[run.phase],
+            }
         if run.kind == "extract" and run.archive_revision_id:
             revision = db.get(ChapterArchiveRevision, run.archive_revision_id)
             chapter = db.get(Chapter, run.chapter_id)
@@ -58,6 +67,9 @@ def recover_interrupted_chapters(db) -> None:
                     revision.status, revision.error_code, revision.error_message = "stale", "archive_reopened", "章节已重开，归档结果已失效"
                     revision.is_active = False
                     revision.finished_at = utc_now()
+            # The currentness contract compares this stamp with chapter.updated_at.
+            # Flush archive recovery first, just as the Writer branch does below.
+            db.flush()
             run.finished_at = utc_now()
             continue
         chapter = db.get(Chapter, run.chapter_id)

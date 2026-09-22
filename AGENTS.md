@@ -1,5 +1,7 @@
 # ICTW 项目操作规范
 
+Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发基线（2026-09-20 用户确认）」：自用 App 最低 OS 27.0，共用 iPhone 18 Pro／iOS 27「主模拟器」；旧版本记录的 26.x 要求仅作历史。
+
 `PROJECT_PLAN.md` 是唯一现行版本记录，只写各版本完成了什么、当前发布状态和后续升级项。禁止写入文件改动清单、接口字段、数据库方案、施工阶段、命令、逐项测试用例或临时排障过程；施工细节由代码、测试、Git 历史、`archive/plans/` 完成记录和仓库外 `NB_info.md` 承载。历史计划、设计和运维记录只查 `archive/`，不得把归档内容当成当前指令执行。
 
 ## 项目事实
@@ -46,7 +48,7 @@
 
 ## 当前生产门禁
 
-- 当前双端源码、本机已安装 macOS 与公开 Release 均为 `v2.1.0(52)`；Backend 源码与宁波生产均为 `v2.1.0`（Checker 修复 `a298f69` 已部署），Alembic head 为 `20260830_0013`。iOS Build 52 真机签名构建已通过，最终安装由用户在 Xcode 操作。
+- 当前双端版本标记为 `v2.1.1(56)`（2026-09-22空Bible检查快修，仅后端逻辑与build号更新；双端OS27构建及macOS模型设置隔离点击证据对应Build55）、Backend 源码为 `v2.1.1`，错误可见性修复和独立复查已完成；本机已安装 macOS 与公开 Release 仍为 `v2.1.0(52)`，宁波生产仍为 `v2.1.0`（`a298f69`），Alembic head 为 `20260830_0013`。Build 53 双端隔离 Debug 构建通过，iOS 页面点击受本机设备界面工具限制尚未验收；本轮未发布、未部署、未换装。后续发布仍须走既定签名与安装流程，iOS 最终安装由用户在 Xcode 操作。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
 - 生产入口为 `https://ictw.linotsai.top`，Backend 位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787` 并由 Nginx Proxy Manager 反代。

@@ -30,7 +30,7 @@ struct LinoIMacApp: App {
     init() {
         let notices = NoticeBus()
         let session = AppSession(notices: notices)
-        let syncStore = ClientSyncStore()
+        let syncStore = ClientSyncStore(notices: notices)
         _notices = StateObject(wrappedValue: notices)
         _session = StateObject(wrappedValue: session)
         _syncStore = StateObject(wrappedValue: syncStore)

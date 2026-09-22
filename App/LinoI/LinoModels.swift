@@ -1,5 +1,39 @@
 import Foundation
 
+/// Debug validation must never read a real connection, Keychain token, draft,
+/// sync queue or task outcome. The isolated bundle used by UI verification
+/// supplies all four values in `LSEnvironment`; command-line launches may
+/// override those same values through the process environment.
+enum DebugRuntimeConfiguration {
+    static func value(for key: String) -> String? {
+        #if DEBUG
+        if let value = ProcessInfo.processInfo.environment[key], !value.isEmpty {
+            return value
+        }
+        if let environment = Bundle.main.object(forInfoDictionaryKey: "LSEnvironment") as? [String: Any],
+           let value = environment[key] as? String,
+           !value.isEmpty {
+            return value
+        }
+        #endif
+        return nil
+    }
+
+    static var dataRoot: URL? {
+        guard let value = self.value(for: "LINOI_DEBUG_DATA_ROOT") else { return nil }
+        return URL(fileURLWithPath: value, isDirectory: true)
+    }
+
+    static var defaults: UserDefaults? {
+        guard let suite = value(for: "LINOI_DEBUG_DEFAULTS_SUITE") else { return nil }
+        return UserDefaults(suiteName: suite)
+    }
+
+    static var isIsolated: Bool {
+        dataRoot != nil || defaults != nil || value(for: "LINOI_DEBUG_BASE_URL") != nil || value(for: "LINOI_DEBUG_TOKEN") != nil
+    }
+}
+
 /// Connection persistence policy is Foundation-only so its migration contract
 /// can be tested without constructing SwiftUI application state.
 enum ConnectionEndpoint {
@@ -612,9 +646,10 @@ struct LLMProfile: Codable, Identifiable, Hashable, Sendable {
     var baseURL: String
     var modelName: String
     var contentRevision: Int = 0
+    var capabilities: ModelCapabilities?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, provider
+        case id, name, provider, capabilities
         case baseURL = "base_url"
         case modelName = "model_name"
         case contentRevision = "content_revision"
@@ -622,6 +657,7 @@ struct LLMProfile: Codable, Identifiable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities)
         id = try container.decode(String.self, forKey: .id)
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
         provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "openai_compatible"
@@ -920,6 +956,90 @@ struct BookAgentModelBinding: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// Shared by both book settings screens. Capability rules come from the
+/// selected profile, never from the previously saved model after a switch.
+struct BookModelSettingsDraft {
+    var profileID = ""
+    var thinking: Bool?
+    var effort = ""
+    var temperature: Double?
+    private(set) var role: String
+    private(set) var capabilities: ModelCapabilities?
+    private(set) var profileExists = false
+
+    init(role: String, row: BookAgentModelBinding? = nil, profiles: [LLMProfile] = []) {
+        self.role = role
+        let values = row?.bookBinding ?? row?.effectiveBinding
+        profileID = values?.llmProfileId ?? ""
+        thinking = values?.thinkingEnabled ?? values?.effectiveThinkingEnabled
+        effort = values?.reasoningEffort ?? values?.effectiveReasoningEffort ?? ""
+        temperature = values?.temperature
+        refreshCapabilities(profiles: profiles, row: row)
+    }
+
+    var bounded: Bool { role == "extractor" || role == "inspiration_creator" }
+    var thinkingEnabled: Bool {
+        guard !bounded, let capabilities else { return false }
+        return capabilities.thinkingRequired || (capabilities.thinkingToggleSupported && (thinking ?? true))
+    }
+    var thinkingAdjustable: Bool { !bounded && capabilities?.thinkingToggleSupported == true }
+    var effortLevels: [String] { bounded ? [] : capabilities?.reasoningEffortLevels ?? [] }
+    var effortAdjustable: Bool { thinkingEnabled && !effortLevels.isEmpty }
+    var temperatureAdjustable: Bool {
+        guard profileExists, let capabilities else { return false }
+        return !thinkingEnabled || capabilities.temperatureEffectiveWhenThinking
+    }
+    var blockingReason: String? {
+        if !profileExists { return "请选择一个可用模型。" }
+        if capabilities == nil { return "模型能力资料未载入，请重新加载；若仍不可用，请先更新后端。" }
+        if bounded && capabilities?.thinkingCanDisable != true { return "这个角色需要支持关闭深度思考的模型，请更换模型。" }
+        return nil
+    }
+    var thinkingExplanation: String? {
+        if bounded { return "这个角色的深度思考由服务端固定关闭。" }
+        if capabilities?.thinkingRequired == true { return "这个模型始终开启深度思考，可调整支持的思考强度。" }
+        if capabilities != nil && !thinkingAdjustable { return "这个模型未声明可调的深度思考选项。" }
+        return nil
+    }
+    var temperatureExplanation: String? {
+        guard capabilities != nil, !temperatureAdjustable else { return nil }
+        return capabilities?.thinkingRequired == true
+            ? "这个模型不支持调整温度。"
+            : "开启深度思考时温度不生效；关闭后可调整。"
+    }
+
+    mutating func selectProfile(_ id: String, profiles: [LLMProfile], row: BookAgentModelBinding?) {
+        guard profileID != id else { return }
+        profileID = id
+        thinking = nil
+        effort = ""
+        temperature = nil
+        refreshCapabilities(profiles: profiles, row: row)
+    }
+
+    mutating func refreshCapabilities(profiles: [LLMProfile], row: BookAgentModelBinding?) {
+        let profile = profiles.first { $0.id == profileID }
+        profileExists = profile != nil
+        capabilities = profile?.capabilities
+        // Old servers can still describe an already-bound profile accurately.
+        if capabilities == nil, !profileID.isEmpty, row?.effectiveBinding?.llmProfileId == profileID {
+            capabilities = row?.capabilities
+        }
+    }
+
+    var payload: AgentModelBindingValues? {
+        guard blockingReason == nil, let capabilities else { return nil }
+        return AgentModelBindingValues(
+            llmProfileId: profileID,
+            thinkingEnabled: bounded ? false : (capabilities.thinkingToggleSupported ? thinkingEnabled : nil),
+            reasoningEffort: effortAdjustable && effortLevels.contains(effort) ? effort : nil,
+            temperature: temperatureAdjustable ? temperature : nil,
+            effectiveThinkingEnabled: nil, effectiveReasoningEffort: nil,
+            effectiveTemperature: nil, contentRevision: nil
+        )
+    }
+}
+
 struct ModelCapabilities: Codable, Hashable, Sendable {
     var thinkingToggleSupported: Bool
     var thinkingCanDisable: Bool
@@ -982,7 +1102,7 @@ struct Violation: Codable, Hashable, Sendable {
 /// Additive safe context attached to a terminal job. Failed jobs use the
 /// upstream fields below; a completed Extractor may carry a conservative
 /// state-salvage warning. Old clients ignore unknown keys safely.
-struct JobErrorContext: Codable, Sendable {
+struct JobErrorContext: Codable, Hashable, Sendable {
     var agentRole: String?
     var modelName: String?
     var upstreamReason: String?
@@ -991,6 +1111,11 @@ struct JobErrorContext: Codable, Sendable {
     var httpStatus: Int?
     var completionWarning: String?
     var droppedStateComponents: Int?
+    /// The safe server phase that was active when a service restart
+    /// interrupted a job. It is optional for rolling compatibility with old
+    /// servers, and intentionally takes precedence over the broad agent role
+    /// when the UI tells the author where the interruption happened.
+    var interruptedPhase: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case agentRole = "agent_role"
@@ -1001,6 +1126,7 @@ struct JobErrorContext: Codable, Sendable {
         case httpStatus = "http_status"
         case completionWarning = "completion_warning"
         case droppedStateComponents = "dropped_state_components"
+        case interruptedPhase = "interrupted_phase"
     }
 }
 
@@ -1016,8 +1142,8 @@ struct WriteJobStatus: Decodable, Sendable {
     var phase: String
     var attempt: Int?
     var errorCode: String?
-    var errorMessage: String?
-    var errorContext: JobErrorContext?
+    var errorMessage: String? = nil
+    var errorContext: JobErrorContext? = nil
     var violations: [Violation]?
     var chapter: Chapter?
     var updatedCharacterIds: [String]?
@@ -1127,12 +1253,30 @@ struct MemoryContext: Decodable, Hashable, Sendable {
 }
 
 struct CheckerIssue: Codable, Hashable, Sendable, Identifiable {
-    var id: String { "\(kind)|\(draftEvidence)|\(bibleEvidence)" }
+    var id: String { "\(kind)|\(reason)|\(draftEvidence)|\(bibleEvidence)" }
     var kind: String
     var draftEvidence: String
     var bibleEvidence: String
     var reason: String
     enum CodingKeys: String, CodingKey { case kind, reason; case draftEvidence = "draft_evidence"; case bibleEvidence = "bible_evidence" }
+
+    init(kind: String, draftEvidence: String, bibleEvidence: String, reason: String) {
+        self.kind = kind
+        self.draftEvidence = draftEvidence
+        self.bibleEvidence = bibleEvidence
+        self.reason = reason
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Job snapshots intentionally redact rejected candidate excerpts. The
+        // public conclusion remains useful with only kind/reason, and a
+        // missing excerpt must never make the whole job payload undecodable.
+        kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? ""
+        reason = try container.decodeIfPresent(String.self, forKey: .reason) ?? ""
+        draftEvidence = try container.decodeIfPresent(String.self, forKey: .draftEvidence) ?? ""
+        bibleEvidence = try container.decodeIfPresent(String.self, forKey: .bibleEvidence) ?? ""
+    }
 }
 
 struct CheckerResult: Codable, Hashable, Sendable {
@@ -1141,11 +1285,18 @@ struct CheckerResult: Codable, Hashable, Sendable {
     var draftFingerprint: String?
     var issues: [CheckerIssue]?
     var errorCode: String?
+    /// Safe, already-sanitised detail for a manual Checker response whose
+    /// status is `unavailable`. This is not a Checker verdict and must never
+    /// unlock acceptance.
+    var errorMessage: String?
+    var errorContext: JobErrorContext?
     var wasOverridden: Bool?
     enum CodingKeys: String, CodingKey {
         case verdict, status, issues
         case draftFingerprint = "draft_fingerprint"
         case errorCode = "error_code"
+        case errorMessage = "error_message"
+        case errorContext = "error_context"
         case wasOverridden = "override"
     }
     var displayVerdict: String { verdict ?? status ?? "unavailable" }
@@ -1231,7 +1382,25 @@ enum ChapterJobReconciler {
             return .active
         case "done":
             return hasLocalInputDivergence ? .obsoleteTerminal : .currentTerminal
-        case "failed", "cancelled":
+        case "failed":
+            if hasLocalInputDivergence {
+                return .obsoleteTerminal
+            }
+            // Accepted prose remains immutable, but its current Extractor
+            // failure is still actionable: it is the one terminal outcome
+            // that can offer a memory-only retry from the Reader. A write or
+            // checker failure arriving after finalization is necessarily old
+            // state and must never repaint the accepted chapter.
+            if chapter.status == "finalized",
+               !(status.kind == "extract" && status.outcomeCurrent == true) {
+                return .obsoleteTerminal
+            }
+            switch status.outcomeCurrent {
+            case true: return .currentTerminal
+            case false: return .obsoleteTerminal
+            case nil: return .unverifiedTerminal
+            }
+        case "cancelled":
             if hasLocalInputDivergence || chapter.status == "finalized" {
                 return .obsoleteTerminal
             }
@@ -1248,6 +1417,86 @@ enum ChapterJobReconciler {
     }
 }
 
+/// Maps a terminal job's already-sanitised context to the exact step the
+/// author needs to understand. Restart recovery deliberately favours the
+/// server's `interrupted_phase`: an interrupted deterministic validation must
+/// never be described as Writer work just because the originating agent was
+/// Writer. Missing/unknown legacy phase stays unknown rather than guessed.
+enum ChapterJobFailureStage {
+    static func resolve(_ status: WriteJobStatus) -> ChapterGenerationStage? {
+        switch status.errorContext?.interruptedPhase {
+        case "selecting_memory": return .memorySelection
+        case "writing": return .drafting
+        case "validating": return .deterministicValidation
+        case "checking": return .bibleChecking
+        case "extracting": return .extraction
+        case .some: return nil
+        case .none: break
+        }
+        if status.errorCode == "interrupted" { return nil }
+        if ["writer_validation_failed", "writer_minimum_failed"].contains(status.errorCode) {
+            return .deterministicValidation
+        }
+        switch status.errorContext?.agentRole {
+        case "memory_selector": return .memorySelection
+        case "writer": return .drafting
+        case "checker": return .bibleChecking
+        case "extractor": return .extraction
+        default:
+            if status.kind == "extract" { return .extraction }
+            switch status.errorCode {
+            case "checker_failed", "checker_rejected": return .bibleChecking
+            default: return .drafting
+            }
+        }
+    }
+}
+
+/// A monitor's notices are de-duplicated only for that one observation. A
+/// later job for the same chapter, or a new manual refresh, must create a new
+/// history entry instead of being hidden by an earlier network interruption.
+enum ChapterTaskMonitoringNoticeKey {
+    static func transient(chapterID: String, monitorID: UUID) -> String {
+        "poll-transient:\(chapterID):\(monitorID.uuidString)"
+    }
+
+    static func stopped(chapterID: String, monitorID: UUID) -> String {
+        "poll-stopped:\(chapterID):\(monitorID.uuidString)"
+    }
+
+    static func refresh(chapterID: String, requestID: UUID) -> String {
+        "task-refresh:\(chapterID):\(requestID.uuidString)"
+    }
+}
+
+/// Polling is an observer, never a background loop that may retry forever.
+/// A successful read resets the transient budget; after the final bounded
+/// delay the author receives an explicit read-only refresh path.
+enum ChapterTaskPollingPolicy {
+    static let normalDelayNanoseconds: UInt64 = 2_500_000_000
+
+    static func retryDelayNanoseconds(afterConsecutiveFailures count: Int) -> UInt64? {
+        switch count {
+        case 1: return 500_000_000
+        case 2: return 1_500_000_000
+        case 3: return 3_000_000_000
+        default: return nil
+        }
+    }
+}
+
+/// Only the deterministic violations that the server itself permits behind an
+/// explicit accept override can offer that author choice. Empty text and
+/// character attribution failures stay hard blockers.
+enum ChapterPreflightOverridePolicy {
+    private static let lengthOnlyCodes: Set<String> = ["minimum_length", "length_truncated"]
+
+    static func permitsExplicitAcceptance(_ violations: [Violation]) -> Bool {
+        let codes = Set(violations.map(\.code))
+        return !codes.isEmpty && codes.isSubset(of: lengthOnlyCodes)
+    }
+}
+
 /// Shared, platform-neutral lifecycle used by both chapter editors. It keeps
 /// transport/job truth out of the SwiftUI views so iOS and macOS cannot infer
 /// different meanings from the same backend snapshot.
@@ -1258,6 +1507,9 @@ enum ChapterGenerationStage: Int, CaseIterable, Equatable, Sendable {
     case bibleChecking
     case extraction
     case completed
+    /// App-only request phase. Appended so every previously persisted raw
+    /// value remains stable.
+    case acceptance
 
     var label: String {
         switch self {
@@ -1267,8 +1519,14 @@ enum ChapterGenerationStage: Int, CaseIterable, Equatable, Sendable {
         case .bibleChecking: return "Bible 检查"
         case .extraction: return "提取归档"
         case .completed: return "完成"
+        case .acceptance: return "接受正文"
         }
     }
+
+    /// `acceptance` is a request-state label rather than a writer pipeline
+    /// step. Keep the established progress strip stable while still allowing
+    /// a persisted failure to name this exact action.
+    static var displayedCases: [Self] { allCases.filter { $0 != .acceptance } }
 }
 
 enum ChapterGenerationStepState: Equatable, Sendable {
@@ -1294,12 +1552,13 @@ enum ChapterWritingPhase: Equatable, Sendable {
     case checking
     case legacyRevising
     case extracting
+    case accepting
     case failed(code: String?, message: String, stage: ChapterGenerationStage?)
     case cancelled(message: String, stage: ChapterGenerationStage?)
 
     var isActive: Bool {
         switch self {
-        case .selectingMemory, .writing, .writingAttempt, .validating, .checking, .legacyRevising, .extracting: return true
+        case .selectingMemory, .writing, .writingAttempt, .validating, .checking, .legacyRevising, .extracting, .accepting: return true
         case .idle, .failed, .cancelled: return false
         }
     }
@@ -1321,6 +1580,7 @@ enum ChapterWritingPhase: Equatable, Sendable {
         case .checking: return "正在进行 Bible 检查"
         case .legacyRevising: return "旧版任务记录"
         case .extracting: return "Extractor 正在整理本章记忆"
+        case .accepting: return "正在确认接受这章正文"
         case .failed(_, let message, _), .cancelled(let message, _): return message
         case .idle: return nil
         }
@@ -1339,7 +1599,7 @@ enum ChapterWritingPhase: Equatable, Sendable {
 
     var pillStatus: String {
         switch self {
-        case .extracting: return "extracting"
+        case .extracting, .accepting: return "extracting"
         case .selectingMemory, .writing, .writingAttempt, .validating, .checking, .legacyRevising: return "writing"
         case .failed: return "failed"
         case .idle, .cancelled: return "idle"
@@ -1358,6 +1618,7 @@ enum ChapterWritingPhase: Equatable, Sendable {
         case .validating: return .deterministicValidation
         case .checking, .legacyRevising: return .bibleChecking
         case .extracting: return .extraction
+        case .accepting: return .acceptance
         case .failed(_, _, let stage), .cancelled(_, let stage): return stage
         case .idle: return nil
         }
@@ -1459,11 +1720,11 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
         connectionInterrupted: Bool
     ) -> ChapterEditorPresentationState {
         var states = Dictionary(
-            uniqueKeysWithValues: ChapterGenerationStage.allCases.map { ($0, ChapterGenerationStepState.pending) }
+            uniqueKeysWithValues: ChapterGenerationStage.displayedCases.map { ($0, ChapterGenerationStepState.pending) }
         )
 
         func complete(before stage: ChapterGenerationStage) {
-            for candidate in ChapterGenerationStage.allCases where candidate.rawValue < stage.rawValue {
+            for candidate in ChapterGenerationStage.displayedCases where candidate.rawValue < stage.rawValue {
                 states[candidate] = .completed
             }
         }
@@ -1484,19 +1745,24 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
         case .extracting:
             complete(before: .extraction)
             states[.extraction] = .active
+        case .accepting:
+            complete(before: .acceptance)
+            states[.acceptance] = .active
         case .failed(let code, _, let stage):
-            let failedStage = stage ?? .drafting
-            complete(before: failedStage)
-            states[failedStage] = .failed
+            if let stage {
+                complete(before: stage)
+                states[stage] = .failed
+            }
             failureCode = code
         case .cancelled(_, let stage):
-            let cancelledStage = stage ?? .drafting
-            complete(before: cancelledStage)
-            states[cancelledStage] = .cancelled
+            if let stage {
+                complete(before: stage)
+                states[stage] = .cancelled
+            }
         case .idle:
             switch chapterStatus {
             case "finalized":
-                for stage in ChapterGenerationStage.allCases {
+                for stage in ChapterGenerationStage.displayedCases {
                     states[stage] = .completed
                 }
             case "draft_ready":
@@ -1535,7 +1801,7 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
                 "llm_content_blocked",
                 "writer_minimum_failed",
             ]
-            if let failureCode, requiresUserChange.contains(failureCode) {
+            if stage == .acceptance || (failureCode.map(requiresUserChange.contains) ?? false) {
                 recoveryAction = nil
             } else {
                 recoveryAction = stage == .extraction ? .retryExtraction : .retryGeneration
@@ -1545,7 +1811,7 @@ struct ChapterEditorPresentationState: Equatable, Sendable {
         }
 
         return ChapterEditorPresentationState(
-            steps: ChapterGenerationStage.allCases.map {
+            steps: ChapterGenerationStage.displayedCases.map {
                 ChapterGenerationStep(stage: $0, state: states[$0] ?? .pending)
             },
             headline: phase.label,
@@ -1640,12 +1906,9 @@ enum ChapterTaskOutcomeStore {
 
     static func load(
         chapter: Chapter,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults? = nil
     ) -> ChapterTaskOutcome? {
-        guard chapter.status != "finalized" else {
-            clear(chapterID: chapter.id, defaults: defaults)
-            return nil
-        }
+        let defaults = defaults ?? DebugRuntimeConfiguration.defaults ?? .standard
         guard let data = defaults.data(forKey: key(chapterID: chapter.id)),
               let record = try? JSONDecoder().decode(CachedChapterTaskOutcome.self, from: data) else {
             return nil
@@ -1656,6 +1919,15 @@ enum ChapterTaskOutcomeStore {
             return nil
         }
         let stage = record.stageRawValue.flatMap(ChapterGenerationStage.init(rawValue:))
+        // A finalized chapter already carries the current archive attention
+        // returned by the server. The local record has no authoritative job
+        // identity to compare with a retry started on another device, so even
+        // an Extractor failure could replace a newer server reason. Discard
+        // every finalized cache record and present `chapter.archive` instead.
+        if chapter.status == "finalized" {
+            clear(chapterID: chapter.id, defaults: defaults)
+            return nil
+        }
         let phase: ChapterWritingPhase
         switch record.kind {
         case .failed:
@@ -1677,8 +1949,9 @@ enum ChapterTaskOutcomeStore {
         validationReason: String? = nil,
         pendingExemptionNames: [String] = [],
         jobID: String? = nil,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults? = nil
     ) {
+        let defaults = defaults ?? DebugRuntimeConfiguration.defaults ?? .standard
         let record: CachedChapterTaskOutcome
         switch phase {
         case .failed(let code, let message, let stage):
@@ -1716,8 +1989,9 @@ enum ChapterTaskOutcomeStore {
 
     static func clear(
         chapterID: String,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults? = nil
     ) {
+        let defaults = defaults ?? DebugRuntimeConfiguration.defaults ?? .standard
         defaults.removeObject(forKey: key(chapterID: chapterID))
     }
 

@@ -222,7 +222,7 @@ private struct V2MacDeskTaskBanner: View {
 
     private var background: Color {
         switch banner.kind {
-        case .writing, .checking, .archiving: V2DeskPalette.color(.taskWriting, scheme: colorScheme)
+        case .writing, .checking, .accepting, .archiving: V2DeskPalette.color(.taskWriting, scheme: colorScheme)
         case .proseUpdated: V2DeskPalette.color(.taskSuccess, scheme: colorScheme)
         case .checkerUnavailable, .archiveFailed, .connectionInterrupted: V2DeskPalette.color(.taskWarning, scheme: colorScheme)
         case .generationFailed: V2DeskPalette.color(.taskFailure, scheme: colorScheme)
@@ -465,7 +465,7 @@ private struct V2MacEvidenceFace: View {
         // chapter's position is genuinely irrelevant here. Stated explicitly
         // because the initialiser has no default -- see the note on
         // `V2DeskEditorSource.isLastChapterInBook`.
-        V2DeskPresentation.make(V2DeskEditorSource(chapter: editor.currentChapter, writingPhase: editor.writingPhase, checkerResult: editor.checkerResult, checkerAppliesToVisibleDraft: editor.checkerAppliesToVisibleDraft, checkerRefreshing: editor.checkerRefreshing, staleCheckedSnapshot: editor.staleCheckedSnapshot, saveState: editor.saveState, connectionInterrupted: editor.pollingConnectionInterrupted, isLastChapterInBook: false))
+        V2DeskPresentation.make(V2DeskEditorSource(chapter: editor.currentChapter, writingPhase: editor.writingPhase, checkerResult: editor.checkerResult, checkerAppliesToVisibleDraft: editor.checkerAppliesToVisibleDraft, checkerRefreshing: editor.checkerRefreshing, staleCheckedSnapshot: editor.staleCheckedSnapshot, saveState: editor.saveState, connectionInterrupted: editor.pollingConnectionInterrupted, taskMonitoringMessage: editor.taskMonitoringMessage, isLastChapterInBook: false))
     }
 
     var body: some View {

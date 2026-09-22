@@ -1,0 +1,133 @@
+{
+  "version": "2.1.1",
+  "build": 53,
+  "date": "2026-09-20",
+  "source_state": "main working tree; not committed or deployed",
+  "scope": {
+    "app_base": "927c935477dd637e842dd0a3e2298d01aa47d87b",
+    "backend_deployed": "a298f690058718333eecd2391337a137f160733e",
+    "files": {
+      "App/LinoI.xcodeproj/project.pbxproj": "602e0ae2725a6ef5fce8c0f3bafd8f18cf346271c1ddf95e9c65b87c460a0d4c",
+      "App/LinoI/ChapterDraftCache.swift": "7d995adba6b4d87b8d40fce9ae9fbe7d6875a9c1f1e1c020fb8305435464ce5f",
+      "App/LinoI/ClientSyncStore.swift": "de324a1e825d048d4d07cdd8a824b5c1d6558ed8c6c18bc503bb1aa44d920bca",
+      "App/LinoI/InspirationCreator.swift": "ffaa02cf8ab76e45ce24eaaddcd4151d15ee89332602df5e06addb769af8d2cb",
+      "App/LinoI/LinoAPI.swift": "851e7e7b889bde875f598647c69e2ea41772fc01e6208fae0366ee4e4c7e3e1f",
+      "App/LinoI/LinoErrorPresenter.swift": "48f69708851ce761a3b006333468ad0b522e38e5647922965198d12e116dade6",
+      "App/LinoI/LinoIApp.swift": "4532fd64e23a16087ded6b6c62f7fdcefc654f41ebfc04d1ac746370bb579acc",
+      "App/LinoI/LinoModels.swift": "8906dfaea72af78954bdb907c14944e0a3a430d5e9ba8a1b4e820d0dd5571bb7",
+      "App/LinoI/LinoStores.swift": "cf7eccef4bf08a81b3e0d529400979d3a94dbd7369904ae02e164440ef4d8793",
+      "App/LinoI/V2IOS/V2IOSChapterDeskView.swift": "2ed70b34b4ce60584572d5b8494bd925d52cf7ec9ed20c08370f3107691f4fe6",
+      "App/LinoI/V2IOS/V2IOSRootView.swift": "cb1e2e234d5288ad17e0a8ba6ee1acd08ea4d9d08271a344a63302551d5942e9",
+      "App/LinoI/V2Shared/V2DeskPresentation.swift": "91836c5dc82811e2d5dea75ad914ab0c0b66e59dfd297ed3dca9dbc4850a31cb",
+      "App/LinoI/V2Shared/V2DeskStatusViews.swift": "3b31a61143904003683212f2a32ef8403778ae710b449e711233337b58ef1c31",
+      "App/LinoIMac/LinoIMacApp.swift": "513a2bbfb8db2ffca09ccc863d3d077863940fd646fc787e84a3162870b9a682",
+      "App/LinoIMac/V2/V2MacDeskEditor.swift": "7fd6780dc04b6c0d3ca93b1f07a4276fdb2ffb2bd09d017e22a385d5fac35ab2",
+      "App/LinoIMac/V2/V2MacDeskRoot.swift": "70ff2a5cc2cc6d5947ecc03ea2e6b88bca774e079b0569b33b57e7c9e3932895",
+      "App/Tests/ClientStateTests.swift": "6f5d5857dd5b79c7d88ec3117971e9b19546fcc48848817fce00f66a466cbdc8",
+      "App/Tests/V211StoreHTTPTests.swift": "9f36f49f7979f4b6c1e62a229933b4527feab76e3326fe748eb1f10681e9317c",
+      "App/Tests/run_client_state_tests.sh": "858a15586469229dab87b87824b1bc5816f3814395801775412204c15bbb3b23",
+      "App/Tests/run_store_http_tests.sh": "c012c43dcfae3e330d8f6b929b2aa29fcade21fd6958fcb00b62551022ea8368",
+      "App/Tests/v211_http_fixture.py": "c95e1a1c4fb62556cc8394a46b3c59f969270cc610c4f7bf8f29cf25c8793505",
+      "Backend/app/main.py": "c56a368006cc2bd6d32eceadf7fb785f964353c288efd4fe1b8ef97d570f181c",
+      "Backend/app/routers/chapters.py": "56d249df1a440f445a0a87e8b12435a42e5e9e754ab5e49863d5321943d48973",
+      "Backend/app/services/write_jobs.py": "fc299decffbfea16d3d918475474ec841baea4141844b551b0a9a5fb84ae1d2c",
+      "Backend/tests/test_v1_1_features.py": "48c67a6b67de2338be9ec0479691fd24984812d7d362f97a05fba9b60eff3bc3",
+      "Backend/tests/test_v2_1_1_error_visibility.py": "bba4badad71e3cec8fbdffe08e5b6ed66067ff1b83658feeae85afb7c7307038"
+    },
+    "head": "d469a3f2d49978afb341e050acaf13598b1b23af"
+  },
+  "scope_sha256": "4bb21a9ffb3f776be32c93c43ff3a5bc2cc179196da9c6d697b708a9bc2e8549",
+  "review": {
+    "result": "No reportable remaining findings",
+    "independent_store_http": "32 passed, 0 failed",
+    "product_manifest_reviewed": "8524e53435687922a703f407ec509cb589fbb65dea919b113e3898f005281de7",
+    "later_change": "closed: independent cleanup-only review passed; exact suite and empty-plist checks verified; final 26/26 file hashes matched"
+  },
+  "validation": {
+    "backend": {
+      "passed": 243,
+      "skipped": 12,
+      "alembic_head": "20260830_0013",
+      "independent_targeted_tests": 25
+    },
+    "client_state": "passed; real Stores included in Swift 6 compilation",
+    "store_http": {
+      "passed": 32,
+      "failed": 0,
+      "covers": "F1–F9, late callbacks, short-draft confirmation boundary, permanent/auth/config/temporary sync errors, invalid success/conflict response preservation, finite polling, explicit cancellation"
+    },
+    "macos_target": "Debug build passed with isolated validation bundle",
+    "ios_target": "iOS Simulator Debug build passed with isolated validation bundle",
+    "macos_ui": {
+      "accept_failure": "one notice with frozen book/chapter/action, original draft retained, recheck restores accept",
+      "archive_recovery": "exactly one archive/retry POST, no PATCH/check/accept, 5200 characters unchanged, finalized and archive complete, banner and chapter rail warning both cleared",
+      "short_draft": "3-character preflight explains 4000-character minimum, explicit confirmation required, accepted after confirmation",
+      "earlier_ui_cases": "Checker content block, poll401/read-only refresh, inspiration timeout, persistent sync422/retry/cold restart, notification history"
+    },
+    "ios_ui": {
+      "status": "not covered",
+      "reason": "DeviceHub/Xcode CUA entry repeatedly timed out with -10005; Simulator.app entry unavailable; no substitute UI automation used"
+    },
+    "apple_device_support": {
+      "pending_devices": [
+        "iPhone18,4"
+      ],
+      "os": "27.0 (24A437)",
+      "reason": "Current usr/lib/dyld symbols not ready",
+      "cleanup_candidates": 0,
+      "support_files_deleted": 0
+    }
+  },
+  "production": {
+    "mac_installed": "2.1.0 (52), verified unchanged",
+    "backend": "2.1.0 at a298f69; not touched this task",
+    "release": "Build 52; no release/push/deploy/install performed",
+    "protected_scheme": "no diff"
+  },
+  "resource_cleanup": {
+    "processes_and_ios": {
+      "synthetic_backend": "stopped",
+      "mac_validation": "stopped",
+      "task_started_device_hub": "force-terminated after UI timeout and ignored SIGTERM",
+      "ios_validation_app": "uninstalled, original bundle absent",
+      "ios_orphan_synthetic_data": {
+        "files": 1,
+        "allocated_kib_before": 4,
+        "allocated_kib_after": 0,
+        "manifest_sha256": "8ee75c63fe3ed825445fbad8ce74fce42432be42705efce203712b2672d84cec"
+      },
+      "ios_uninstalled_bundle_bytes": null,
+      "ios_size_note": "bundle bytes not measured before uninstall; remaining synthetic directory inventoried and removed",
+      "mac_validation_preferences": "dedicated domain deleted"
+    },
+    "external_preferences_and_cache": {
+      "removed_preference_domains": [
+        "com.lino.linoi.mac.validation53",
+        "com.lino.linoi.validation53.mac",
+        "com.lino.ictw.store-http.ictw-store-http.5cHs5f",
+        "com.lino.ictw.store-http.ictw-store-http.GzYjLM",
+        "com.lino.ictw.store-http.ictw-store-http.T8m34x",
+        "com.lino.ictw.store-http.ictw-store-http.TWdqrO",
+        "com.lino.ictw.store-http.ictw-store-http.pPyO3G",
+        "com.lino.ictw.store-http.ictw-store-http.tQUcqS"
+      ],
+      "preferences_bytes_before": 1681,
+      "preferences_bytes_after": 0,
+      "own_mac_cache_kib_before": 2324,
+      "own_mac_cache_kib_after": 0
+    },
+    "task_tree": {
+      "root": "/tmp/ictw-v211-build53-20260920",
+      "entries": 7204,
+      "logical_bytes": 356519974,
+      "allocated_kib_before": 364600,
+      "manifest_sha256": "a05755b20dd00cae98aebac87f4ec4ca97c6ff591854bed5ac02715f306167d8",
+      "allocated_kib_after": 0,
+      "retained_in_tree": []
+    },
+    "remote": "no remote test directories or production operations this task",
+    "retained": "regression source, concise plan/execution record and this evidence; no synthetic database, raw model output or installable test app retained",
+    "final_remaining_owned_paths": [],
+    "status": "completed; final local/system temporary paths and dedicated preference/cache paths absent; no remote paths created"
+  }
+}

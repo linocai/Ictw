@@ -60,6 +60,7 @@ private struct V2MacSyncStatusButton: View {
     private var state: V2DeskSyncPill.State? {
         if sync.hasPersistentSyncFailure { return .persistenceFailed }
         if !sync.conflicts.isEmpty { return .conflict(sync.conflicts.count) }
+        if sync.failedMutationCount > 0 { return .failed(sync.failedMutationCount) }
         if !sync.isOnline { return .offline }
         if sync.isFlushing { return .refreshing }
         if sync.pendingCount > 0 { return .pending(sync.pendingCount) }
@@ -87,7 +88,7 @@ private struct V2MacSyncCenter: View {
                 HStack {
                     V2DeskSyncPill(state: state)
                     Spacer()
-                    if sync.isOnline, sync.pendingCount > 0 {
+                    if sync.isOnline, sync.automaticallyFlushableMutationCount > 0 {
                         Button(sync.isFlushing ? "正在同步" : "立即尝试同步") { Task { await flushPendingAndRefresh() } }
                             .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
                             .disabled(sync.isFlushing)
@@ -100,9 +101,38 @@ private struct V2MacSyncCenter: View {
                         .foregroundStyle(V2DeskPalette.color(.danger, scheme: colorScheme))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if sync.pendingCount > 0, !sync.hasPersistentSyncFailure {
-                    Text("\(sync.pendingCount) 项本机修改会在恢复连接后按原始编辑基线安全提交。")
+                if sync.automaticallyFlushableMutationCount > 0, !sync.hasPersistentSyncFailure {
+                    Text("\(sync.automaticallyFlushableMutationCount) 项本机修改会在恢复连接后按原始编辑基线安全提交。")
                         .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                }
+                if !sync.failedMutations.isEmpty {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("需要处理的同步")
+                            .font(V2DeskType.control(13, weight: .medium))
+                        ForEach(sync.failedMutations) { mutation in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(sync.resourceLabel(for: mutation))
+                                    .font(V2DeskType.control(12, weight: .medium))
+                                Text(mutation.failure?.message ?? "服务器未接受这项本机修改。")
+                                    .font(V2DeskType.control(11.5))
+                                    .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if mutation.failure?.kind == .authentication {
+                                    Text("请先在设置中修正连接或 Token。")
+                                        .font(V2DeskType.control(11.5))
+                                        .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                                }
+                                Button("重试同步") {
+                                    guard sync.retry(mutation) else { return }
+                                    Task { await flushPendingAndRefresh() }
+                                }
+                                .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                                .disabled(sync.isFlushing || !sync.isOnline)
+                            }
+                            .padding(10)
+                            .background(V2DeskPalette.color(.taskWarning, scheme: colorScheme), in: RoundedRectangle(cornerRadius: 7))
+                        }
+                    }
                 }
                 if sync.conflicts.isEmpty {
                     Spacer()
@@ -157,6 +187,7 @@ private struct V2MacSyncCenter: View {
     private var state: V2DeskSyncPill.State {
         if sync.hasPersistentSyncFailure { return .persistenceFailed }
         if !sync.conflicts.isEmpty { return .conflict(sync.conflicts.count) }
+        if sync.failedMutationCount > 0 { return .failed(sync.failedMutationCount) }
         if !sync.isOnline { return .offline }
         if sync.isFlushing { return .refreshing }
         if sync.pendingCount > 0 { return .pending(sync.pendingCount) }
@@ -598,7 +629,9 @@ struct V2MacWorkspaceDesk: View {
             .animation(V2DeskMotion.sheet(reduceMotion: reduceMotion), value: contextOpen)
         }
         .task(id: session.currentBook?.id) { await loadBook() }
-        .onChange(of: editor.currentChapter?.status) { _, _ in
+        // Archive retry keeps a finalized chapter finalized; watching only
+        // `status` leaves the rail's old archive-attention marker behind.
+        .onChange(of: editor.currentChapter) { _, _ in
             if let chapter = editor.currentChapter { workspace.upsert(chapter) }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -639,7 +672,7 @@ struct V2MacWorkspaceDesk: View {
             Button("接受这一章", role: .destructive) { accept(overrideChecker: true) }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("这一章会被记为完成；当前检查提出的问题将不再提醒你。")
+            Text(editor.preflightAcceptanceMessage ?? "这一章会被记为完成；当前检查提出的问题将不再提醒你。")
         }
         .confirmationDialog(V2DeskRewriteConfirmation.title, isPresented: $showRewriteConfirmation, titleVisibility: .visible) {
             Button("重写", role: .destructive) { rewrite() }
@@ -685,6 +718,8 @@ struct V2MacWorkspaceDesk: View {
             staleCheckedSnapshot: editor.staleCheckedSnapshot,
             saveState: editor.saveState,
             connectionInterrupted: editor.pollingConnectionInterrupted,
+            taskMonitoringMessage: editor.taskMonitoringMessage,
+            preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
             isLastChapterInBook: V2DeskChapterPosition.isLastChapter(editor.currentChapter?.id, in: workspace.chapters)
         ))
     }
@@ -750,6 +785,7 @@ struct V2MacWorkspaceDesk: View {
         case .accept: accept(overrideChecker: false)
         case .acceptWithWarning: showAcceptWarning = true
         case .retryArchive: Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
+        case .refreshTaskStatus: Task { if let chapter = await editor.refreshTaskStatus() { workspace.upsert(chapter) } }
         case .startNewChapter: createChapter()
         case .openSettings: sheet = .settings
         case .none: break

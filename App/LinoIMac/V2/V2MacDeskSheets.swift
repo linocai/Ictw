@@ -522,10 +522,7 @@ private struct V2MacBookModelSettings: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var selectedRole = "writer"
-    @State private var profileID = ""
-    @State private var thinking = false
-    @State private var effort = ""
-    @State private var temperature = 1.0
+    @State private var draft = BookModelSettingsDraft(role: "writer")
     @State private var saving = false
     @State private var isLoading = true
     @State private var loadFailed = false
@@ -537,7 +534,15 @@ private struct V2MacBookModelSettings: View {
         guard session.currentBook?.id == bookID, agents.bookModelBindingsBookID == bookID else { return nil }
         return agents.bookModelBindings.first { $0.agentRole == selectedRole }
     }
-    private var bounded: Bool { selectedRole == "extractor" || selectedRole == "inspiration_creator" }
+    private var selectedProfile: Binding<String> {
+        Binding(get: { draft.profileID }, set: { draft.selectProfile($0, profiles: agents.profiles, row: row) })
+    }
+    private var thinking: Binding<Bool> {
+        Binding(get: { draft.thinkingEnabled }, set: { draft.thinking = $0 })
+    }
+    private var temperature: Binding<Double> {
+        Binding(get: { draft.temperature ?? 1 }, set: { draft.temperature = $0 })
+    }
     private var effectiveName: String {
         guard let id = row?.effectiveBinding?.llmProfileId else { return "未绑定" }
         guard let profile = agents.profiles.first(where: { $0.id == id }) else { return "模型资料未载入" }
@@ -562,7 +567,7 @@ private struct V2MacBookModelSettings: View {
         }
         .task { await loadBindings() }
         .onChange(of: selectedRole) { _, _ in loadDraft() }
-        .onChange(of: row) { _, _ in loadDraft() }
+        .onChange(of: agents.profiles) { _, _ in draft.refreshCapabilities(profiles: agents.profiles, row: row) }
         .confirmationDialog("恢复跟随全局？", isPresented: $confirmRestore) {
             Button("恢复跟随全局", role: .destructive) { Task { await restore() } }
             Button("取消", role: .cancel) {}
@@ -572,33 +577,36 @@ private struct V2MacBookModelSettings: View {
     private var bindingControls: some View {
         VStack(alignment: .leading, spacing: 11) {
             Picker("角色", selection: $selectedRole) { ForEach(roles, id: \.self) { Text($0.v2AgentLabel).tag($0) } }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).disabled(saving)
             HStack {
                 Text(row?.source == "book" ? "本书覆盖" : "跟随全局").font(V2DeskType.control(11.5, weight: .medium))
                 Spacer()
                 Text("实际：\(effectiveName)").font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)).lineLimit(1)
             }
-            Picker("模型", selection: $profileID) {
-                Text("未绑定").tag("")
-                ForEach(agents.profiles) { profile in Text("\(profile.name) · \(profile.modelName)").tag(profile.id) }
-            }
-            HStack {
-                Toggle("启用思考", isOn: $thinking)
-                    .disabled(bounded || !(row?.capabilities.thinkingToggleSupported ?? false))
-                if bounded { Text("服务端固定关闭").font(V2DeskType.control(10.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)) }
-            }
-            if !bounded, let levels = row?.capabilities.reasoningEffortLevels, !levels.isEmpty {
-                Picker("思考强度", selection: $effort) {
-                    Text("模型默认").tag("")
-                    ForEach(levels, id: \.self) { Text($0).tag($0) }
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("模型", selection: selectedProfile) {
+                    Text("请选择模型").tag("")
+                    ForEach(agents.profiles) { profile in Text("\(profile.name) · \(profile.modelName)").tag(profile.id) }
                 }
-                .disabled(!thinking)
-            }
-            HStack(spacing: 10) {
-                Text("Temperature \(String(format: "%.2f", temperature))").font(V2DeskType.control(11.5))
-                Slider(value: $temperature, in: 0...2, step: 0.05)
-                    .disabled(bounded || (!(row?.capabilities.temperatureEffectiveWhenThinking ?? true) && !thinking))
-            }
+                Toggle("深度思考", isOn: thinking).disabled(!draft.thinkingAdjustable)
+                if let explanation = draft.thinkingExplanation { Text(explanation).font(.footnote).foregroundStyle(.secondary) }
+                if !draft.effortLevels.isEmpty {
+                    Picker("思考强度", selection: $draft.effort) {
+                        Text("模型默认").tag("")
+                        ForEach(draft.effortLevels, id: \.self) { Text($0).tag($0) }
+                    }.disabled(!draft.effortAdjustable)
+                }
+                HStack(spacing: 10) {
+                    Text("温度 " + (draft.temperatureAdjustable ? draft.temperature.map { String(format: "%.2f", $0) } ?? "模型默认" : "不生效"))
+                        .font(V2DeskType.control(11.5))
+                    Slider(value: temperature, in: 0...2, step: 0.05).disabled(!draft.temperatureAdjustable)
+                }
+                if let explanation = draft.temperatureExplanation { Text(explanation).font(.footnote).foregroundStyle(.secondary) }
+                if draft.temperatureAdjustable && draft.temperature != nil {
+                    Button("温度使用模型默认") { draft.temperature = nil }.buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                }
+                if let reason = draft.blockingReason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
+            }.disabled(saving)
             if !sync.networkActionsAvailable { V2DeskOfflineExplanation() }
             HStack {
                 if row?.source == "book" {
@@ -606,7 +614,7 @@ private struct V2MacBookModelSettings: View {
                 }
                 Spacer()
                 Button(saving ? "正在保存" : "保存本书覆盖") { Task { await save() } }
-                    .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(saving || !sync.networkActionsAvailable)
+                    .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(saving || draft.payload == nil || !sync.networkActionsAvailable)
             }
         }
     }
@@ -622,37 +630,25 @@ private struct V2MacBookModelSettings: View {
     }
 
     private func loadDraft() {
-        let values = row?.bookBinding ?? row?.effectiveBinding
-        profileID = values?.llmProfileId ?? ""
-        thinking = bounded ? false : (values?.thinkingEnabled ?? false)
-        effort = values?.reasoningEffort ?? ""
-        temperature = values?.temperature ?? 1
+        draft = BookModelSettingsDraft(role: selectedRole, row: row, profiles: agents.profiles)
     }
 
     private func save() async {
-        guard session.currentBook?.id == bookID, row != nil else { return }
+        guard session.currentBook?.id == bookID, row != nil, let binding = draft.payload else { return }
+        let role = selectedRole
         saving = true
-        let binding = AgentModelBindingValues(
-            llmProfileId: profileID.isEmpty ? nil : profileID,
-            thinkingEnabled: bounded ? false : thinking,
-            reasoningEffort: effort.isEmpty ? nil : effort,
-            temperature: temperature,
-            effectiveThinkingEnabled: nil,
-            effectiveReasoningEffort: nil,
-            effectiveTemperature: nil,
-            contentRevision: nil
-        )
-        _ = await agents.saveBookModelBinding(bookID: bookID, role: selectedRole, binding: binding)
+        if await agents.saveBookModelBinding(bookID: bookID, role: role, binding: binding) {
+            loadDraft()
+            session.notices.publish("本书模型设置已保存。")
+        }
         saving = false
-        loadDraft()
     }
 
     private func restore() async {
         guard session.currentBook?.id == bookID, row != nil else { return }
         saving = true
-        _ = await agents.clearBookModelBinding(bookID: bookID, role: selectedRole)
+        if await agents.clearBookModelBinding(bookID: bookID, role: selectedRole) { loadDraft() }
         saving = false
-        loadDraft()
     }
 }
 
