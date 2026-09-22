@@ -33,6 +33,7 @@ from app.services.context import (
     writing_reference_context,
 )
 from app.services.archive_v2 import (
+    archive_validation_message,
     ArchiveFingerprintMismatch,
     ArchiveV2ValidationError,
     activate_archive_revision,
@@ -798,7 +799,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 "failed",
                 attempt=1,
                 error_code="archive_validation_failed",
-                error_message=f"归档未通过确定性校验：{reason}",
+                error_message=f"归档未通过确定性校验：{archive_validation_message(reason)}",
                 error_context={"stage": "archive_validation", "attempts": 1, "reason": reason},
             )
             db.commit()

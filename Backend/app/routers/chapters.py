@@ -61,6 +61,7 @@ from app.services.write_jobs import (
 )
 from app.services.write_ownership import cancel_local_writer_jobs, invalidate_writer_inputs
 from app.services.archive_v2 import (
+    archive_validation_message,
     archive_input_fingerprint,
     archive_health_summaries,
     archive_read_model,
@@ -197,7 +198,7 @@ def _job_status_from_run(
         phase=run.phase,
         attempt=run.attempt,
         error_code=run.error_code,
-        error_message=run.error_message,
+        error_message=archive_validation_message(run.error_message) if run.error_code == "archive_validation_failed" else run.error_message,
         error_context=run.error_context,
         violations=run.violations,
         memory_context=run.memory_context,

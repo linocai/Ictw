@@ -787,3 +787,81 @@ def test_selective_reextract_requires_confirmed_report_hash_and_records_provenan
         )
         assert latest is not None
         assert latest.provenance == "selective_reextract"
+
+
+@pytest.mark.parametrize('slot', ['当前位置', '身体状态', 'relationship'])
+@pytest.mark.parametrize('operation,value', [('set', '平静'), ('clear', None)])
+def test_identical_state_deltas_collapse_after_reference_validation(slot, operation, value):
+    characters = [SimpleNamespace(id=n, name=n) for n in ['甲', '乙']]
+    chapter = SimpleNamespace(draft_text='甲与乙留在门边。', character_links=[
+        SimpleNamespace(character=c, character_id=c.id) for c in characters])
+    fact = {'fact_ref': 'F1', 'type': '关系', 'importance': 2, 'text': '甲乙留在门边',
+            'participant_names': ['甲', '乙'], 'start_id': 'P0001-S01', 'end_id': 'P0001-S01'}
+    delta = {'fact_ref': 'F1', 'slot': slot, 'operation': operation, 'value': value}
+    if slot != 'relationship':
+        delta['character_name'] = '甲'
+    repeated = deepcopy(delta)
+    if slot == 'relationship':
+        repeated.update(character_name='乙', other_character_name='甲')
+    output = {'summary': '两人留在门边', 'facts': [fact], 'end_state_delta': [delta, repeated]}
+    assert len(validate_archive_output(chapter, output).deltas) == 1
+    # Matching values cannot bypass reference validation.
+    repeated['fact_ref'] = 'missing'
+    with pytest.raises(ArchiveV2ValidationError, match='unknown fact'):
+        validate_archive_output(chapter, output)
+    repeated['fact_ref'] = 'F1'
+    repeated.update(operation='set', value='另一状态')
+    with pytest.raises(ArchiveV2ValidationError, match='conflicting state delta slot'):
+        validate_archive_output(chapter, output)
+    repeated.update(operation='clear' if operation == 'set' else 'set',
+                    value=None if operation == 'set' else '平静')
+    with pytest.raises(ArchiveV2ValidationError, match='conflicting state delta slot'):
+        validate_archive_output(chapter, output)
+
+
+@pytest.mark.parametrize('conflicting', [False, True])
+def test_repeated_state_archive_activation_or_visible_conflict(client, auth_headers, wait_for_terminal, conflicting):
+    _, _, chapter = _book_character_chapter(client, auth_headers)
+
+    class RepeatedExtractor(V2Extractor):
+        def complete_json(self, **kwargs):
+            output = super().complete_json(**kwargs)
+            duplicate = deepcopy(output['end_state_delta'][0])
+            if conflicting:
+                duplicate['value'] = '窗边'
+            output['end_state_delta'].append(duplicate)
+            return output
+
+    extractor = RepeatedExtractor(with_state=True)
+    client.app.dependency_overrides[get_extractor_client] = lambda: extractor
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers,
+                json={'override_checker': True}).raise_for_status()
+    terminal = wait_for_terminal(client, chapter['id'], auth_headers)
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert extractor.calls == 1
+    assert current['status'] == 'finalized'
+    assert current['draft_text'] == '林夕在门边停下。随后，他安静等待。'
+    if conflicting:
+        assert terminal['phase'] == 'failed'
+        assert '互相冲突' in terminal['error_message']
+        assert '互相冲突' in current['archive']['error_message']
+        assert current['archive']['status'] == 'partial'
+    else:
+        assert terminal['phase'] == 'done'
+        assert current['archive']['status'] == 'complete'
+        assert current['archive']['state_delta_count'] == 3
+
+
+def test_legacy_archive_failure_is_localized_without_rewriting_history():
+    from app.routers.chapters import _job_status_from_run
+    from app.models.entities import utc_now
+    now = utc_now()
+    run = JobRun(id='legacy-job', chapter_id='chapter', kind='extract', phase='failed',
+                 attempt=1, error_code='archive_validation_failed',
+                 error_message='归档未通过确定性校验：duplicate state delta slot',
+                 finished_at=now, violations=[], memory_context={})
+    chapter = Chapter(id='chapter', book_id='book', index=1, updated_at=now)
+    result = _job_status_from_run(chapter, run)
+    assert '被重复记录' in result.error_message
+    assert 'duplicate state' not in result.error_message
+    assert run.error_message.endswith('duplicate state delta slot')

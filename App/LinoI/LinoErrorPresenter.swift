@@ -221,7 +221,7 @@ enum LinoErrorPresenter {
         if let rawDetail, !rawDetail.isEmpty {
             text += "：\(rawDetail)"
         }
-        if let suggestion, !suggestion.isEmpty {
+        if let suggestion, !suggestion.isEmpty, !reason.hasSuffix(suggestion) {
             text += "——\(suggestion)"
         }
         if let code, !code.isEmpty {

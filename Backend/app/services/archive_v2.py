@@ -56,6 +56,17 @@ class ArchiveV2ValidationError(ValueError):
     pass
 
 
+def archive_validation_message(reason: str | None) -> str | None:
+    prefix = "归档未通过确定性校验："
+    if reason and reason.startswith(prefix):
+        return prefix + archive_validation_message(reason[len(prefix):])
+    return {
+        "duplicate state delta slot": "归档结果中，同一人物状态或人物关系被重复记录",
+        "conflicting state delta slot": "同一人物状态或人物关系出现互相冲突的记录，无法确定章末状态",
+        "state delta owner must participate in its fact": "人物状态所引用的事实未包含该人物",
+    }.get(reason, reason)
+
+
 class ArchiveFingerprintMismatch(ArchiveV2ValidationError):
     pass
 
@@ -298,7 +309,7 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
         fact_by_source_ref[source_fact_ref] = fact
 
     deltas: list[ValidatedDelta] = []
-    delta_keys: set[tuple[Any, ...]] = set()
+    delta_values: dict[tuple[Any, ...], tuple[str, str | None]] = {}
     for raw in raw_deltas:
         if not isinstance(raw, dict):
             raise ArchiveV2ValidationError("state delta must be an object")
@@ -369,9 +380,14 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
                 key = (character_id, scope, slot, None)
         else:
             raise ArchiveV2ValidationError("state delta slot is unsupported")
-        if key in delta_keys:
-            raise ArchiveV2ValidationError("duplicate state delta slot")
-        delta_keys.add(key)
+        state_value = (operation, value)
+        if key in delta_values:
+            if delta_values[key] == state_value:
+                # All references/ownership were validated above. Retain the
+                # first valid evidence for the same canonical state change.
+                continue
+            raise ArchiveV2ValidationError("conflicting state delta slot")
+        delta_values[key] = state_value
         deltas.append(
             ValidatedDelta(fact.fact_ref, character_id, other_id, scope, str(slot), operation, value, batch_id)
         )
@@ -562,7 +578,7 @@ def mark_revision_partial(
     revision.summary = summary.strip() if isinstance(summary, str) else ""
     revision.validation_errors = [reason]
     revision.error_code = "archive_validation_failed"
-    revision.error_message = reason
+    revision.error_message = archive_validation_message(reason)
     revision.finished_at = utc_now()
     chapter.archive_status = "complete" if chapter.active_archive_revision_id else "partial"
 
@@ -810,7 +826,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "facts": [],
             "state_delta_count": 0,
             "error_code": latest.error_code if latest is not None else None,
-            "error_message": latest.error_message if latest is not None else None,
+            "error_message": archive_validation_message(latest.error_message) if latest is not None else None,
             "can_retry": retry_allowed,
             "latest_attempt_status": latest.status if latest is not None else "legacy",
             "inactive_preview": inactive_preview,
@@ -824,7 +840,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
         "facts": [],
         "state_delta_count": 0,
         "error_code": latest.error_code if latest is not None else None,
-        "error_message": latest.error_message if latest is not None else None,
+        "error_message": archive_validation_message(latest.error_message) if latest is not None else None,
         "can_retry": retry_allowed,
         "latest_attempt_status": latest.status if latest is not None else chapter.archive_status,
         "inactive_preview": inactive_preview,

@@ -687,7 +687,7 @@ private func testExtractorFailureKeepsSpecificBackendRule() throws {
         kind: "extract",
         phase: "failed",
         attempt: 3,
-        errorCode: "extract_failed",
+        errorCode: "archive_validation_failed",
         errorMessage: "Extractor 连续 3 次未通过确定性校验：证据未明确所属人物",
         errorContext: nil,
         violations: nil,
@@ -698,6 +698,11 @@ private func testExtractorFailureKeepsSpecificBackendRule() throws {
     try expect(
         status.specificFailureReason == "正文已接受；Extractor 连续 3 次未通过确定性校验：证据未明确所属人物。可直接重新归档，无需再次检查 Bible",
         "Extractor failures must preserve the exact safe backend rule while explaining that accepted prose is retained"
+    )
+    let presented = LinoErrorPresenter.present(jobFailure: status).message
+    try expect(
+        presented.components(separatedBy: "可直接重新归档，无需再次检查 Bible").count == 2,
+        "archive recovery guidance must appear exactly once in the final notice"
     )
 }
 
