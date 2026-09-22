@@ -36,7 +36,7 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 - 灵感创造师的前端保持极简：只有一句可选“本章推进边界”、明确生成按钮及 loading／结果／失败，不增加发散度滑杆或结构化场景配置。推进边界仅进入本次请求，不写 Bible、数据库或 Writer SOP；字数、节奏收束和不过度跃迁由后端负责。
 - Extractor 与灵感创造师属于结构化、有界输出角色，程序固定关闭 thinking／effort；设置 API 必须返回实际生效的关闭状态，模型若不能关闭 thinking 则安全返回 409。灵感创造师正常请求固定要求 3 条，公开协议与逐卡校验仍兼容 3–5 条；超过 300 字只允许在 200–300 字区间内按最后一个自然句末安全裁切。
 - 只有确定性校验和 Checker 均通过、且任务仍持有本章所有权时，Writer 新正文才能与 JobRun 终态在同一事务提升。
-- 自动写作的 Checker 必须使用与 Writer 相同的既有事实快照；手动复查也须提供世界观、已选人物卡、章前状态与有效历史。既有关系不因 Bible 未重复说明而视为新增，也不自动授权新的关系变化或未选人物。
+- 自动写作的 Checker 必须使用与 Writer 相同的既有事实快照；手动复查也须提供世界观、已选人物卡、章前状态与有效历史。既有关系不因 Bible 未重复说明而视为新增；围绕本章意图的自然互动与渐进发展不要求逐项授权，明确冲突和未经授权的重大转折仍须检查，历史不授权未选人物。
 - 正文接受与归档独立：接受后章节立即 `finalized`；Extractor 失败不得撤销正文接受或重跑 Checker。
 - v2 Extractor 每个 revision 只调用一次；仅完整通过的 `summary + canonical facts + end_state_delta` 可原子激活。
 - `partial`、`failed`、`stale` revision 不得进入 Selector、人物故事线或状态投影。
@@ -48,7 +48,7 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 
 ## 当前生产门禁
 
-- 当前双端源码、公开 Release及本机已安装macOS为 `v2.1.1(57)`（`ee09faf`，2026-09-22）；宁波Backend为 `v2.1.1`（`0aea865`），Alembic head `20260830_0013`。双端OS27 Release签名构建通过，macOS成稿页、长章节列表滚动、失败原因及同源码隔离Debug编辑页通过；iOS最终安装由用户在Xcode操作，未完成最终真机页面验收、未导出IPA。两台当前手机OS27开发支持现场核验通过，无pending设备。发布与资源证据见 `archive/plans/v2.1.1-error-visibility-plan.md`。
+- 当前源码版本标记为 `v2.1.1(58)`（Writer／Checker剧情边界提示词快修，44项回归通过，未部署／换装）。公开 Release及本机已安装macOS为 `v2.1.1(57)`（`ee09faf`，2026-09-22）；宁波Backend为 `v2.1.1`（`0aea865`），Alembic head `20260830_0013`。双端OS27 Release签名构建通过，macOS成稿页、长章节列表滚动、失败原因及同源码隔离Debug编辑页通过；iOS最终安装由用户在Xcode操作，未完成最终真机页面验收、未导出IPA。两台当前手机OS27开发支持现场核验通过，无pending设备。发布与资源证据见 `archive/plans/v2.1.1-error-visibility-plan.md`。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
 - 生产入口为 `https://ictw.linotsai.top`，Backend 位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787` 并由 Nginx Proxy Manager 反代。

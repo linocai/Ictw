@@ -213,7 +213,7 @@ def test_nonempty_bible_retains_requirements_and_evidence_contract():
     from app.services.context import checker_user_message
     from app.services.write_jobs import _valid_checker_result
     message = checker_user_message(Chapter(title="等雨"), "正文", "两人一起回家。", reference_context="已有资料")
-    assert "Bible 决定本章必要事件、顺序与结尾" in message
+    assert "Bible 决定核心事件、明确禁止事项及明确指定的顺序和结尾" in message
     assert "每个 issue 必须同时引用正文和 Bible 证据" in message
     assert "跳过“是否符合本章写作要求”这一项" not in message
     invalid = {"verdict": "violation", "issues": [{"kind": "missing_event", "draft_evidence": "两人留下",
