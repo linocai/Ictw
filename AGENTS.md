@@ -48,7 +48,7 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 
 ## 当前生产门禁
 
-- 当前双端版本标记为 `v2.1.1(56)`（2026-09-22空Bible检查快修，仅后端逻辑与build号更新；双端OS27构建及macOS模型设置隔离点击证据对应Build55）、Backend 源码为 `v2.1.1`，错误可见性修复和独立复查已完成；本机已安装 macOS 与公开 Release 仍为 `v2.1.0(52)`，宁波生产仍为 `v2.1.0`（`a298f69`），Alembic head 为 `20260830_0013`。Build 53 双端隔离 Debug 构建通过，iOS 页面点击受本机设备界面工具限制尚未验收；本轮未发布、未部署、未换装。后续发布仍须走既定签名与安装流程，iOS 最终安装由用户在 Xcode 操作。
+- 当前双端源码、公开 Release及本机已安装macOS为 `v2.1.1(57)`（`ee09faf`，2026-09-22）；宁波Backend为 `v2.1.1`（`0aea865`），Alembic head `20260830_0013`。双端OS27 Release签名构建通过，macOS成稿页、长章节列表滚动、失败原因及同源码隔离Debug编辑页通过；iOS最终安装由用户在Xcode操作，未完成最终真机页面验收、未导出IPA。两台当前手机OS27开发支持现场核验通过，无pending设备。发布与资源证据见 `archive/plans/v2.1.1-error-visibility-plan.md`。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
 - 生产入口为 `https://ictw.linotsai.top`，Backend 位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787` 并由 Nginx Proxy Manager 反代。
@@ -56,7 +56,7 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 - 当前归档概况、历史重提限制和下一目标以 `PROJECT_PLAN.md` 为准。
 - `KEK_SECRET` 与 `APP_TOKEN` 必须原样、安全迁移，任何命令输出、计划、提交或回复都不得打印其值。
 
-- macOS 27 SDK 下，正文只读 Text／编辑 TextEditor 外层 Group 统一设置 accessibilityLabel 会触发辅助功能递归崩溃；正文标签放到具体 TextEditor。发布必须实机打开成稿页和编辑页，构建及验签不能替代运行验证。
+- macOS 27 SDK 下，正文只读 Text／编辑 TextEditor 外层 Group 统一设置 accessibilityLabel 会触发辅助功能递归崩溃；正文标签放到具体 TextEditor。章节轨 LazyVStack 的 AXScrollToBottom 同样曾触发系统 ForEach/LazyScrollable 崩溃，当前紧凑章节轨使用 VStack 保持滚动目标稳定。发布必须实机打开成稿页和编辑页，构建及验签不能替代运行验证。
 
 ## 工作区规则
 
