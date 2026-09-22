@@ -965,7 +965,9 @@ private struct V2MacChapterRail: View {
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    // macOS 27 accessibility scrolling can crash while resolving lazy row IDs.
+                    // Keep the compact chapter rail materialized so its scroll targets remain stable.
+                    VStack(spacing: 0) {
                         ForEach(workspace.chapters) { chapter in
                             V2MacChapterRailRow(
                                 chapter: chapter,
