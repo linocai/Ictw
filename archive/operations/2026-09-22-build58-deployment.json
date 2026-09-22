@@ -1,0 +1,73 @@
+{
+  "version": "2.1.1",
+  "backend_build": 58,
+  "commit": "f29d8239f454eb90cc3dac0759aeeea3a17481b0",
+  "previous_commit": "0aea8659f09b5d97b16a407d59bdfee155560491",
+  "backup": "/opt/linoi/backups/20260922-build58-f29d823",
+  "status": "deployed",
+  "before": {
+    "head": "20260830_0013",
+    "active_jobs": 0,
+    "data_hash": "f9459da0416ade6fb4b7afcc61b1aa2bc1f03f017b07f14edd2a07c8076f777d"
+  },
+  "database_backup_verified": true,
+  "code_backup_verified": true,
+  "after": {
+    "head": "20260830_0013",
+    "active_jobs": 0,
+    "data_hash": "f9459da0416ade6fb4b7afcc61b1aa2bc1f03f017b07f14edd2a07c8076f777d"
+  },
+  "data_unchanged": true,
+  "env_unchanged": true,
+  "post_backup": "/opt/linoi/backups/20260922-build58-f29d823/linoi-before.db",
+  "internal_health": [
+    200,
+    {
+      "status": "ok",
+      "version": "2.1.1"
+    }
+  ],
+  "public_health": [
+    200,
+    {
+      "status": "ok",
+      "version": "2.1.1"
+    }
+  ],
+  "unauthenticated": 401,
+  "docs": {
+    "/docs": 404,
+    "/redoc": 404,
+    "/openapi.json": 404
+  },
+  "live_approved_prompts_verified": true,
+  "listener_matches_mainpid": true,
+  "source_files_verified": 65,
+  "warning_count": 0,
+  "tests": {
+    "passed": 256,
+    "skipped": 12,
+    "note": "Final full suite ran from Backend directory after updating the obsolete Writer prompt assertions; no live model calls."
+  },
+  "tag": "v2.1.1-build58",
+  "client_status": "No client build/install/release in this deployment; installed macOS and public Release remain Build57.",
+  "remote_cleanup": {
+    "paths": [
+      "/opt/linoi/releases/build58-f29d823",
+      "/tmp/ictw-backend58-20260922.tar.gz"
+    ],
+    "files": 6,
+    "bytes_before": 134573,
+    "bytes_after": 0,
+    "manifest_sha256": "33f778523e82f6b488066f1398d96abb2f202399400d9977fa61015e608206a9",
+    "retained_backup": "/opt/linoi/backups/20260922-build58-f29d823"
+  },
+  "local_cleanup": {
+    "path": "/tmp/ictw-deploy58-20260922",
+    "entries": 198,
+    "bytes_before": 35553011,
+    "bytes_after": 0,
+    "manifest_sha256": "e65718f07bcb101a34931050a0b7c2b2d279544bf4fbcac391183b6afa7894b2",
+    "user_system_temp_checked": true
+  }
+}

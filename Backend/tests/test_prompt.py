@@ -84,8 +84,8 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
     assert "固定" in text and "清醒" in text
     assert "旧故事线" not in text
     assert text.count("# 世界观") == 1
-    assert "Bible 是本次写作的最高情节权威" in text
-    assert "不得据此增加 Bible 未要求的剧情" in text
+    assert "Bible 决定核心事件、明确禁止事项及明确指定的顺序和结尾" in text
+    assert "为完成本章意图，可自然补充互动、场景衔接、局部波折、情绪与态度变化，以及已有关系中的渐进发展。" in text
     assert "至少 4000 个去空白字符" in text
     assert "冷静" not in text
 
