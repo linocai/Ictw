@@ -38,7 +38,7 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 - 只有确定性校验和 Checker 均通过、且任务仍持有本章所有权时，Writer 新正文才能与 JobRun 终态在同一事务提升。
 - 自动写作的 Checker 必须使用与 Writer 相同的既有事实快照；手动复查也须提供世界观、已选人物卡、章前状态与有效历史。既有关系不因 Bible 未重复说明而视为新增；围绕本章意图的自然互动与渐进发展不要求逐项授权，明确冲突和未经授权的重大转折仍须检查，历史不授权未选人物。
 - 正文接受与归档独立：接受后章节立即 `finalized`；Extractor 失败不得撤销正文接受或重跑 Checker。
-- v2 Extractor 每个 revision 只调用一次；仅完整通过的 `summary + canonical facts + end_state_delta` 可原子激活。
+- v2 Extractor 每个 revision 只调用一次；v2.0沿用原完整契约，v2.1仅完整验证的 `summary + canonical facts + end_state_delta + state_uncertainties` 可原子激活。未知槽必须遮蔽旧状态，不按数组顺序猜章末结论。
 - `partial`、`failed`、`stale` revision 不得进入 Selector、人物故事线或状态投影。
 - 历史章节每章只选择一个记忆来源：活跃 v2 优先，否则仅在 `legacy_archive_eligible` 时使用 legacy。
 - 历史重提必须来自只读报告、正文哈希复核和用户精确 ID 确认；不得自动全量或按观察项调用模型。
@@ -48,11 +48,11 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 
 ## 当前生产门禁
 
-- 本地开发源码已完成 `v2.2.0(60)` 的本地迁移/回归与独立复审；Backend期望Alembic head为 `20260923_0014`，尚未发布、部署或迁移生产。
-- 当前生产Backend、公开Release及已安装Mac仍为 `v2.1.1(59)`（`e7b14b0`，2026-09-22），Backend同为该commit／v2.1.1，生产Alembic head仍为 `20260830_0013`。归档完全相同的状态项去重、冲突保留拦截；中文错误与恢复建议去重已上线。265项Backend及32项Store/HTTP通过，双端OS27 Release签名构建通过，Mac成稿／真实错误提示及隔离Debug编辑页通过。两台当前手机现场不可用，iOS最终安装由用户在Xcode操作，未完成最终真机页面验收、未导出IPA，未清设备支持缓存。证据见 `archive/plans/v2.1.1-error-visibility-plan.md`。
+- 当前源码发布标签、生产Backend、公开Release及已安装Mac为 **`v2.2.0(60)` / `b620558`（2026-09-23）**，生产Alembic head为 `20260923_0014`。Checker/SOP的21项及复审新增问题均闭环；归档v2.1允许可靠事实与显式未知状态完整原子激活，旧失败归档不自动生效或重提。
+- Backend 305 passed/12项旧协议skip、Store/HTTP38及状态测试通过，独立复审完成。双端OS27 Release签名构建、Mac真实成稿/错误/草稿编辑页面及生产备份恢复、迁移、健康、数据完整性/外键、单实例均通过。iOS保持Xcode安装状态，无IPA、最终真机页面未验收；本轮设备支持审计pending为空。证据见 `archive/plans/v2.2.0-production-sop-plan.md`。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
-- 生产入口为 `https://ictw.linotsai.top`，Backend 位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787` 并由 Nginx Proxy Manager 反代。
+- 生产入口为 `https://ictw.linotsai.top`，鉴权健康实际路径为 `/api/v1/health`；Backend位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787`。宁波使用 `deploy@114.66.2.205` 的当前SSH身份，仓库旧香港私钥不适用；需sudo的工作目录由sudo后的进程进入。
 - 香港旧服务已 stopped + disabled；除非先停宁波服务并执行明确回退，否则禁止启动。
 - 当前归档概况、历史重提限制和下一目标以 `PROJECT_PLAN.md` 为准。
 - `KEK_SECRET` 与 `APP_TOKEN` 必须原样、安全迁移，任何命令输出、计划、提交或回复都不得打印其值。
