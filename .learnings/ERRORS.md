@@ -1592,3 +1592,20 @@ Book-settings notices must stay below the navigation bar
 - **Notes**: 改为断言通知修饰器紧邻唯一的书设置导航标题。
 
 ---
+
+## [ERR-20260923-001] release-preflight-assumptions
+
+**Logged**: 2026-09-23T21:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Build60预检曾误用旧香港SSH密钥、sudo前进入受限目录及缺少API前缀的健康路径；UI验收后的整库比较还把正常访问时间变化当作业务变化。
+
+### Resolution
+已改用宁波当前SSH身份、sudo后进入目录和实际 `/api/v1/health`，并提升至项目AGENTS。停服迁移要求旧数据逐表完全一致；页面验收后单独核对books访问元数据，正文、人物、模型配置及其他数据仍逐项保持一致。最终发布所有门禁通过，见Build60发布记录。
+
+### Metadata
+- Related Files: AGENTS.md, archive/plans/v2.2.0-production-sop-plan.md
+- Source: resolved release validation failures
