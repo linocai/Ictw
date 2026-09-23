@@ -195,8 +195,22 @@ struct LinoIChaptersPane: View {
     private var chapterSummary: String {
         let completed = workspace.chapters.filter { $0.status == "finalized" }.count
         let awaiting = workspace.chapters.filter { $0.status == "draft_ready" }.count
-        let pending = workspace.chapters.filter { ChapterArchiveRailState.resolve(status: $0.archiveStatus, canRetry: $0.archiveCanRetry) == .pending }.count
-        let attention = workspace.chapters.filter { ChapterArchiveRailState.resolve(status: $0.archiveStatus, canRetry: $0.archiveCanRetry) == .attention }.count
+        let pending = workspace.chapters.filter {
+            ChapterArchiveRailState.resolve(
+                status: $0.archiveStatus, canRetry: $0.archiveCanRetry,
+                effectiveStatus: $0.archiveEffectiveStatus,
+                latestAttemptStatus: $0.archiveLatestAttemptStatus,
+                stateUncertaintyCount: $0.archiveStateUncertaintyCount
+            ) == .pending
+        }.count
+        let attention = workspace.chapters.filter {
+            ChapterArchiveRailState.resolve(
+                status: $0.archiveStatus, canRetry: $0.archiveCanRetry,
+                effectiveStatus: $0.archiveEffectiveStatus,
+                latestAttemptStatus: $0.archiveLatestAttemptStatus,
+                stateUncertaintyCount: $0.archiveStateUncertaintyCount
+            ) == .attention
+        }.count
         var text = "\(workspace.chapters.count) 章 · 已完成 \(completed) · 待接受 \(awaiting)"
         if pending > 0 { text += " · 归档中 \(pending)" }
         if attention > 0 { text += " · 归档待处理 \(attention)" }
@@ -229,7 +243,12 @@ private struct LinoIChapterRow: View {
                     Text(chapter.updatedAt.linoShortDate)
                         .font(LinoType.caption)
                         .foregroundStyle(LinoTheme.faint)
-                    if let archiveLabel = ChapterArchiveRailState.resolve(status: chapter.archiveStatus, canRetry: chapter.archiveCanRetry).label {
+                    if let archiveLabel = ChapterArchiveRailState.resolve(
+                        status: chapter.archiveStatus, canRetry: chapter.archiveCanRetry,
+                        effectiveStatus: chapter.archiveEffectiveStatus,
+                        latestAttemptStatus: chapter.archiveLatestAttemptStatus,
+                        stateUncertaintyCount: chapter.archiveStateUncertaintyCount
+                    ).label {
                         Text(archiveLabel)
                             .font(LinoType.caption).foregroundStyle(LinoTheme.warning)
                     }

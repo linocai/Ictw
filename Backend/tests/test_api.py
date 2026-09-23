@@ -28,6 +28,7 @@ def stored_candidates(chapter_id: str) -> list[dict]:
                 "checker_result": row.checker_result,
                 "bible_sha256": row.bible_sha256,
                 "draft_fingerprint": row.draft_fingerprint,
+                "checker_input_fingerprint": row.checker_input_fingerprint,
                 "is_current": row.is_current,
             }
             for row in rows
@@ -90,7 +91,13 @@ def test_memory_manifest_reports_actual_packed_brief_count(client, auth_headers,
     client.app.dependency_overrides[get_memory_selector_client] = lambda: OneBriefSelector()
     client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("文" * 4000)
 
-    client.post(f"/api/v1/chapters/{current['id']}/write", headers=auth_headers).raise_for_status()
+    readiness = client.get(
+        f"/api/v1/chapters/{current['id']}/production-readiness", headers=auth_headers
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{current['id']}/write", headers=auth_headers,
+        json={"acknowledged_context_token": readiness["context_token"]},
+    ).raise_for_status()
     status = wait_for_terminal(client, current["id"], auth_headers)
     assert status["phase"] == "done"
     assert status["memory_context"]["memory_non_whitespace_count"] == len("旧事实仍然成立")
@@ -356,7 +363,7 @@ def test_malformed_archive_keeps_accepted_prose_and_marks_archive_partial(client
     assert stale["outcome_current"] is False
 
 
-def test_writer_preflight_uses_longest_name_and_rejects_unselected(client, auth_headers, wait_for_terminal):
+def test_writer_defers_longest_name_and_unselected_identity_to_checker(client, auth_headers, wait_for_terminal):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     short = client.post(f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林"}).json()
     long = client.post(f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}).json()
@@ -369,7 +376,10 @@ def test_writer_preflight_uses_longest_name_and_rejects_unselected(client, auth_
     client.app.dependency_overrides[get_writer_client] = lambda: writer
     started = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers)
     assert started.status_code == 200
-    assert started.json()["phase"] == "selecting_memory"
+    assert started.json()["phase"] == "writing"
+    # The selected longer name is a permitted identity.  v2.2 delegates the
+    # semantic result to Checker instead of rejecting it with a substring
+    # preflight before Writer runs.
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
     bad = client.post(
@@ -378,8 +388,11 @@ def test_writer_preflight_uses_longest_name_and_rejects_unselected(client, auth_
         json={"user_prompt": "林进入废城", "character_links": [{"character_id": long["id"]}]},
     ).json()
     response = client.post(f"/api/v1/chapters/{bad['id']}/write", headers=auth_headers)
-    assert response.status_code == 409
-    assert response.json()["detail"]["details"]["names"] == ["林"]
+    assert response.status_code == 200
+    # The default fake Checker deliberately cannot classify the remaining
+    # unselected one-character use, but the pipeline has started and reaches
+    # a terminal Checker outcome rather than being blocked by local matching.
+    assert wait_for_terminal(client, bad["id"], auth_headers)["phase"] == "failed"
     assert short["id"] != long["id"]
 
 
@@ -399,7 +412,10 @@ def test_short_draft_rewrites_once_from_identical_input_and_preserves_candidates
 def test_checker_violation_stays_backend_only_and_does_not_replace_visible_draft(client, auth_headers, wait_for_terminal):
     class ViolationChecker:
         def complete_json(self, **kwargs):
-            return {"verdict": "violation", "issues": [{"kind": "new_plot", "draft_evidence": "正文证据", "bible_evidence": "Bible证据", "reason": "越界"}]}
+            return {"verdict": "violation", "issues": [{
+                "kind": "missing_requirement", "draft_evidence": "", "bible_evidence": "行动",
+                "reason": "缺少要求的行动", "source_kind": "bible", "source_id": "bible", "source_evidence": "行动",
+            }], "name_uses": []}
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}).json()
@@ -410,7 +426,7 @@ def test_checker_violation_stays_backend_only_and_does_not_replace_visible_draft
     assert status["phase"] == "failed"
     assert status["error_code"] == "checker_rejected"
     assert status["checker_result"]["verdict"] == "violation"
-    assert "越界" in status["error_message"]
+    assert "缺少要求的行动" in status["error_message"]
     assert "draft_candidate" not in status
     assert ("文" * 4000) not in client.get(
         f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers
@@ -421,7 +437,7 @@ def test_checker_violation_stays_backend_only_and_does_not_replace_visible_draft
     # The verdict and its reasons explain the failure; the verbatim excerpts
     # quote a candidate the author never saw and must not cross the wire.
     wire_issue = status["checker_result"]["issues"][0]
-    assert wire_issue == {"kind": "new_plot", "reason": "越界"}
+    assert wire_issue == {"kind": "missing_requirement", "reason": "缺少要求的行动"}
     job_text = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).text
     assert "正文证据" not in job_text
     assert "Bible证据" not in job_text
@@ -432,7 +448,8 @@ def test_checker_violation_stays_backend_only_and_does_not_replace_visible_draft
     assert candidates[0]["checker_result"]["verdict"] == "violation"
     assert candidates[0]["is_current"] is False
     # The audit trail keeps the full record server-side.
-    assert candidates[0]["checker_result"]["issues"][0]["draft_evidence"] == "正文证据"
+    assert candidates[0]["checker_result"]["issues"][0]["draft_evidence"] == ""
+    assert candidates[0]["checker_result"]["issues"][0]["bible_evidence"] == "行动"
     assert client.get(f"/api/v1/chapters/{chapter['id']}/candidates", headers=auth_headers).status_code == 404
     assert client.post(
         f"/api/v1/chapters/{chapter['id']}/candidates/select",
@@ -450,7 +467,7 @@ def test_deterministic_failure_keeps_candidate_backend_only_and_restores_visible
 
         def complete_json(self, **_kwargs):
             self.calls += 1
-            return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     allowed = client.post(
@@ -484,8 +501,7 @@ def test_deterministic_failure_keeps_candidate_backend_only_and_restores_visible
     ).raise_for_status()
     failed = wait_for_terminal(client, chapter["id"], auth_headers)
     assert failed["phase"] == "failed"
-    assert failed["error_code"] == "writer_validation_failed"
-    assert {item["code"] for item in failed["violations"]} == {"unselected_character"}
+    assert failed["error_code"] == "checker_invalid_response"
     assert failed["visible_checker_result"]["verdict"] == "passed"
 
     visible = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
@@ -494,8 +510,8 @@ def test_deterministic_failure_keeps_candidate_backend_only_and_restores_visible
     assert len(candidates) == 2
     assert candidates[0]["draft_text"] == baseline and candidates[0]["is_current"] is True
     assert candidates[1]["draft_text"] == rejected and candidates[1]["is_current"] is False
-    assert candidates[1]["deterministic_violations"][0]["code"] == "unselected_character"
-    assert checker.calls == 1
+    assert candidates[1]["deterministic_violations"] == []
+    assert checker.calls == 2
 
 
 def test_manual_edit_recheck_preserves_generated_candidate_and_creates_next_attempt(client, auth_headers, wait_for_terminal):
@@ -505,7 +521,7 @@ def test_manual_edit_recheck_preserves_generated_candidate_and_creates_next_atte
 
         def complete_json(self, **_kwargs):
             self.calls += 1
-            return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}).json()
@@ -537,14 +553,14 @@ def test_manual_edit_recheck_preserves_generated_candidate_and_creates_next_atte
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
 
-def test_manual_recheck_rejects_invalid_text_without_calling_checker(client, auth_headers, wait_for_terminal):
+def test_manual_recheck_allows_short_author_text_for_checker(client, auth_headers, wait_for_terminal):
     class RecordingChecker:
         def __init__(self):
             self.calls = 0
 
         def complete_json(self, **_kwargs):
             self.calls += 1
-            return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}).json()
@@ -556,10 +572,9 @@ def test_manual_recheck_rejects_invalid_text_without_calling_checker(client, aut
     client.patch(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers, json={"draft_text": "太短"}).raise_for_status()
 
     response = client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers)
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "checker_preflight_failed"
-    assert {item["code"] for item in response.json()["detail"]["violations"]} >= {"minimum_length"}
-    assert checker.calls == 1
+    assert response.status_code == 200
+    assert response.json()["checker_result"]["verdict"] == "passed"
+    assert checker.calls == 2
 
 
 def test_checker_override_survives_extractor_failure_and_is_scoped_to_exact_draft(
@@ -570,11 +585,9 @@ def test_checker_override_survives_extractor_failure_and_is_scoped_to_exact_draf
             return {
                 "verdict": "violation",
                 "issues": [{
-                    "kind": "new_plot",
-                    "draft_evidence": "正文证据",
-                    "bible_evidence": "Bible 证据",
-                    "reason": "越界",
-                }],
+                    "kind": "missing_requirement", "draft_evidence": "", "bible_evidence": "行动",
+                    "reason": "缺少要求的行动", "source_kind": "bible", "source_id": "bible", "source_evidence": "行动",
+                }], "name_uses": [],
             }
 
     class FailingExtractor:
@@ -615,9 +628,8 @@ def test_checker_override_survives_extractor_failure_and_is_scoped_to_exact_draf
     assert failed["phase"] == "failed"
     assert failed["checker_result"]["override"] is True
 
-    # Existing Build 26 production jobs stored the override but no fingerprint.
-    # The exact immutable candidate is enough to carry those approvals forward
-    # without authorizing any later edit or recheck.
+    # A pre-v2.2 override that lacks a frozen production-input fingerprint
+    # cannot be reused after history/projection could have changed.
     db = db_module.SessionLocal()
     try:
         legacy_run = db.get(JobRun, failed["job_id"])
@@ -628,15 +640,15 @@ def test_checker_override_survives_extractor_failure_and_is_scoped_to_exact_draf
     finally:
         db.close()
 
-    # Retrying the exact same accepted text no longer asks the user to ignore
-    # Bible again.  The next extract JobRun inherits the durable approval.
+    # An already-finalized manuscript may retry its archive, but the new run
+    # does not claim that the unscoped old Checker override is still current.
     client.app.dependency_overrides[get_extractor_client] = successful_extractor_factory
     retry = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
     assert retry.status_code == 200
-    assert retry.json()["checker_result"]["override"] is True
+    assert retry.json()["checker_result"] is None
     retried = wait_for_terminal(client, chapter["id"], auth_headers)
     assert retried["phase"] == "done"
-    assert retried["checker_result"]["override"] is True
+    assert retried["checker_result"] is None
 
     # Any later input edit changes the full fingerprint and invalidates the
     # old approval instead of silently accepting a different manuscript.
@@ -668,23 +680,57 @@ def test_checker_fingerprint_requires_recheck_after_world_or_selected_character_
     client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("文" * 4000)
     client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    assert client.get(
+        f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers
+    ).json()["visible_checker_result"]["verdict"] == "passed"
     original = stored_candidates(chapter["id"])[0]
 
     client.patch(f"/api/v1/books/{book['id']}", headers=auth_headers, json={"world_setting": "新世界观"}).raise_for_status()
+    assert client.get(
+        f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers
+    ).json()["visible_checker_result"] is None
     assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 409
     world_recheck = client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers)
     assert world_recheck.status_code == 200
-    assert world_recheck.json()["draft_fingerprint"] != original["draft_fingerprint"]
+    assert world_recheck.json()["input_fingerprint"] != original["checker_input_fingerprint"]
 
     client.patch(
         f"/api/v1/characters/{character['id']}",
         headers=auth_headers,
         json={"name": "林夕改名", "fixed_profile": "新设定", "dynamic_fields": {"状态": "新"}},
     ).raise_for_status()
+    assert client.get(
+        f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers
+    ).json()["visible_checker_result"] is None
     assert client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).status_code == 409
     character_recheck = client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers)
     assert character_recheck.status_code == 200
-    assert character_recheck.json()["draft_fingerprint"] != world_recheck.json()["draft_fingerprint"]
+    assert character_recheck.json()["input_fingerprint"] != world_recheck.json()["input_fingerprint"]
+
+
+def test_patch_of_finalized_content_reopens_and_requires_a_current_checker(
+    client, auth_headers, wait_for_terminal
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("旧" * 4000)
+    client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+    assert client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()["status"] == "finalized"
+
+    patched = client.patch(
+        f"/api/v1/chapters/{chapter['id']}", headers=auth_headers,
+        json={"draft_text": "新" * 4000},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["status"] == "draft_ready"
+    accepted = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers)
+    assert accepted.status_code == 409
+    assert accepted.json()["detail"]["code"] == "checker_override_required"
 
 
 def test_delete_only_removes_the_last_chapter_and_stays_idempotent(client, auth_headers):
@@ -710,7 +756,9 @@ def test_delete_only_removes_the_last_chapter_and_stays_idempotent(client, auth_
     assert client.delete(f"/api/v1/chapters/{chapters[2]['id']}", headers=auth_headers).status_code == 204
 
 
-def test_duplicate_character_name_is_an_explicit_preflight_error(client, auth_headers):
+def test_duplicate_character_name_starts_writer_and_requires_checker_classification(
+    client, auth_headers, wait_for_terminal
+):
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     first = client.post(
         f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "林夕"}
@@ -722,8 +770,269 @@ def test_duplicate_character_name_is_an_explicit_preflight_error(client, auth_he
         json={"user_prompt": "林夕进入废城", "character_links": [{"character_id": first["id"]}]},
     ).json()
     response = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers)
+    assert response.status_code == 200
+    # The fixture Checker cannot classify this ambiguity, but the semantic
+    # Checker path must reach a terminal result before fixture teardown.
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "failed"
+
+
+@pytest.mark.parametrize("terminal_verdict", ["passed", "violation"])
+def test_checker_retry_requires_the_candidate_latest_attempt(
+    client, auth_headers, wait_for_terminal, terminal_verdict
+):
+    class RetryChecker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                # Missing name_uses is a safe unavailable Checker outcome.
+                return {"verdict": "passed", "issues": []}
+            if terminal_verdict == "passed":
+                return {"verdict": "passed", "issues": [], "name_uses": []}
+            return {
+                "verdict": "violation",
+                "issues": [{
+                    "kind": "missing_requirement", "reason": "缺少要求的行动",
+                    "draft_evidence": "", "bible_evidence": "行动",
+                    "source_kind": "bible", "source_id": "bible", "source_evidence": "行动",
+                }],
+                "name_uses": [],
+            }
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    checker = RetryChecker()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("文" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
+    initial = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert initial["phase"] == "failed"
+    assert initial["can_retry_checker"] is True
+    source_job_id = initial["checker_source_job_id"]
+
+    retried = client.post(
+        f"/api/v1/chapters/{chapter['id']}/checker/retry", headers=auth_headers,
+        json={"source_job_id": source_job_id},
+    )
+    assert retried.status_code == 200
+    settled = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert settled["phase"] == ("done" if terminal_verdict == "passed" else "failed")
+    assert settled["can_retry_checker"] is False
+    assert settled["checker_source_job_id"] is None
+
+    repeated = client.post(
+        f"/api/v1/chapters/{chapter['id']}/checker/retry", headers=auth_headers,
+        json={"source_job_id": source_job_id},
+    )
+    assert repeated.status_code == 409
+    assert repeated.json()["detail"]["code"] == "checker_retry_not_available"
+    assert checker.calls == 2
+
+
+def test_write_commit_failure_releases_its_reserved_owner(client, auth_headers, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "本章意图"}
+    ).json()
+    original_reserve = write_registry.reserve
+    original_commit = Session.commit
+    reserved = False
+    failed_once = False
+
+    def observe_reserve(job):
+        nonlocal reserved
+        original_reserve(job)
+        if job.chapter_id == chapter["id"] and job.kind == "write":
+            reserved = True
+
+    def fail_first_commit(session):
+        nonlocal failed_once
+        if reserved and not failed_once:
+            failed_once = True
+            raise RuntimeError("synthetic write registration failure")
+        return original_commit(session)
+
+    monkeypatch.setattr(write_registry, "reserve", observe_reserve)
+    monkeypatch.setattr(Session, "commit", fail_first_commit)
+    with pytest.raises(RuntimeError, match="synthetic write registration failure"):
+        client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers)
+
+    assert write_registry.get_live(chapter["id"]) is None
+    assert client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()["status"] == "draft"
+
+
+def test_write_launch_failure_restores_baseline_and_releases_owner(
+    client, auth_headers, wait_for_terminal, monkeypatch
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "本章意图"}
+    ).json()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("文" * 4000)
+    original_launch = write_registry.launch
+
+    def fail_write_launch(job, _session_factory):
+        if job.kind == "write":
+            raise RuntimeError("synthetic write launch failure")
+        return original_launch(job, _session_factory)
+
+    monkeypatch.setattr(write_registry, "launch", fail_write_launch)
+    with pytest.raises(RuntimeError, match="synthetic write launch failure"):
+        client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers)
+
+    assert write_registry.get_live(chapter["id"]) is None
+    failed = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert failed["phase"] == "failed"
+    assert failed["error_code"] == "write_start_failed"
+    assert client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()["status"] == "draft"
+
+    monkeypatch.setattr(write_registry, "launch", original_launch)
+    client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+
+
+def test_write_start_cleanup_failure_still_releases_exact_owner(client, auth_headers, monkeypatch):
+    import app.routers.chapters as chapters_router
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "本章意图"}
+    ).json()
+
+    def fail_launch(_job, _session_factory):
+        raise RuntimeError("synthetic launch failure")
+
+    def fail_recovery(*_args, **_kwargs):
+        raise RuntimeError("synthetic recovery failure")
+
+    monkeypatch.setattr(write_registry, "launch", fail_launch)
+    monkeypatch.setattr(chapters_router, "fail_unlaunched_job", fail_recovery)
+    with pytest.raises(RuntimeError, match="synthetic recovery failure"):
+        client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers)
+
+    assert write_registry.get_live(chapter["id"]) is None
+
+
+def test_checker_retry_launch_failure_releases_owner_and_remains_retryable(
+    client, auth_headers, wait_for_terminal, monkeypatch
+):
+    class UnavailableChecker:
+        def complete_json(self, **_kwargs):
+            # Missing name classifications is a validation failure mapped to
+            # the retryable Checker-unavailable path.
+            return {"verdict": "passed", "issues": []}
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("文" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: UnavailableChecker()
+    client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
+    failed = wait_for_terminal(client, chapter["id"], auth_headers)
+    assert failed["can_retry_checker"] is True
+
+    original_launch = write_registry.launch
+
+    def fail_check_launch(job, _session_factory):
+        if job.kind == "check":
+            raise RuntimeError("synthetic checker retry launch failure")
+        return original_launch(job, _session_factory)
+
+    monkeypatch.setattr(write_registry, "launch", fail_check_launch)
+    with pytest.raises(RuntimeError, match="synthetic checker retry launch failure"):
+        client.post(
+            f"/api/v1/chapters/{chapter['id']}/checker/retry", headers=auth_headers,
+            json={"source_job_id": failed["checker_source_job_id"]},
+        )
+
+    assert write_registry.get_live(chapter["id"]) is None
+    after_launch_failure = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert after_launch_failure["phase"] == "failed"
+    assert after_launch_failure["error_code"] == "checker_retry_start_failed"
+    assert after_launch_failure["can_retry_checker"] is True
+
+
+def test_manual_checker_input_change_is_not_current_when_it_finishes_later(client, auth_headers):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    class BlockingChecker:
+        def __init__(self) -> None:
+            self.started = Event()
+            self.release = Event()
+
+        def complete_json(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers,
+        json={"draft_text": "旧" * 4000},
+    ).raise_for_status()
+    checker = BlockingChecker()
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        checking = executor.submit(client.post, f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers)
+        assert checker.started.wait(timeout=3)
+        client.patch(
+            f"/api/v1/chapters/{chapter['id']}", headers=auth_headers,
+            json={"draft_text": "新" * 4000},
+        ).raise_for_status()
+        checker.release.set()
+        response = checking.result(timeout=3)
+
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "ambiguous_character_name"
+    assert response.json()["detail"]["code"] == "checker_input_changed"
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert status["kind"] == "check"
+    assert status["phase"] == "cancelled"
+    assert status["error_code"] == "checker_input_changed"
+    assert status["outcome_current"] is False
+
+
+def test_archive_reservation_failure_releases_live_owner_and_allows_retry(
+    client, auth_headers, wait_for_terminal, monkeypatch
+):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers,
+        json={"draft_text": "作者短稿"},
+    ).raise_for_status()
+    original_reserve = write_registry.reserve
+
+    def reserve_then_fail(job):
+        original_reserve(job)
+        if job.kind == "extract":
+            raise RuntimeError("simulate post-reserve archive registration failure")
+
+    monkeypatch.setattr(write_registry, "reserve", reserve_then_fail)
+    accepted = client.post(
+        f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers,
+        json={"override_checker": True},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["phase"] == "failed"
+    assert write_registry.get_live(chapter["id"]) is None
+
+    monkeypatch.setattr(write_registry, "reserve", original_reserve)
+    retry = client.post(f"/api/v1/chapters/{chapter['id']}/archive/retry", headers=auth_headers)
+    assert retry.status_code == 200
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
 
 
 def test_upstream_failure_restores_old_draft_and_status(client, auth_headers, wait_for_terminal):
@@ -864,12 +1173,13 @@ def test_accept_runs_deterministic_checks_without_a_candidate(client, auth_heade
         f"/api/v1/chapters/{chapter['id']}", headers=auth_headers, json={"draft_text": "太短。"}
     ).raise_for_status()
 
-    # /check refuses this text, and does so before creating a candidate.
-    assert client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers).status_code == 409
+    # /check runs even for an author-provided short draft; acceptance is where
+    # the explicit short-draft confirmation is required.
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers).status_code == 200
 
     blocked = client.post(f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={})
     assert blocked.status_code == 409
-    assert blocked.json()["detail"]["code"] == "accept_override_required"
+    assert blocked.json()["detail"]["code"] == "short_draft_confirmation_required"
     assert [item["code"] for item in blocked.json()["detail"]["violations"]] == ["minimum_length"]
     assert client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()["status"] != "finalized"
 
@@ -906,16 +1216,14 @@ def test_accept_never_waves_through_an_unselected_character(client, auth_headers
             f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json=body
         )
         assert response.status_code == 409, body
-        assert response.json()["detail"]["code"] == "accept_preflight_failed"
-        assert [item["code"] for item in response.json()["detail"]["violations"]] == [
-            "unselected_character"
-        ]
+        assert response.json()["detail"]["code"] in {"checker_override_required", "checker_identity_check_required"}
 
     client.patch(
         f"/api/v1/chapters/{chapter['id']}",
         headers=auth_headers,
         json={"character_links": [{"character_id": character["id"], "chapter_note": ""}]},
     ).raise_for_status()
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers).status_code == 200
     assert client.post(
         f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers, json={}
     ).status_code == 200
@@ -985,7 +1293,7 @@ def test_cancel_during_checker_never_promotes_old_candidate(client, auth_headers
         def complete_json(self, **_kwargs):
             self.started.set()
             assert self.release.wait(timeout=3)
-            return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(
@@ -1044,7 +1352,7 @@ def test_edit_during_checker_keeps_manual_text_and_marks_old_job_changed(client,
         def complete_json(self, **_kwargs):
             self.started.set()
             assert self.release.wait(timeout=3)
-            return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     chapter = client.post(
@@ -1159,7 +1467,7 @@ def test_writer_input_owners_cancel_blocked_jobs_without_promoting_old_text(
         def complete_json(self, **_kwargs):
             self.started.set()
             assert self.release.wait(timeout=3)
-            return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
     character = client.post(
@@ -1238,6 +1546,251 @@ def test_non_prompt_book_and_unlinked_character_edits_do_not_cancel_writer(clien
     ).status_code == 200
     writer.release.set()
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+
+
+def test_new_actual_name_hit_during_checker_cancels_and_restores_owned_baseline(client, auth_headers):
+    from threading import Event
+
+    class BlockingChecker:
+        def __init__(self) -> None:
+            self.started = Event()
+            self.release = Event()
+
+        def complete_json(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    unlinked = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "原名"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    baseline = "旧稿"
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers,
+        json={"draft_text": baseline},
+    ).raise_for_status()
+    checker = BlockingChecker()
+    client.app.dependency_overrides[get_writer_client] = lambda: TextLLM("候选" * 2000)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    started = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).json()
+    assert checker.started.wait(timeout=3)
+
+    # This card was not a dependency at freeze time. Renaming it to a name
+    # actually repeated in the hidden candidate adds program-owned name hits;
+    # its route does not advance this chapter's write generation, so the final
+    # fresh-session CAS and baseline restoration are both required.
+    client.patch(
+        f"/api/v1/characters/{unlinked['id']}", headers=auth_headers,
+        json={"name": "候选"},
+    ).raise_for_status()
+    checker.release.set()
+    live = write_registry.get(chapter["id"])
+    if live is not None and live.thread is not None:
+        live.thread.join(timeout=3)
+
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert current["draft_text"] == baseline
+    assert current["status"] == "draft_ready"
+    assert status["job_id"] == started["job_id"]
+    assert status["phase"] == "cancelled"
+    assert status["error_code"] == "checker_input_changed"
+    assert status["outcome_current"] is False
+
+
+def test_final_writer_cas_serializes_a_dependency_patch_after_promotion(client, auth_headers, monkeypatch):
+    """A dependency write cannot enter between final proof and promotion.
+
+    The final CAS deliberately wins this race once it has reserved SQLite's
+    short write transaction.  The delayed character PATCH then serializes
+    after the promotion, and makes its formerly-current checker evidence
+    stale for subsequent reads instead of contaminating the proof window.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, get_ident
+
+    import app.services.write_jobs as jobs
+
+    class Writer:
+        model_name = "writer"
+        last_finish_reason = "stop"
+
+        def complete_stream(self, **_kwargs):
+            yield "候选" * 2000
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    other = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "旧名"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "旧稿"}
+    ).raise_for_status()
+
+    proof_complete, allow_promotion, patch_submitted = Event(), Event(), Event()
+    original = jobs.is_frozen_input_current
+    paused = False
+
+    def pause_after_proof(db, row, snapshot):
+        nonlocal paused
+        current = original(db, row, snapshot)
+        if not paused:
+            paused = True
+            proof_complete.set()
+            assert allow_promotion.wait(timeout=3)
+        return current
+
+    monkeypatch.setattr(jobs, "is_frozen_input_current", pause_after_proof)
+    client.app.dependency_overrides[get_writer_client] = lambda: Writer()
+
+    client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).raise_for_status()
+    assert proof_complete.wait(timeout=3)
+
+    def change_name():
+        patch_submitted.set()
+        return client.patch(
+            f"/api/v1/characters/{other['id']}", headers=auth_headers, json={"name": "候选"}
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        changed = executor.submit(change_name)
+        assert patch_submitted.wait(timeout=3)
+        assert not changed.done(), "dependency PATCH crossed the final CAS lock"
+        allow_promotion.set()
+        assert changed.result(timeout=3).status_code == 200
+
+    live = write_registry.get(chapter["id"])
+    if live is not None and live.thread is not None:
+        live.thread.join(timeout=3)
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    assert status["phase"] == "done"
+    assert status["outcome_current"] is False
+    assert current["draft_text"] == "候选" * 2000
+
+
+def test_accept_cas_serializes_a_late_dependency_patch(client, auth_headers, monkeypatch, wait_for_terminal):
+    """Accept either sees the old complete input or a precommitted change."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from app.services import production_context
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    other = client.post(
+        f"/api/v1/books/{book['id']}/characters", headers=auth_headers, json={"name": "旧名"}
+    ).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "文" * 4000}
+    ).raise_for_status()
+    client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers).raise_for_status()
+
+    proof_complete, allow_accept, patch_submitted = Event(), Event(), Event()
+    original = production_context.is_frozen_input_current
+    paused = False
+
+    def pause_after_proof(db, row, snapshot):
+        nonlocal paused
+        current = original(db, row, snapshot)
+        if not paused:
+            paused = True
+            proof_complete.set()
+            assert allow_accept.wait(timeout=3)
+        return current
+
+    monkeypatch.setattr(production_context, "is_frozen_input_current", pause_after_proof)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        accepting = executor.submit(
+            client.post, f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers
+        )
+        assert proof_complete.wait(timeout=3)
+
+        def change_name():
+            patch_submitted.set()
+            return client.patch(
+                f"/api/v1/characters/{other['id']}", headers=auth_headers, json={"name": "行动"}
+            )
+
+        changed = executor.submit(change_name)
+        assert patch_submitted.wait(timeout=3)
+        assert not changed.done(), "dependency PATCH crossed the accept CAS lock"
+        allow_accept.set()
+        assert accepting.result(timeout=3).status_code == 200
+        assert changed.result(timeout=3).status_code == 200
+
+    db = db_module.SessionLocal()
+    try:
+        stored_chapter = db.get(Chapter, chapter["id"])
+        candidate = db.scalars(
+            select(ChapterDraftCandidate)
+            .where(ChapterDraftCandidate.chapter_id == chapter["id"], ChapterDraftCandidate.is_current.is_(True))
+        ).one()
+        assert stored_chapter is not None
+        assert candidate.checker_input_snapshot is not None
+        assert production_context.is_frozen_input_current(
+            db, stored_chapter, candidate.checker_input_snapshot
+        ) is False
+    finally:
+        db.close()
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+
+
+def test_accept_with_if_match_reuses_its_existing_sqlite_cas_lock(client, auth_headers, wait_for_terminal):
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "本章意图"}
+    ).json()
+    imported = client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "文" * 4000}
+    )
+    imported.raise_for_status()
+    accepted = client.post(
+        f"/api/v1/chapters/{chapter['id']}/accept",
+        headers={**auth_headers, "If-Match": str(imported.json()["content_revision"])},
+        json={"override_checker": True},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
+
+
+def test_failed_archive_start_remains_current_for_the_accepted_checker_result(client, auth_headers):
+    from app.llm.factory import LLMConfigurationError
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers, json={"draft_text": "作者短稿"}
+    ).raise_for_status()
+    checked = client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers)
+    checked.raise_for_status()
+    assert checked.json()["checker_result"]["verdict"] == "passed"
+
+    def unavailable_extractor():
+        raise LLMConfigurationError("llm_profile_not_configured", "extractor")
+
+    client.app.dependency_overrides[get_extractor_client] = unavailable_extractor
+    accepted = client.post(
+        f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers,
+        json={"allow_short_draft": True},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["phase"] == "failed"
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert status["kind"] == "extract"
+    assert status["phase"] == "failed"
+    assert status["outcome_current"] is True
+    assert status["visible_checker_result"]["verdict"] == "passed"
 
 
 class SnapshotExtractor:

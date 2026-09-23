@@ -147,7 +147,12 @@ private struct V2IOSChapterRailRow: View {
     }
 
     private var archiveRailState: ChapterArchiveRailState {
-        ChapterArchiveRailState.resolve(status: chapter.archiveStatus, canRetry: chapter.archiveCanRetry)
+        ChapterArchiveRailState.resolve(
+            status: chapter.archiveStatus, canRetry: chapter.archiveCanRetry,
+            effectiveStatus: chapter.archiveEffectiveStatus,
+            latestAttemptStatus: chapter.archiveLatestAttemptStatus,
+            stateUncertaintyCount: chapter.archiveStateUncertaintyCount
+        )
     }
 }
 

@@ -777,6 +777,9 @@ final class ClientSyncStore: ObservableObject {
                     updatedAt: chapter.updatedAt, archiveStatus: previous.archiveStatus,
                     archiveSchema: previous.archiveSchema, archiveCanRetry: previous.archiveCanRetry,
                     archiveLatestAttemptStatus: previous.archiveLatestAttemptStatus,
+                    archiveEffectiveStatus: previous.archiveEffectiveStatus,
+                    archiveStateStatus: previous.archiveStateStatus,
+                    archiveStateUncertaintyCount: previous.archiveStateUncertaintyCount,
                     contentRevision: chapter.contentRevision
                 )
                 cache.saveChapters(summaries, bookID: chapter.bookId)

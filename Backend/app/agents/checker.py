@@ -19,13 +19,32 @@ CHECKER_SCHEMA: dict[str, Any] = {
                     "draft_evidence": {"type": "string"},
                     "bible_evidence": {"type": "string"},
                     "reason": {"type": "string"},
+                    "source_kind": {"type": "string", "enum": ["bible", "world", "character", "prior_state", "history", "draft", "authorization"]},
+                    "source_id": {"type": "string"},
+                    "source_evidence": {"type": "string"},
                 },
-                "required": ["kind", "draft_evidence", "bible_evidence", "reason"],
+                "required": ["kind", "draft_evidence", "bible_evidence", "reason", "source_kind", "source_id", "source_evidence"],
+                "additionalProperties": False,
+            },
+        },
+        "name_uses": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "hit_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                    "classification": {"type": "string", "enum": ["character", "ordinary_word", "uncertain"]},
+                    "reason": {"type": "string"},
+                    "character_id": {"type": "string"},
+                },
+                "required": [
+                    "hit_ids", "classification", "reason",
+                ],
                 "additionalProperties": False,
             },
         },
     },
-    "required": ["verdict", "issues"],
+    "required": ["verdict", "issues", "name_uses"],
     "additionalProperties": False,
 }
 

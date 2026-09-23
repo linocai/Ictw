@@ -73,7 +73,7 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
 
     headers = [
         "# 世界观",
-        "# 本章允许人物白名单",
+        "# 本章人物授权",
         "# 人物卡",
         "# 历史参考资料",
         "# 本章剧情 Bible",

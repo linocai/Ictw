@@ -120,7 +120,7 @@ def test_draft_violations_respect_exemption(tmp_path):
         assert not any(item["code"] == "unselected_character" for item in violations)
 
 
-def test_chapter_exemption_relaxes_preflight(client, auth_headers, wait_for_terminal):
+def test_chapter_exemption_does_not_restore_removed_writer_preflight(client, auth_headers, wait_for_terminal):
     from app.llm.factory import get_writer_client
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
@@ -131,10 +131,9 @@ def test_chapter_exemption_relaxes_preflight(client, auth_headers, wait_for_term
         json={"user_prompt": "赵一出现", "target_word_count": 6},
     ).json()
 
-    blocked = client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers)
-    assert blocked.status_code == 409
-    assert blocked.json()["detail"]["code"] == "unselected_characters_in_bible"
-    assert blocked.json()["detail"]["details"]["names"] == ["赵一"]
+    # v2.2 moves word-sense/name identity from a substring hard gate to the
+    # source-addressable Checker protocol. Writing is therefore allowed here.
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/write", headers=auth_headers).status_code == 200
 
     patched = client.patch(
         f"/api/v1/chapters/{chapter['id']}", headers=auth_headers, json={"exempted_character_names": ["赵一"]}
@@ -426,7 +425,7 @@ def test_health_reports_current_version(client, auth_headers):
     from app.main import APP_VERSION
 
     assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == APP_VERSION
-    assert APP_VERSION == "2.1.1"
+    assert APP_VERSION == "2.2.0"
 
 
 # --- B8 migration from the production revision --------------------------------

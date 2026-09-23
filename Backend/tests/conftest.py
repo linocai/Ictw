@@ -52,7 +52,10 @@ class FakeSelector:
 
 class FakeChecker:
     def complete_json(self, **kwargs):
-        return {"verdict": "passed", "issues": []}
+        # Every real Checker response must classify every program-supplied
+        # name hit. The shared default fixture only writes neutral prose, so
+        # its valid strict-protocol response has no such hits.
+        return {"verdict": "passed", "issues": [], "name_uses": []}
 
 
 class FakeInspirationCreator:

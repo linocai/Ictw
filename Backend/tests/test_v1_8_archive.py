@@ -676,12 +676,21 @@ def test_editing_accepted_body_stales_v2_and_manual_retry_creates_new_revision(
         headers=auth_headers,
         json={"draft_text": before["draft_text"] + "他继续等待。"},
     ).json()
-    assert patched["status"] == "finalized"
+    # Editing accepted prose is an implicit reopen: the archive becomes stale
+    # and the changed manuscript cannot reuse the finalized/checker bypass.
+    assert patched["status"] == "draft_ready"
     assert patched["archive"]["status"] == "stale"
     assert patched["archive"]["schema"] == "none"
 
     retried = client.post(f"/api/v1/chapters/{chapter['id']}/archive/retry", headers=auth_headers)
-    assert retried.status_code == 200
+    assert retried.status_code == 409
+    assert retried.json()["detail"]["code"] == "chapter_not_finalized"
+    assert client.post(f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers).status_code == 200
+    accepted = client.post(
+        f"/api/v1/chapters/{chapter['id']}/accept", headers=auth_headers,
+        json={"allow_short_draft": True},
+    )
+    assert accepted.status_code == 200
     assert wait_for_terminal(client, chapter["id"], auth_headers)["phase"] == "done"
     after = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert after["archive"]["revision_id"] != first_revision
@@ -811,12 +820,13 @@ def test_identical_state_deltas_collapse_after_reference_validation(slot, operat
         validate_archive_output(chapter, output)
     repeated['fact_ref'] = 'F1'
     repeated.update(operation='set', value='另一状态')
-    with pytest.raises(ArchiveV2ValidationError, match='conflicting state delta slot'):
-        validate_archive_output(chapter, output)
+    conflicted = validate_archive_output(chapter, output)
+    assert len(conflicted.deltas) == 0
+    assert conflicted.state_uncertainties[0].payload["slot"] == slot
+    assert conflicted.state_uncertainties[0].payload["code"] == "state_slot_uncertain"
     repeated.update(operation='clear' if operation == 'set' else 'set',
                     value=None if operation == 'set' else '平静')
-    with pytest.raises(ArchiveV2ValidationError, match='conflicting state delta slot'):
-        validate_archive_output(chapter, output)
+    assert len(validate_archive_output(chapter, output).state_uncertainties) == 1
 
 
 @pytest.mark.parametrize('conflicting', [False, True])
@@ -842,10 +852,11 @@ def test_repeated_state_archive_activation_or_visible_conflict(client, auth_head
     assert current['status'] == 'finalized'
     assert current['draft_text'] == '林夕在门边停下。随后，他安静等待。'
     if conflicting:
-        assert terminal['phase'] == 'failed'
-        assert '互相冲突' in terminal['error_message']
-        assert '互相冲突' in current['archive']['error_message']
+        assert terminal['phase'] == 'done'
         assert current['archive']['status'] == 'partial'
+        assert current['archive']['effective_status'] == 'with_state_gaps'
+        assert current['archive']['state_uncertainties'][0]['slot'] == '当前位置'
+        assert current['archive']['state_delta_count'] == 2
     else:
         assert terminal['phase'] == 'done'
         assert current['archive']['status'] == 'complete'

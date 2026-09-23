@@ -482,6 +482,7 @@ private struct V2MacEvidenceFace: View {
             case .current(let verdict, let issues):
                 V2MacEvidenceHeadline(verdict: verdict, stale: false)
                 V2MacEvidenceCards(issues: issues, stale: false)
+                checkerContextLimitations
             case .stale(let verdict, let issues, _):
                 HStack(spacing: 8) {
                     V2MacDeskStripeBackground().frame(width: 24, height: 24).clipShape(RoundedRectangle(cornerRadius: 4))
@@ -492,6 +493,76 @@ private struct V2MacEvidenceFace: View {
                 V2MacEvidenceHeadline(verdict: verdict, stale: true)
                 V2MacEvidenceCards(issues: issues, stale: true)
             }
+            nameClarification
+        }
+    }
+
+    @ViewBuilder private var checkerContextLimitations: some View {
+        let limitations = editor.checkerResult?.contextLimitations ?? []
+        if !limitations.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("本次检查仅依据已提供的资料")
+                    .font(V2DeskType.control(11.5, weight: .medium))
+                ForEach(limitations) { item in
+                    Text("第 \(item.index) 章：\(item.reason)")
+                        .font(V2DeskType.control(11.5))
+                        .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                }
+            }
+            .padding(9)
+            .background(V2DeskPalette.color(.rail, scheme: colorScheme))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    @ViewBuilder private var nameClarification: some View {
+        let issues = editor.visibleIdentityIssues
+        if !issues.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("请澄清姓名")
+                    .font(V2DeskType.control(12.5, weight: .medium))
+                Text("请明确选择出场人物，或标为本章普通词豁免。保存失败会保留当前选择。")
+                    .font(V2DeskType.control(11.5))
+                    .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                ForEach(issues) { issue in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(issue.name).font(V2DeskType.control(12, weight: .medium))
+                        if issue.candidates.isEmpty {
+                            Text("请到「本章意图」选择出场人物，或将它标为普通词。")
+                                .font(V2DeskType.control(11.5))
+                                .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                        } else {
+                            ForEach(issue.candidates) { candidate in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(candidate.name).font(V2DeskType.control(11.5, weight: .medium))
+                                    if !candidate.role.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text(candidate.role).font(V2DeskType.control(11))
+                                            .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                                    }
+                                    if !candidate.fixedProfile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text(candidate.fixedProfile).lineLimit(2).font(V2DeskType.control(11))
+                                            .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                                    }
+                                    Button("选为这位人物") {
+                                        Task { _ = await editor.saveNameClarification(selectedCharacterIDs: [candidate.characterId]) }
+                                    }
+                                    .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                                }
+                                .padding(7)
+                                .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                            }
+                        }
+                        Button("标为普通词") {
+                            Task { _ = await editor.saveNameClarification(exemptedNames: [issue.name]) }
+                        }
+                        .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
+                    }
+                }
+            }
+            .padding(10)
+            .background(V2DeskPalette.color(.rail, scheme: colorScheme))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
     }
 }
@@ -518,8 +589,17 @@ private struct V2MacEvidenceCards: View {
             ForEach(issues) { issue in
                 VStack(alignment: .leading, spacing: 7) {
                     Text(issue.kind).font(V2DeskType.control(10.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
-                    Text(issue.draftEvidence).font(V2DeskType.prose(12)).foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme))
+                    if !issue.draftEvidence.isEmpty {
+                        Text(issue.draftEvidence).font(V2DeskType.prose(12)).foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme))
+                    }
                     if !issue.bibleEvidence.isEmpty { Text(issue.bibleEvidence).font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme)) }
+                    if let label = CheckerEvidenceSourcePresentation.label(for: issue.sourceKind),
+                       !issue.sourceEvidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !(issue.sourceKind == "bible" && issue.sourceEvidence == issue.bibleEvidence) {
+                        Text("\(label)：\(issue.sourceEvidence)")
+                            .font(V2DeskType.control(11.5))
+                            .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                    }
                     Text(issue.reason).font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
                 }
                 .padding(11)
@@ -541,9 +621,20 @@ private struct V2MacArchiveFace: View {
                 case "pending", "extracting":
                     HStack(spacing: 8) { V2DeskStatusMark(marker: V2DeskMarker(kind: .solidDot, tone: .accent), diameter: 7); Text("正在整理这一章的记忆") }
                         .font(V2DeskType.control(12.5)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
-                case "complete":
+                case "complete" where archive.hasUsableMemory || archive.effectiveStatus == "none":
                     if !archive.summary.isEmpty { V2MacArchiveCard(text: archive.summary, label: "章节摘要") }
                     ForEach(archive.facts) { fact in V2MacArchiveCard(text: fact.text, label: "关键事实 · 第 \(editor.currentChapter?.index ?? 0) 章") }
+                    if let detail = archive.attentionSummary,
+                       archive.effectiveStatus == "with_state_gaps" || archive.latestAttempt?.status == "failed" || archive.latestAttemptStatus == "failed" {
+                        V2MacArchiveAttentionDetails(archive: archive, summary: detail)
+                    }
+                case "partial" where archive.hasUsableMemory:
+                    if !archive.summary.isEmpty { V2MacArchiveCard(text: archive.summary, label: "章节摘要") }
+                    ForEach(archive.facts) { fact in V2MacArchiveCard(text: fact.text, label: "关键事实 · 第 \(editor.currentChapter?.index ?? 0) 章") }
+                    V2MacArchiveAttentionDetails(
+                        archive: archive,
+                        summary: archive.attentionSummary ?? "摘要与事实仍可用；部分人物状态待整理。"
+                    )
                 default:
                     VStack(alignment: .leading, spacing: 9) {
                         V2MacDeskStripeBackground().frame(height: 28).clipShape(RoundedRectangle(cornerRadius: 5))
@@ -557,6 +648,65 @@ private struct V2MacArchiveFace: View {
                     .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
             }
         }
+    }
+}
+
+private struct V2MacArchiveAttentionDetails: View {
+    let archive: ChapterArchive
+    let summary: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("记忆可用，仍有待整理项")
+                .font(V2DeskType.control(12, weight: .medium))
+            Text(summary)
+                .font(V2DeskType.control(11.5))
+                .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+            if !archive.attentionDiagnostics.isEmpty || archive.latestAttempt?.status == "failed" || archive.latestAttemptStatus == "failed" {
+                DisclosureGroup("查看待整理详情") {
+                    VStack(alignment: .leading, spacing: 9) {
+                        ForEach(archive.attentionDiagnostics) { item in
+                            DisclosureGroup(ArchiveDiagnosticPresentation.title(for: item)) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.message)
+                                    ForEach(Array(item.variants.enumerated()), id: \.offset) { _, variant in
+                                        Text(ArchiveDiagnosticPresentation.variantLabel(variant))
+                                    }
+                                    Text("恢复：\(item.recovery)")
+                                }
+                                .font(V2DeskType.control(11.5))
+                                .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                                .padding(.top, 3)
+                            }
+                            .font(V2DeskType.control(11.5, weight: .medium))
+                        }
+                        if archive.latestAttempt?.status == "failed" || archive.latestAttemptStatus == "failed" {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("最近一次整理没有完成")
+                                    .font(V2DeskType.control(11.5, weight: .medium))
+                                if let message = archive.latestAttempt?.errorMessage,
+                                   !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Text("原因：\(message)")
+                                }
+                                if let code = archive.latestAttempt?.errorCode,
+                                   !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Text("错误代码：\(code)")
+                                }
+                                Text("恢复：\(archive.recoverySuggestion)")
+                            }
+                            .font(V2DeskType.control(11.5))
+                            .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(V2DeskType.control(11.5, weight: .medium))
+            }
+        }
+        .padding(10)
+        .background(V2DeskPalette.color(.rail, scheme: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

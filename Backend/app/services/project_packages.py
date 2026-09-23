@@ -30,14 +30,24 @@ from app.models import (
     Character,
     LLMProfile,
 )
-from app.services.archive_v2 import archive_health_summaries, archive_input_fingerprint
-from app.services.character_state_projection import rebuild_book_projection
+from app.services.archive_v2 import (
+    ARCHIVE_CONTRACT_VERSION,
+    LEGACY_ARCHIVE_CONTRACT_VERSION,
+    MAX_STATE_DELTAS,
+    archive_health_summaries,
+    archive_input_fingerprint,
+    canonicalize_archive_diagnostics,
+    is_whole_state_placeholder,
+    segment_source,
+)
+from app.services.character_state_projection import PERSISTENT_SLOTS, SNAPSHOT_SLOTS, rebuild_book_projection
+from app.services.context import normalize_text
 from app.services.personas import AGENT_ROLES
 from app.services.search_index import rebuild_book_search_index
 
 
 PROJECT_MEDIA_TYPE = "application/vnd.ictw.project+zip"
-PROJECT_FORMAT_VERSION = 1
+PROJECT_FORMAT_VERSION = 2
 PROJECT_ENTRY_NAMES = (
     "book.json",
     "characters.json",
@@ -110,6 +120,155 @@ def _safe_json(value: object, *, field: str) -> object:
         raise ProjectPackageError(f"invalid {field}") from exc
 
 
+_ARCHIVE_ISSUE_KEYS = {
+    "code", "severity", "character_id", "character_name", "other_character_id",
+    "other_character_name", "scope", "slot", "fact_refs", "span_ids", "variants",
+    "message", "recovery",
+}
+_LEGACY_FORBIDDEN_STATE_VALUES = ("未知", "未明确", "不明确", "暂无", "无从得知", "待定")
+
+
+def _canonical_archive_fact_key(
+    *,
+    fact_type: str,
+    text: str,
+    participant_ids: list[str],
+) -> tuple[str, str, tuple[str, ...]]:
+    return (
+        fact_type,
+        "".join(character for character in normalize_text(text).casefold() if character.isalnum()),
+        tuple(sorted(participant_ids)),
+    )
+
+
+def _validate_archive_delta_value(
+    value: object,
+    *,
+    operation: str,
+    contract_version: str,
+) -> None:
+    if operation == "clear":
+        if value is not None:
+            raise ProjectPackageError("clear delta must not have a value")
+        return
+    rendered = _string(value, field="delta value", maximum=300, allow_empty=False)
+    if contract_version == LEGACY_ARCHIVE_CONTRACT_VERSION:
+        if any(token in rendered for token in _LEGACY_FORBIDDEN_STATE_VALUES):
+            raise ProjectPackageError("archive delta value cannot be unknown or a placeholder")
+    elif is_whole_state_placeholder(rendered):
+        raise ProjectPackageError("archive delta value cannot be unknown or a placeholder")
+
+
+def _validate_archive_issues(
+    value: object,
+    *,
+    field: str,
+    character_ids: set[str],
+    character_names: dict[str, str],
+    fact_refs: set[str],
+    span_ids: set[str],
+    require_state_identity: bool,
+) -> None:
+    rows = _list(value, field=field)
+    if len(rows) > MAX_STATE_DELTAS:
+        raise ProjectPackageError(f"too many {field}")
+    for item in rows:
+        row = _mapping(item, field=field)
+        if not {"code", "severity", "message", "recovery"}.issubset(row) or not set(row).issubset(_ARCHIVE_ISSUE_KEYS):
+            raise ProjectPackageError(f"invalid {field} fields")
+        for key, maximum in (("code", 64), ("severity", 16), ("message", 500), ("recovery", 300)):
+            _string(row[key], field=f"{field} {key}", maximum=maximum, allow_empty=False)
+        if require_state_identity and not {"character_id", "character_name", "scope", "slot"}.issubset(row):
+            raise ProjectPackageError(f"invalid {field} state identity")
+        if require_state_identity and (
+            row["code"] != "state_slot_uncertain" or row["severity"] != "warning"
+        ):
+            raise ProjectPackageError(f"invalid {field} state uncertainty")
+        if require_state_identity and (
+            not isinstance(row.get("character_id"), str)
+            or row["character_id"] not in character_ids
+        ):
+            raise ProjectPackageError(f"{field} references an unselected character")
+        for key, maximum in (("character_id", 200), ("other_character_id", 200)):
+            if key in row and row[key] is not None:
+                identifier = _string(row[key], field=f"{field} {key}", maximum=maximum, allow_empty=False)
+                if identifier not in character_ids:
+                    raise ProjectPackageError(f"{field} references unknown character")
+        for id_key, name_key in (("character_id", "character_name"), ("other_character_id", "other_character_name")):
+            if name_key in row and row[name_key] is not None:
+                _string(row[name_key], field=f"{field} {name_key}", maximum=120, allow_empty=False)
+        if "scope" in row:
+            if (
+                not isinstance(row["scope"], str)
+                or row["scope"] not in {"snapshot", "persistent", "relationship"}
+                or "slot" not in row
+            ):
+                raise ProjectPackageError(f"invalid {field} scope")
+            _string(row["slot"], field=f"{field} slot", maximum=64, allow_empty=False)
+            character_id, other_id = row.get("character_id"), row.get("other_character_id")
+            if row["scope"] == "snapshot" and (other_id is not None or row["slot"] not in {"当前位置", "当前行动", "情绪状态"}):
+                raise ProjectPackageError(f"invalid {field} snapshot identity")
+            if row["scope"] == "persistent" and (other_id is not None or row["slot"] not in {"身体状态", "当前目标", "秘密状态"}):
+                raise ProjectPackageError(f"invalid {field} persistent identity")
+            if row["scope"] == "relationship" and (
+                not isinstance(other_id, str)
+                or other_id not in character_ids
+                or other_id == character_id
+                or row["slot"] != "relationship"
+            ):
+                raise ProjectPackageError(f"invalid {field} relationship identity")
+        refs = _list(row.get("fact_refs", []), field=f"{field} fact refs")
+        spans = _list(row.get("span_ids", []), field=f"{field} span ids")
+        if len(refs) > 8 or len(spans) > 16:
+            raise ProjectPackageError(f"too many {field} references")
+        if any(_string(ref, field=f"{field} fact ref", maximum=16, allow_empty=False) not in fact_refs for ref in refs):
+            raise ProjectPackageError(f"{field} references unknown fact")
+        if any(_string(span, field=f"{field} span id", maximum=16, allow_empty=False) not in span_ids for span in spans):
+            raise ProjectPackageError(f"{field} references unknown source span")
+        variants = _list(row.get("variants", []), field=f"{field} variants")
+        if len(variants) > 4:
+            raise ProjectPackageError(f"too many {field} variants")
+        for variant in variants:
+            item_row = _mapping(variant, field=f"{field} variant", exact_keys={"operation", "value"})
+            if not isinstance(item_row["operation"], str) or item_row["operation"] not in {"set", "clear"}:
+                raise ProjectPackageError(f"invalid {field} variant")
+            if item_row["value"] is not None:
+                _string(item_row["value"], field=f"{field} variant value", maximum=300, allow_empty=False)
+
+
+def _canonical_archive_issue_names(
+    value: object,
+    *,
+    character_names: dict[str, str],
+) -> object:
+    """Keep portable diagnostic display names aligned with durable IDs."""
+    rows = _safe_json(value, field="archive issues")
+    if not isinstance(rows, list):
+        raise ProjectPackageError("invalid archive issues")
+    if len(rows) > MAX_STATE_DELTAS:
+        raise ProjectPackageError("too many archive issues")
+    return canonicalize_archive_diagnostics(rows, character_names=character_names)
+
+
+def _remap_archive_issue(
+    item: dict[str, Any],
+    *,
+    character_ids: dict[str, str],
+    characters_by_id: dict[str, Character],
+) -> dict[str, Any]:
+    result = dict(item)
+    for id_key, name_key in (("character_id", "character_name"), ("other_character_id", "other_character_name")):
+        source_id = result.get(id_key)
+        if source_id is None:
+            result[id_key] = None
+            result[name_key] = None
+            continue
+        target_id = character_ids[source_id]
+        result[id_key] = target_id
+        result[name_key] = characters_by_id[target_id].name
+    return result
+
+
 def _package_entries(db: Session, book: Book) -> dict[str, bytes]:
     chapters = db.scalars(
         select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.index, Chapter.id)
@@ -117,6 +276,7 @@ def _package_entries(db: Session, book: Book) -> dict[str, bytes]:
     characters = db.scalars(
         select(Character).where(Character.book_id == book.id).order_by(Character.created_at, Character.id)
     ).all()
+    character_names = {character.id: character.name for character in characters}
     links_by_chapter: dict[str, list[str]] = {}
     chapter_ids = [chapter.id for chapter in chapters]
     if chapter_ids:
@@ -190,9 +350,18 @@ def _package_entries(db: Session, book: Book) -> dict[str, bytes]:
             for fact in facts_by_revision.get(revision.id, [])
         ]
         fact_positions = {fact.id: position for position, fact in enumerate(facts_by_revision.get(revision.id, []), start=1)}
+        state_uncertainties = _canonical_archive_issue_names(
+            getattr(revision, "state_uncertainties", []), character_names=character_names
+        )
+        diagnostics = _canonical_archive_issue_names(
+            getattr(revision, "diagnostics", []), character_names=character_names
+        )
+        if len(deltas_by_revision.get(revision.id, [])) + len(state_uncertainties) > MAX_STATE_DELTAS:
+            raise ProjectPackageError("archive state events exceed limit")
         archives.append(
             {
                 "chapter_id": chapter.id,
+                "contract_version": revision.contract_version,
                 "summary": revision.summary,
                 "facts": facts,
                 "deltas": [
@@ -209,6 +378,10 @@ def _package_entries(db: Session, book: Book) -> dict[str, bytes]:
                     }
                     for delta in deltas_by_revision.get(revision.id, [])
                 ],
+                # Only active, controlled diagnostics travel with the backup.
+                # Failed attempts and model raw output remain local-only.
+                "state_uncertainties": state_uncertainties,
+                "diagnostics": diagnostics,
             }
         )
 
@@ -328,7 +501,12 @@ def _read_project_package(payload: bytes) -> dict[str, Any]:
         field="manifest",
         exact_keys={"format", "format_version", "created_at", "entries"},
     )
-    if manifest["format"] != "ictwbook" or manifest["format_version"] != PROJECT_FORMAT_VERSION:
+    if (
+        manifest["format"] != "ictwbook"
+        or not isinstance(manifest["format_version"], int)
+        or isinstance(manifest["format_version"], bool)
+        or manifest["format_version"] not in {1, PROJECT_FORMAT_VERSION}
+    ):
         raise ProjectPackageError("unsupported project package format")
     _string(manifest["created_at"], field="manifest creation time", maximum=100, allow_empty=False)
     entries = _mapping(manifest["entries"], field="manifest entries")
@@ -341,10 +519,18 @@ def _read_project_package(payload: bytes) -> dict[str, Any]:
         if metadata["sha256"] != hashlib.sha256(raw).hexdigest() or metadata["size"] != len(raw):
             raise ProjectPackageError(f"project package integrity check failed for {name}")
         decoded[name] = _json_load(raw, entry_name=name)
+    decoded["_format_version"] = manifest["format_version"]
     return decoded
 
 
 def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
+    package_format = decoded.get("_format_version")
+    if (
+        not isinstance(package_format, int)
+        or isinstance(package_format, bool)
+        or package_format not in {1, PROJECT_FORMAT_VERSION}
+    ):
+        raise ProjectPackageError("unsupported project package format")
     book = _mapping(decoded["book.json"], field="book", exact_keys={"title", "world_setting"})
     _string(book["title"], field="book title", maximum=10_000, allow_empty=False)
     _string(book["world_setting"], field="world setting", maximum=200_000)
@@ -356,17 +542,19 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
     if any(len(rows) > 20_000 for rows in (characters, chapters, archives)):
         raise ProjectPackageError("project package has too many records")
     character_ids: set[str] = set()
+    character_names: dict[str, str] = {}
     for item in characters:
         row = _mapping(item, field="character", exact_keys={"id", "name", "role", "fixed_profile"})
         source_id = _string(row["id"], field="character id", maximum=200, allow_empty=False)
         if source_id in character_ids:
             raise ProjectPackageError("duplicate character id")
         character_ids.add(source_id)
-        _string(row["name"], field="character name", maximum=10_000, allow_empty=False)
+        character_names[source_id] = _string(row["name"], field="character name", maximum=10_000, allow_empty=False)
         _string(row["role"], field="character role", maximum=10_000)
         _string(row["fixed_profile"], field="character fixed profile", maximum=200_000)
     chapter_ids: set[str] = set()
     chapter_indexes: set[int] = set()
+    chapters_by_source: dict[str, dict[str, Any]] = {}
     for item in chapters:
         row = _mapping(
             item,
@@ -383,6 +571,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
             raise ProjectPackageError("duplicate chapter id or index")
         chapter_ids.add(source_id)
         chapter_indexes.add(index)
+        chapters_by_source[source_id] = row
         for name in ("title", "user_prompt", "author_note", "draft_text", "headline", "long_summary", "status", "source"):
             _string(row[name], field=f"chapter {name}")
         _int(row["target_word_count"], field="target word count", minimum=1)
@@ -425,17 +614,35 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
             raise ProjectPackageError("invalid model binding temperature")
     archive_chapters: set[str] = set()
     for item in archives:
-        row = _mapping(item, field="archive", exact_keys={"chapter_id", "summary", "facts", "deltas"})
+        archive_keys = {"chapter_id", "summary", "facts", "deltas"}
+        if package_format == PROJECT_FORMAT_VERSION:
+            archive_keys |= {"contract_version", "state_uncertainties", "diagnostics"}
+        row = _mapping(item, field="archive", exact_keys=archive_keys)
         chapter_id = _string(row["chapter_id"], field="archive chapter", maximum=200, allow_empty=False)
         if chapter_id not in chapter_ids or chapter_id in archive_chapters:
             raise ProjectPackageError("duplicate or unknown archive chapter")
         archive_chapters.add(chapter_id)
+        contract_version = LEGACY_ARCHIVE_CONTRACT_VERSION
+        if package_format == PROJECT_FORMAT_VERSION:
+            contract_version = _string(
+                row["contract_version"], field="archive contract version", maximum=32, allow_empty=False
+            )
+            if contract_version not in {LEGACY_ARCHIVE_CONTRACT_VERSION, ARCHIVE_CONTRACT_VERSION}:
+                raise ProjectPackageError("unsupported archive contract version")
+            if contract_version == LEGACY_ARCHIVE_CONTRACT_VERSION and (
+                row["state_uncertainties"] or row["diagnostics"]
+            ):
+                raise ProjectPackageError("legacy archive contract cannot carry state uncertainties")
         _string(row["summary"], field="archive summary", maximum=4_000, allow_empty=False)
         facts = _list(row["facts"], field="archive facts")
         if len(facts) > 8:
             raise ProjectPackageError("archive has too many facts")
         fact_refs: set[str] = set()
         fact_participants: list[set[str]] = []
+        canonical_facts: set[tuple[str, str, tuple[str, ...]]] = set()
+        selected_character_ids = set(chapters_by_source[chapter_id]["character_ids"])
+        chapter_spans = segment_source(chapters_by_source[chapter_id]["draft_text"])
+        span_order = {span.id: span.ordinal for span in chapter_spans}
         for fact in facts:
             fact_row = _mapping(
                 fact,
@@ -446,21 +653,39 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
             if fact_ref in fact_refs:
                 raise ProjectPackageError("duplicate archive fact ref")
             fact_refs.add(fact_ref)
-            if fact_row["type"] not in {"剧情", "决定", "关系", "认知", "未决", "状态"}:
+            if not isinstance(fact_row["type"], str) or fact_row["type"] not in {"剧情", "决定", "关系", "认知", "未决", "状态"}:
                 raise ProjectPackageError("invalid archive fact type")
             _int(fact_row["importance"], field="fact importance", minimum=1)
             if fact_row["importance"] > 3:
                 raise ProjectPackageError("invalid archive fact importance")
             for field_name in ("text", "start_id", "end_id"):
                 _string(fact_row[field_name], field=f"fact {field_name}", maximum=500, allow_empty=False)
+            if fact_row["start_id"] not in span_order or fact_row["end_id"] not in span_order:
+                raise ProjectPackageError("archive fact references unknown source span")
+            if span_order[fact_row["end_id"]] < span_order[fact_row["start_id"]]:
+                raise ProjectPackageError("archive fact source span is reversed")
             participants = _list(fact_row["participant_ids"], field="fact participants")
-            if len(participants) > 4 or len(set(participants)) != len(participants) or any(pid not in character_ids for pid in participants):
-                raise ProjectPackageError("archive fact references unknown participants")
+            if (
+                len(participants) > 4
+                or any(not isinstance(pid, str) for pid in participants)
+                or len(set(participants)) != len(participants)
+                or any(pid not in selected_character_ids for pid in participants)
+            ):
+                raise ProjectPackageError("archive fact references an unselected participant")
+            if fact_row["type"] == "关系" and len(participants) != 2:
+                raise ProjectPackageError("relationship archive fact must have exactly two participants")
+            canonical_key = _canonical_archive_fact_key(
+                fact_type=fact_row["type"], text=fact_row["text"], participant_ids=participants
+            )
+            if canonical_key in canonical_facts:
+                raise ProjectPackageError("duplicate canonical archive fact")
+            canonical_facts.add(canonical_key)
             fact_participants.append(set(participants))
         deltas = _list(row["deltas"], field="archive deltas")
-        if len(deltas) > 18:
+        if len(deltas) > MAX_STATE_DELTAS:
             raise ProjectPackageError("archive has too many state deltas")
         delta_positions: set[int] = set()
+        delta_slot_keys: set[tuple[str, str, str, str | None]] = set()
         for delta in deltas:
             delta_row = _mapping(
                 delta,
@@ -474,35 +699,50 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
             if position in delta_positions:
                 raise ProjectPackageError("duplicate archive delta position")
             delta_positions.add(position)
-            if delta_row["character_id"] not in character_ids:
-                raise ProjectPackageError("archive delta references unknown character")
-            if delta_row["other_character_id"] is not None and delta_row["other_character_id"] not in character_ids:
-                raise ProjectPackageError("archive delta references unknown related character")
-            if delta_row["scope"] not in {"snapshot", "persistent", "relationship"} or delta_row["operation"] not in {"set", "clear"}:
+            if (
+                not isinstance(delta_row["character_id"], str)
+                or delta_row["character_id"] not in selected_character_ids
+            ):
+                raise ProjectPackageError("archive delta references an unselected character")
+            if (
+                delta_row["other_character_id"] is not None
+                and (
+                    not isinstance(delta_row["other_character_id"], str)
+                    or delta_row["other_character_id"] not in selected_character_ids
+                )
+            ):
+                raise ProjectPackageError("archive delta references an unselected related character")
+            if (
+                not isinstance(delta_row["scope"], str)
+                or delta_row["scope"] not in {"snapshot", "persistent", "relationship"}
+                or not isinstance(delta_row["operation"], str)
+                or delta_row["operation"] not in {"set", "clear"}
+            ):
                 raise ProjectPackageError("invalid archive delta")
             _string(delta_row["slot"], field="delta slot", maximum=64, allow_empty=False)
             _string(delta_row["batch_id"], field="delta batch id", maximum=64)
-            if delta_row["operation"] == "set":
-                _string(delta_row["value"], field="delta value", maximum=300, allow_empty=False)
-            elif delta_row["value"] is not None:
-                raise ProjectPackageError("clear delta must not have a value")
+            _validate_archive_delta_value(
+                delta_row["value"], operation=delta_row["operation"], contract_version=contract_version
+            )
             participants = fact_participants[delta_row["fact_position"] - 1]
             if delta_row["character_id"] not in participants:
                 raise ProjectPackageError("archive delta owner must participate in its fact")
             if delta_row["scope"] == "snapshot":
                 if (
                     delta_row["other_character_id"] is not None
-                    or delta_row["slot"] not in {"当前位置", "当前行动", "情绪状态"}
+                    or delta_row["slot"] not in SNAPSHOT_SLOTS
                     or not delta_row["batch_id"]
                 ):
                     raise ProjectPackageError("invalid snapshot archive delta")
+                slot_key = (delta_row["character_id"], "snapshot", delta_row["slot"], None)
             elif delta_row["scope"] == "persistent":
                 if (
                     delta_row["other_character_id"] is not None
-                    or delta_row["slot"] not in {"身体状态", "当前目标", "秘密状态"}
+                    or delta_row["slot"] not in PERSISTENT_SLOTS
                     or delta_row["batch_id"]
                 ):
                     raise ProjectPackageError("invalid persistent archive delta")
+                slot_key = (delta_row["character_id"], "persistent", delta_row["slot"], None)
             else:
                 if (
                     delta_row["other_character_id"] is None
@@ -513,7 +753,34 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
                     or delta_row["batch_id"]
                 ):
                     raise ProjectPackageError("invalid relationship archive delta")
+                left, right = sorted((delta_row["character_id"], delta_row["other_character_id"]))
+                slot_key = (left, "relationship", "relationship", right)
+            if slot_key in delta_slot_keys:
+                raise ProjectPackageError("duplicate archive state delta slot")
+            delta_slot_keys.add(slot_key)
+        if package_format == PROJECT_FORMAT_VERSION:
+            _validate_archive_issues(
+                row["state_uncertainties"],
+                field="archive state uncertainties",
+                character_ids=selected_character_ids,
+                character_names=character_names,
+                fact_refs=fact_refs,
+                span_ids=set(span_order),
+                require_state_identity=True,
+            )
+            _validate_archive_issues(
+                row["diagnostics"],
+                field="archive diagnostics",
+                character_ids=selected_character_ids,
+                character_names=character_names,
+                fact_refs=fact_refs,
+                span_ids=set(span_order),
+                require_state_identity=False,
+            )
+            if len(deltas) + len(row["state_uncertainties"]) > MAX_STATE_DELTAS:
+                raise ProjectPackageError("archive state events exceed limit")
     return {
+        "package_format": package_format,
         "book": book,
         "characters": characters,
         "chapters": chapters,
@@ -540,6 +807,7 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
         db.add(book)
         db.flush()
         character_ids: dict[str, str] = {}
+        characters_by_id: dict[str, Character] = {}
         for item in records["characters"]:
             character = Character(
                 book_id=book.id,
@@ -550,6 +818,7 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
             db.add(character)
             db.flush()
             character_ids[item["id"]] = character.id
+            characters_by_id[character.id] = character
         chapters_by_source: dict[str, Chapter] = {}
         for item in sorted(records["chapters"], key=lambda row: row["index"]):
             status = "finalized" if item["status"] == "finalized" else "draft_ready"
@@ -611,6 +880,30 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
             chapter = chapters_by_source[item["chapter_id"]]
             if chapter.status != "finalized":
                 raise ProjectPackageError("only finalized chapters may carry an active archive")
+            target_character_names = {
+                character_id: character.name for character_id, character in characters_by_id.items()
+            }
+            remapped_uncertainties = []
+            remapped_diagnostics = []
+            if records["package_format"] == PROJECT_FORMAT_VERSION:
+                remapped_uncertainties = canonicalize_archive_diagnostics(
+                    [
+                        _remap_archive_issue(
+                            issue, character_ids=character_ids, characters_by_id=characters_by_id
+                        )
+                        for issue in item["state_uncertainties"]
+                    ],
+                    character_names=target_character_names,
+                )
+                remapped_diagnostics = canonicalize_archive_diagnostics(
+                    [
+                        _remap_archive_issue(
+                            issue, character_ids=character_ids, characters_by_id=characters_by_id
+                        )
+                        for issue in item["diagnostics"]
+                    ],
+                    character_names=target_character_names,
+                )
             revision = ChapterArchiveRevision(
                 chapter_id=chapter.id,
                 revision=1,
@@ -620,6 +913,13 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
                 is_active=True,
                 summary=item["summary"],
                 model_name=None,
+                contract_version=(
+                    item["contract_version"]
+                    if records["package_format"] == PROJECT_FORMAT_VERSION
+                    else LEGACY_ARCHIVE_CONTRACT_VERSION
+                ),
+                state_uncertainties=remapped_uncertainties,
+                diagnostics=remapped_diagnostics,
             )
             db.add(revision)
             db.flush()
@@ -667,7 +967,7 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
                     )
                 )
             chapter.active_archive_revision_id = revision.id
-            chapter.archive_status = "complete"
+            chapter.archive_status = "partial" if revision.state_uncertainties else "complete"
         db.flush()
         # Recompute fingerprints in story order after every ID has changed.
         # Each earlier archive is already active when the next chapter's prior
@@ -678,7 +978,9 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
             revision = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id)
             if revision is None:
                 raise ProjectPackageError("imported archive revision is missing")
-            fingerprint = archive_input_fingerprint(chapter)
+            fingerprint = archive_input_fingerprint(
+                chapter, contract_version=revision.contract_version
+            )
             revision.input_fingerprint = fingerprint
             chapter.archive_input_fingerprint = fingerprint
         rebuild_book_projection(db, book.id)

@@ -16,7 +16,7 @@ from app.models import (
     JobRun,
     LLMCallAudit,
 )
-from app.services.archive_v2 import archive_input_fingerprint
+from app.services.archive_v2 import ARCHIVE_CONTRACT_VERSION, archive_input_fingerprint
 from app.services.personas import DEFAULT_PERSONAS, LEGACY_INSPIRATION_PERSONAS, seed_defaults
 
 
@@ -223,7 +223,8 @@ def test_inspiration_uses_one_valid_history_source_per_chapter_and_never_prose(c
             chapter_id=second.id,
             revision=1,
             provenance="live",
-            input_fingerprint=archive_input_fingerprint(second),
+            input_fingerprint=archive_input_fingerprint(second, contract_version=ARCHIVE_CONTRACT_VERSION),
+            contract_version=ARCHIVE_CONTRACT_VERSION,
             status="complete",
             is_active=True,
             summary="ACTIVE-V2-SECOND-SUMMARY",

@@ -669,10 +669,38 @@ struct V2MacWorkspaceDesk: View {
             ))
         }
         .confirmationDialog("仍然接受这一章？", isPresented: $showAcceptWarning, titleVisibility: .visible) {
-            Button("接受这一章", role: .destructive) { accept(overrideChecker: true) }
+            Button("接受这一章", role: .destructive) {
+                accept(
+                    overrideChecker: editor.preflightAcceptanceMessage == nil,
+                    allowShortDraft: editor.preflightAcceptanceMessage != nil
+                )
+            }
             Button("取消", role: .cancel) {}
         } message: {
             Text(editor.preflightAcceptanceMessage ?? "这一章会被记为完成；当前检查提出的问题将不再提醒你。")
+        }
+        .confirmationDialog(
+            "历史资料有待处理项",
+            isPresented: Binding(
+                get: { editor.pendingProductionContext != nil },
+                set: { if !$0 { editor.dismissProductionContextConfirmation() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let recovery = editor.pendingProductionContext?.readiness.recommendedRecovery,
+               let target = workspace.chapters.first(where: { $0.id == recovery.chapterId }) {
+                Button("查看第 \(recovery.index) 章") {
+                    editor.dismissProductionContextConfirmation()
+                    Task { await navigate(to: target) }
+                }
+            }
+            Button("知情继续", role: .destructive) {
+                guard let pending = editor.pendingProductionContext else { return }
+                Task { if let chapter = await editor.confirmProductionContextAndContinue(pending) { workspace.upsert(chapter) } }
+            }
+            Button("返回", role: .cancel) { editor.dismissProductionContextConfirmation() }
+        } message: {
+            Text(productionContextMessage)
         }
         .confirmationDialog(V2DeskRewriteConfirmation.title, isPresented: $showRewriteConfirmation, titleVisibility: .visible) {
             Button("重写", role: .destructive) { rewrite() }
@@ -720,8 +748,18 @@ struct V2MacWorkspaceDesk: View {
             connectionInterrupted: editor.pollingConnectionInterrupted,
             taskMonitoringMessage: editor.taskMonitoringMessage,
             preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
+            canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
             isLastChapterInBook: V2DeskChapterPosition.isLastChapter(editor.currentChapter?.id, in: workspace.chapters)
         ))
+    }
+
+    private var productionContextMessage: String {
+        guard let pending = editor.pendingProductionContext else { return "" }
+        let chapters = pending.readiness.limitations
+            .sorted { $0.index < $1.index }
+            .map { "第 \($0.index) 章：\($0.reason)" }
+            .joined(separator: "\n")
+        return "\(chapters)\n\n这些资料尚不完整。你可以先恢复建议章节，或仅本次知情后继续\(pending.action.title)。"
     }
 
     private func loadBook() async {
@@ -782,6 +820,7 @@ struct V2MacWorkspaceDesk: View {
         case .generate, .retryGeneration: Task { if let chapter = await editor.generate() { workspace.upsert(chapter) } }
         case .cancelGeneration: Task { if let chapter = await editor.cancelWriting() { workspace.upsert(chapter) } }
         case .rerunChecker: Task { _ = await editor.rerunChecker() }
+        case .retryGeneratedCandidateChecker: Task { if let chapter = await editor.retryGeneratedCandidateChecker() { workspace.upsert(chapter) } }
         case .accept: accept(overrideChecker: false)
         case .acceptWithWarning: showAcceptWarning = true
         case .retryArchive: Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
@@ -792,8 +831,12 @@ struct V2MacWorkspaceDesk: View {
         }
     }
 
-    private func accept(overrideChecker: Bool) {
-        Task { if let chapter = await editor.accept(overrideChecker: overrideChecker) { workspace.upsert(chapter) } }
+    private func accept(overrideChecker: Bool, allowShortDraft: Bool = false) {
+        Task {
+            if let chapter = await editor.accept(
+                overrideChecker: overrideChecker, allowShortDraft: allowShortDraft
+            ) { workspace.upsert(chapter) }
+        }
     }
 
     /// Fetches the read-only reopen preview before showing the confirmation
@@ -1044,7 +1087,12 @@ private struct V2MacChapterRailRow: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var archiveRailState: ChapterArchiveRailState {
-        ChapterArchiveRailState.resolve(status: chapter.archiveStatus, canRetry: chapter.archiveCanRetry)
+        ChapterArchiveRailState.resolve(
+            status: chapter.archiveStatus, canRetry: chapter.archiveCanRetry,
+            effectiveStatus: chapter.archiveEffectiveStatus,
+            latestAttemptStatus: chapter.archiveLatestAttemptStatus,
+            stateUncertaintyCount: chapter.archiveStateUncertaintyCount
+        )
     }
 
     private var marker: V2DeskMarker {

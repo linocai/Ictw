@@ -1317,6 +1317,139 @@ private func testV2DeskAcceptedArchiveIsolationAndAttention() throws {
     try expect(preview?.status == "failed" && preview?.factCount == 2, "inactive revision preview must remain display-only metadata")
     try expect(failedArchive.isBodyReadOnly, "archive failure must never reopen accepted prose")
     try expect(failedArchive.primaryAction == .startNewChapter, "archive retry must stay secondary to accepted chapter flow")
+
+    let failedExtractorState = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: accepted,
+        writingPhase: .failed(
+            code: "llm_profile_not_configured",
+            message: "Extractor 尚未配置模型",
+            stage: .extraction
+        )
+    ))
+    try expect(failedExtractorState.chapterState == .accepted && failedExtractorState.isBodyReadOnly, "an Extractor configuration failure must retain the accepted reader state")
+    try expect(failedExtractorState.primaryAction == .startNewChapter, "an Extractor configuration failure must retain accepted chapter actions")
+    try expect(failedExtractorState.taskBanner?.kind == .archiveFailed && failedExtractorState.taskBanner?.action == .retryArchive, "archive failure must remain independently actionable in the banner")
+}
+
+private func testV220ArchiveReadModelKeepsUsableFactsAndUnknownStateVisible() throws {
+    let archiveData = try JSONSerialization.data(withJSONObject: [
+        "status": "partial", "schema": "archive-v2.1", "revision_id": "active-1", "revision": 1,
+        "summary": "可用摘要", "facts": [], "state_delta_count": 2, "can_retry": true,
+        "effective_status": "with_state_gaps", "state_status": "partial",
+        "state_uncertainties": [[
+            "code": "relationship_conflict", "severity": "warning", "scope": "character_state",
+            "slot": "relationship", "character_name": "林夕", "other_character_name": "周衡",
+            "message": "林夕的关系状态暂时无法确定。", "recovery": "重新整理第 1 章。",
+            "fact_refs": ["fact-1"], "span_ids": [], "variants": [
+                ["operation": "set", "value": "同盟"], ["operation": "replace", "value": "对立"],
+            ],
+        ]],
+        "diagnostics": [[
+            "code": "location_conflict", "severity": "warning", "scope": "character_state",
+            "slot": "location", "character_name": "陈默", "message": "陈默的位置记录不一致。",
+            "recovery": "重新整理第 2 章。", "variants": [
+                ["operation": "set", "value": "码头"], ["operation": "replace", "value": "旧城"],
+            ],
+        ]],
+        "latest_attempt": [
+            "revision_id": "retry-2", "revision": 2, "status": "failed",
+            "error_code": "llm_profile_not_configured", "error_message": "Extractor 尚未配置模型", "finished_at": "2026-09-23T10:00:00",
+        ],
+    ])
+    let archive = try JSONDecoder.lino.decode(ChapterArchive.self, from: archiveData)
+    try expect(archive.hasUsableMemory, "archive-v2.1 gaps must retain usable facts")
+    try expect(archive.stateUncertainties.count == 1, "unknown slots must not disappear while decoding")
+    try expect(archive.attentionDiagnostics.count == 2, "all bounded state gaps and diagnostics must remain available, not a fixed preview")
+    try expect(ArchiveDiagnosticPresentation.title(for: archive.attentionDiagnostics[0]) == "林夕与周衡的关系", "state-gap detail must name the people and slot")
+    try expect(ArchiveDiagnosticPresentation.variantLabel(archive.attentionDiagnostics[0].variants[1]).contains("对立"), "state-gap detail must keep conflicting values")
+    try expect(archive.attentionSummary?.contains("部分人物状态待整理") == true, "the author must see a bounded unknown-state explanation")
+    try expect(archive.recoverySuggestion.contains("先修复 Extractor 的模型配置") && archive.attentionSummary?.contains("模型配置需要先处理") == true, "a configuration-failed retry must not direct the author to repeat an unchanged archive request")
+
+    var chapter = try makeChapter(status: "finalized")
+    chapter.archive = archive
+    let snapshot = V2DeskPresentation.make(makeV2DeskSource(chapter: chapter))
+    guard case .usableWithAttention(let facts, let gaps, let detail) = snapshot.archive else {
+        throw TestFailure.assertion("usable memory with a latest failed attempt must not become a failed-only archive")
+    }
+    try expect(facts == 0 && gaps == 1 && detail?.contains("部分人物状态待整理") == true, "dual archive state must carry facts and the precise gap count")
+    try expect(snapshot.taskBanner?.action == .retryArchive, "dual archive state must retain an explicit recovery action")
+
+    // This mirrors the active-old/latest-failed wire: the top-level archive
+    // error is absent, while the actionable explanation lives only in the
+    // nested latest attempt after a cold reload.
+    let activeOldFailureData = try JSONSerialization.data(withJSONObject: [
+        "status": "complete", "schema": "archive-v2.1", "revision_id": "active-1", "revision": 1,
+        "summary": "旧摘要仍可用", "facts": [], "state_delta_count": 1, "can_retry": true,
+        "effective_status": "full", "state_status": "complete", "state_uncertainties": [],
+        "diagnostics": [[
+            "code": "retry_advice", "severity": "warning", "message": "最近一次整理需要重试。",
+            "recovery": "确认后重新整理本章记忆。",
+        ]],
+        "latest_attempt": [
+            "revision_id": "retry-2", "revision": 2, "status": "failed",
+            "error_code": "archive_validation_failed", "error_message": "人物状态无法写入。",
+            "finished_at": "2026-09-23T10:00:00",
+        ],
+    ])
+    let activeOldFailure = try JSONDecoder.lino.decode(ChapterArchive.self, from: activeOldFailureData)
+    let activeOldDetail = activeOldFailure.attentionSummary ?? ""
+    try expect(activeOldFailure.hasUsableMemory, "an active old revision must remain usable after the latest retry fails")
+    try expect(activeOldDetail.contains("旧记忆仍可用") && activeOldDetail.contains("人物状态无法写入") && activeOldDetail.contains("archive_validation_failed") && activeOldDetail.contains("确认后重新整理"), "nested latest-attempt reason, code, and recovery must remain visible without a top-level error")
+
+    let legacyData = try JSONSerialization.data(withJSONObject: [
+        "status": "complete", "schema": "archive-v2.0", "summary": "旧摘要", "facts": [],
+        "state_delta_count": 0, "can_retry": false,
+    ])
+    let legacy = try JSONDecoder.lino.decode(ChapterArchive.self, from: legacyData)
+    try expect(legacy.effectiveStatus == "full" && legacy.stateStatus == "complete", "old cache must safely infer only its historic complete state")
+
+    let summaryData = try JSONSerialization.data(withJSONObject: [
+        "id": "chapter-1", "book_id": "book-1", "index": 1, "title": "第一章", "status": "finalized",
+        "source": "agent", "updated_at": "2026-09-23T10:00:00", "archive_status": "partial",
+        "archive_schema": "archive-v2.1", "archive_can_retry": true,
+        "archive_effective_status": "with_state_gaps", "archive_state_status": "partial",
+        "archive_state_uncertainty_count": 1, "archive_latest_attempt_status": "failed",
+    ])
+    let summary = try JSONDecoder.lino.decode(ChapterSummary.self, from: summaryData)
+    try expect(summary.archiveEffectiveStatus == "with_state_gaps" && summary.archiveStateUncertaintyCount == 1, "rails must retain effective memory and latest attention independently")
+    try expect(
+        ChapterArchiveRailState.resolve(
+            status: "complete", canRetry: true, effectiveStatus: "full",
+            latestAttemptStatus: "failed", stateUncertaintyCount: 0
+        ) == .attention,
+        "an active older archive plus a failed latest attempt must remain visible in the rail"
+    )
+}
+
+private func testV220VisibleCheckerEvidenceAndIdentityDecode() throws {
+    let data = try JSONSerialization.data(withJSONObject: [
+        "verdict": "violation",
+        "issues": [[
+            "kind": "relationship_conflict", "reason": "当前关系与前章记忆不一致。",
+            "draft_evidence": "林夕否认曾经见过他。",
+            "source_kind": "history", "source_id": "internal-history-id", "source_evidence": "第 3 章：二人已经见面。",
+        ]],
+        "identity_issues": [[
+            "kind": "ambiguous_character", "match_id": "same-name-use-1", "name": "林夕",
+            "name_candidates": [
+                ["character_id": "detective", "name": "林夕", "role": "侦探", "fixed_profile": "负责调查旧案"],
+                ["character_id": "reporter", "name": "林夕", "role": "记者", "fixed_profile": "追踪城市传闻"],
+            ],
+        ]],
+    ])
+    let result = try JSONDecoder.lino.decode(CheckerResult.self, from: data)
+    guard let item = result.issues?.map(V2DeskEvidenceItem.init).first else {
+        throw TestFailure.assertion("visible Checker issue must decode")
+    }
+    try expect(item.sourceKind == "history" && item.sourceEvidence.contains("第 3 章"), "current visible Checker evidence must retain its safe source excerpt")
+    try expect(CheckerEvidenceSourcePresentation.label(for: item.sourceKind) == "历史记忆", "source type must use author-facing Chinese copy")
+    try expect(result.identityIssues.first?.matchId == "same-name-use-1" && result.identityIssues.first?.candidates.map(\.characterId) == ["detective", "reporter"], "identity choices must decode exact name_candidates IDs in server order")
+
+    let hiddenCandidate = try JSONDecoder.lino.decode(CheckerResult.self, from: Data(#"{"verdict":"violation","issues":[{"kind":"relation_changed","reason":"候选不符合既有关系"}]}"#.utf8))
+    guard let hiddenItem = hiddenCandidate.issues?.map(V2DeskEvidenceItem.init).first else {
+        throw TestFailure.assertion("reason-only candidate result must remain decodable")
+    }
+    try expect(hiddenItem.draftEvidence.isEmpty && hiddenItem.bibleEvidence.isEmpty && hiddenItem.sourceEvidence.isEmpty && hiddenCandidate.identityIssues.isEmpty, "hidden candidate results must not invent public excerpts, sources, or identity rows")
 }
 
 private func testV2DeskReadingOrderSeparatesNavigationFromCreation() throws {
@@ -1854,6 +1987,8 @@ private struct ClientStateTestRunner {
         try testLengthOnlyPreflightRequiresExplicitAcceptance()
         try testUnknownInterruptedStageDoesNotGuessWriter()
         try testV2DeskAcceptedArchiveIsolationAndAttention()
+        try testV220ArchiveReadModelKeepsUsableFactsAndUnknownStateVisible()
+        try testV220VisibleCheckerEvidenceAndIdentityDecode()
         try testV2DeskReadingOrderSeparatesNavigationFromCreation()
         try testV2DeskLocalSaveConnectionAndModelConfiguration()
         try testV2DeskChapterPositionIsLastChapter()

@@ -46,6 +46,7 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
     case generate
     case cancelGeneration
     case rerunChecker
+    case retryGeneratedCandidateChecker
     case accept
     case acceptWithWarning
     /// This is a deliberate creation command at the end of the book. Reading
@@ -63,6 +64,7 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
         case .generate: "生成这一章"
         case .cancelGeneration: "取消生成"
         case .rerunChecker: "重新复查"
+        case .retryGeneratedCandidateChecker: "重试检查生成稿"
         case .accept: "接受这一章"
         case .acceptWithWarning: "仍然接受"
         case .startNewChapter: "开始新一章"
@@ -164,6 +166,8 @@ struct V2DeskEvidenceItem: Identifiable, Equatable, Sendable {
     let kind: String
     let draftEvidence: String
     let bibleEvidence: String
+    let sourceKind: String
+    let sourceEvidence: String
     let reason: String
 
     init(_ issue: CheckerIssue) {
@@ -171,7 +175,72 @@ struct V2DeskEvidenceItem: Identifiable, Equatable, Sendable {
         kind = issue.kind
         draftEvidence = issue.draftEvidence
         bibleEvidence = issue.bibleEvidence
+        sourceKind = issue.sourceKind
+        sourceEvidence = issue.sourceEvidence
         reason = issue.reason
+    }
+}
+
+/// Converts the public Checker source type into author-facing copy. Source
+/// IDs deliberately have no presentation here: they are wire identifiers,
+/// not evidence an author can act on.
+enum CheckerEvidenceSourcePresentation {
+    static func label(for sourceKind: String) -> String? {
+        switch sourceKind {
+        case "bible": return "本章意图"
+        case "world", "world_setting": return "世界观"
+        case "character", "character_card": return "人物卡"
+        case "prior_state", "chapter_state": return "章前状态"
+        case "history", "memory": return "历史记忆"
+        case "draft", "manuscript": return "正文"
+        case "authorization", "character_authorization": return "人物授权"
+        default: return nil
+        }
+    }
+}
+
+/// Archive uncertainties are deliberately shown as reported rather than
+/// converted into a guessed state. This formatter removes wire identifiers
+/// while retaining the person, state slot, conflicting values and recovery
+/// instruction an author can use.
+enum ArchiveDiagnosticPresentation {
+    static func title(for item: ChapterArchiveDiagnostic) -> String {
+        let names = [item.characterName, item.otherCharacterName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let subject = names.isEmpty ? scopeLabel(item.scope) : names.joined(separator: "与")
+        let slot = slotLabel(item.slot)
+        return slot.isEmpty ? subject : "\(subject)的\(slot)"
+    }
+
+    static func variantLabel(_ variant: ChapterArchiveDiagnostic.Variant) -> String {
+        let operation: String
+        switch variant.operation {
+        case "set", "replace", "add": operation = "记录为"
+        case "remove": operation = "曾记录为"
+        default: operation = "出现过"
+        }
+        return "\(operation)：\(variant.value)"
+    }
+
+    private static func scopeLabel(_ scope: String) -> String {
+        switch scope {
+        case "character_state": return "人物状态"
+        case "relationship": return "人物关系"
+        case "chapter_state": return "本章状态"
+        default: return "这部分状态"
+        }
+    }
+
+    private static func slotLabel(_ slot: String) -> String {
+        switch slot {
+        case "relationship": return "关系"
+        case "location": return "位置"
+        case "goal": return "目标"
+        case "emotion": return "心境"
+        case "status": return "状态"
+        default: return slot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "状态项"
+        }
     }
 }
 
@@ -204,6 +273,9 @@ enum V2DeskArchiveState: Equatable, Sendable {
     case notStarted
     case pending
     case complete(factCount: Int, stateDeltaCount: Int)
+    /// Facts remain usable, while an independently reported state gap or a
+    /// newer failed attempt still needs attention and recovery.
+    case usableWithAttention(factCount: Int, stateGapCount: Int, detail: String?)
     /// Inactive previews are display-only and remain separate from active
     /// facts. Retry capability still comes from the actual archive contract.
     case attention(canRetry: Bool, inactivePreview: V2DeskInactiveArchivePreview?)
@@ -329,6 +401,7 @@ struct V2DeskEditorSource {
     /// rules. It enables one explicitly confirmed accept, never a default
     /// bypass or a character-attribution override.
     let preflightAcceptanceMessage: String?
+    let canRetryGeneratedCandidateChecker: Bool
     /// Computed by each platform from its own `workspace.chapters` via
     /// `V2DeskChapterPosition.isLastChapter` — never derived in here.
     ///
@@ -350,6 +423,7 @@ struct V2DeskEditorSource {
         connectionInterrupted: Bool,
         taskMonitoringMessage: String? = nil,
         preflightAcceptanceMessage: String? = nil,
+        canRetryGeneratedCandidateChecker: Bool = false,
         isLastChapterInBook: Bool
     ) {
         self.chapter = chapter
@@ -362,6 +436,7 @@ struct V2DeskEditorSource {
         self.connectionInterrupted = connectionInterrupted
         self.taskMonitoringMessage = taskMonitoringMessage
         self.preflightAcceptanceMessage = preflightAcceptanceMessage
+        self.canRetryGeneratedCandidateChecker = canRetryGeneratedCandidateChecker
         self.isLastChapterInBook = isLastChapterInBook
     }
 }
@@ -490,8 +565,25 @@ enum V2DeskPresentation {
         switch archive.status {
         case "pending", "extracting": return .pending
         case "complete":
+            if archive.effectiveStatus == "with_state_gaps"
+                || !archive.stateUncertainties.isEmpty
+                || archive.latestAttempt?.status == "failed"
+                || archive.latestAttemptStatus == "failed" {
+                return .usableWithAttention(
+                    factCount: archive.facts.count,
+                    stateGapCount: archive.stateUncertainties.count,
+                    detail: archive.attentionSummary
+                )
+            }
             return .complete(factCount: archive.facts.count, stateDeltaCount: archive.stateDeltaCount)
         case "partial", "failed", "stale":
+            if archive.hasUsableMemory {
+                return .usableWithAttention(
+                    factCount: archive.facts.count,
+                    stateGapCount: archive.stateUncertainties.count,
+                    detail: archive.attentionSummary
+                )
+            }
             // A fresh chapter can legitimately carry the Backend's placeholder
             // `stale` archive with `can_retry == false`. It has no revision
             // lifecycle to surface, even when an old display preview exists.
@@ -523,6 +615,7 @@ enum V2DeskPresentation {
         if source.writingPhase.isActive { return .none }
         if isAccepted { return .startNewChapter }
         if case .failed(let code, _, let stage) = source.writingPhase {
+            if source.canRetryGeneratedCandidateChecker { return .retryGeneratedCandidateChecker }
             if stage == nil { return .refreshTaskStatus }
             if stage == .extraction { return .retryArchive }
             if stage == .acceptance {
@@ -639,6 +732,13 @@ enum V2DeskPresentation {
             if needsSettings(code) {
                 return V2DeskTaskBanner(kind: .generationFailed, tone: .danger, text: "模型配置需要处理", action: .openSettings, detail: message)
             }
+            if source.canRetryGeneratedCandidateChecker {
+                return V2DeskTaskBanner(
+                    kind: .generationFailed, tone: .warning,
+                    text: "生成稿没有通过检查，正文没有变化",
+                    action: .retryGeneratedCandidateChecker, detail: message
+                )
+            }
             return V2DeskTaskBanner(
                 kind: .generationFailed,
                 tone: .danger,
@@ -663,6 +763,8 @@ enum V2DeskPresentation {
                 return V2DeskTaskBanner(kind: .archiving, tone: .accent, text: "正在整理这一章的记忆", action: nil)
             case .attention:
                 return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆需要重新整理，这一章仍然是完成的", action: .retryArchive, detail: source.chapter?.archive?.errorMessage)
+            case .usableWithAttention(_, _, let detail):
+                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆可用，仍有待整理项", action: .retryArchive, detail: detail)
             default:
                 return nil
             }
@@ -679,8 +781,11 @@ enum V2DeskPresentation {
         hasStaleSnapshot: Bool
     ) -> V2DeskChapterState {
         if source.writingPhase.isGenerating { return .generating }
-        if source.writingPhase.isFailed { return .failed }
+        // Extraction is independent of acceptance. Once prose is accepted,
+        // an Extractor configuration or archive failure must not erase the
+        // reader/rewriting affordances; its failure remains in the banner.
         if isAccepted { return .accepted }
+        if source.writingPhase.isFailed { return .failed }
         if hasStaleSnapshot { return .needsRecheck }
         if hasCurrentChecker, currentVerdict == .passed { return .checked }
         return hasDraft ? .drafting : .empty

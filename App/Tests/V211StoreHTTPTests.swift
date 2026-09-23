@@ -133,6 +133,12 @@ private struct V211StoreHTTPTests {
             ("F4 timeout, invalid response and legacy unavailable remain actionable", checkerFailureShapes),
             ("F5 safe preflight reasons and override boundary", preflight),
             ("F5 accept preflight preserves explicit length-only choice", acceptPreflight),
+            ("v2.2 passed short draft requires its own acceptance confirmation", shortDraftAcceptanceConfirmation),
+            ("v2.2 history confirmation is token-bound and explicit", readinessConfirmation),
+            ("v2.2 archive recovery warning is token-bound", archiveRecoveryConfirmation),
+            ("v2.2 generated-candidate retry never starts Writer or checks visible draft", generatedCandidateRetry),
+            ("v2.2 manual Checker Job survives finalized cold loads", manualCheckerJobColdLoad),
+            ("v2.2 Extractor Job keeps visible Checker evidence after cold load", extractorJobKeepsVisibleChecker),
             ("F6 permanent polling and manual request identities", pollingIdentity),
             ("F6 retrying observer records one error and recovers", pollingRecovery),
             ("F6 transient polling stops after a finite retry budget", boundedPolling),
@@ -461,11 +467,12 @@ private struct V211StoreHTTPTests {
             try check(h.notices.history.contains { $0.message.contains(code == "minimum_length" ? "4000" : "人物") }, "preflight must expose the concrete rule")
             if code == "minimum_length" {
                 try check(h.snapshot().primaryAction == .acceptWithWarning, "author short draft needs explicit confirmation route")
-                _ = await h.editor.accept(overrideChecker: true)
+                _ = await h.editor.accept(allowShortDraft: true)
                 let accepted = try await fixture().requests.filter { $0.path.hasSuffix("/accept") }
                 try check(accepted.count == 1, "confirmed short draft should accept once")
                 let body = try JSONSerialization.jsonObject(with: Data(accepted[0].bodyText.utf8)) as! [String: Any]
-                try check(body["override_checker"] as? Bool == true, "short-draft override must be explicit on the wire")
+                try check(body["allow_short_draft"] as? Bool == true, "short-draft confirmation must use its dedicated wire field")
+                try check(body["override_checker"] as? Bool == false, "a passed short draft must not masquerade as a Checker override")
             } else {
                 try check(h.snapshot().primaryAction != .acceptWithWarning && h.snapshot().primaryAction != .accept, "character correctness failure cannot offer override")
                 let state = try await fixture()
@@ -481,7 +488,7 @@ private struct V211StoreHTTPTests {
             try check(h.editor.currentChapter?.status == "draft_ready", "refused preflight cannot finalize")
             if violation == "minimum_length" {
                 try check(h.snapshot().primaryAction == .acceptWithWarning, "accept endpoint length refusal must offer explicit confirmation")
-                _ = await h.editor.accept(overrideChecker: true)
+                _ = await h.editor.accept(allowShortDraft: true)
                 try check(h.editor.currentChapter?.status == "finalized", "explicit length-only override may accept")
                 let writes = try await fixture().requests.filter { $0.path.hasSuffix("/accept") }
                 try check(writes.count == 2, "only the explicit second confirmation may resubmit acceptance")
@@ -491,6 +498,168 @@ private struct V211StoreHTTPTests {
                 try check(writes.count == 1, "character refusal must not auto-resubmit")
             }
         }
+    }
+
+    @MainActor static func shortDraftAcceptanceConfirmation() async throws {
+        let h = try await Harness("short-confirmation", ["accept_short_confirmation": true])
+        _ = await h.editor.rerunChecker()
+        try check(h.editor.checkerAppliesToVisibleDraft && h.editor.checkerResult?.isPassed == true, "the initial Checker result must pass")
+        _ = await h.editor.accept()
+        try check(h.snapshot().primaryAction == .acceptWithWarning, "short_draft_confirmation_required must expose an explicit second accept")
+        try check(h.editor.checkerAppliesToVisibleDraft && h.editor.checkerResult?.isPassed == true, "short confirmation must retain the passed Checker result")
+        _ = await h.editor.accept(allowShortDraft: true)
+        try check(h.editor.currentChapter?.status == "finalized", "only explicit allow_short_draft may accept the passed short draft")
+        let accepts = try await fixture().requests.filter { $0.path.hasSuffix("/accept") }
+        try check(accepts.count == 2, "short confirmation must make exactly one initial and one confirmed accept request")
+        let first = try JSONSerialization.jsonObject(with: Data(accepts[0].bodyText.utf8)) as? [String: Any]
+        let second = try JSONSerialization.jsonObject(with: Data(accepts[1].bodyText.utf8)) as? [String: Any]
+        try check(first?["allow_short_draft"] as? Bool == false && second?["allow_short_draft"] as? Bool == true, "the second request must carry only the dedicated short-draft acknowledgement")
+        try check(second?["override_checker"] as? Bool == false, "a passed short draft confirmation must not become a Checker override")
+    }
+
+    @MainActor static func readinessConfirmation() async throws {
+        let limitations: [[String: Any]] = [[
+            "chapter_id": "history-c1", "index": 1, "title": "第一章",
+            "reason": "记忆尚未完整", "effective_status": "none",
+        ]]
+        let h = try await Harness("readiness", [
+            "readiness_limitations": limitations,
+            // The shared snapshot's established spelling is intentionally
+            // exercised here: the public client must decode it safely.
+            "check_context_limitations": [[
+                "chapter_id": "history-c1", "chapter_index": 1,
+                "kind": "missing_archive", "reason": "第 1 章记忆尚未完整",
+            ]],
+        ])
+        _ = await h.editor.rerunChecker()
+        let before = try await fixture().requests
+        try check(h.editor.pendingProductionContext?.action == .check, "incomplete history must require a visible check confirmation")
+        try check(!before.contains { $0.path.hasSuffix("/check") }, "history warning must not silently start Checker")
+        guard let capturedConfirmation = h.editor.pendingProductionContext else {
+            throw HTTPTestFailure(description: "missing history confirmation")
+        }
+        // SwiftUI closes confirmationDialog before the action Task resumes.
+        // The captured value must still authorize this one request.
+        h.editor.dismissProductionContextConfirmation()
+        _ = await h.editor.confirmProductionContextAndContinue(capturedConfirmation)
+        let after = try await fixture().requests
+        guard let checkEvent = after.last(where: { $0.path.hasSuffix("/check") }) else {
+            throw HTTPTestFailure(description: "confirmed history context must start the requested check")
+        }
+        let body = try JSONSerialization.jsonObject(with: Data(checkEvent.bodyText.utf8)) as? [String: Any]
+        try check(body?["acknowledged_context_token"] as? String == "synthetic-context-token", "confirmation must send exactly the server token")
+        try check(h.editor.pendingProductionContext == nil, "one confirmation must not persist as a hidden bypass")
+        try check(
+            h.editor.checkerResult?.contextLimitations.first?.index == 1
+                && h.editor.checkerResult?.contextLimitations.first?.effectiveStatus == "none"
+                && h.editor.checkerResult?.contextLimitations.first?.reason.contains("记忆") == true,
+            "Checker's returned context limitations must decode from the shared snapshot wire and remain visible"
+        )
+    }
+
+    @MainActor static func archiveRecoveryConfirmation() async throws {
+        let limitations: [[String: Any]] = [[
+            "chapter_id": "history-c1", "index": 1, "title": "第一章",
+            "reason": "应先整理前章", "effective_status": "with_state_gaps",
+        ]]
+        let recovery: [String: Any] = [
+            "chapter_id": "history-c1", "index": 1, "title": "第一章", "reason": "前章仍有状态缺口",
+        ]
+        let h = try await Harness("archiveorder", [
+            "archive_failure": true, "readiness_limitations": limitations,
+            "readiness_recovery": recovery,
+        ])
+        _ = await h.editor.retryArchive()
+        try check(h.editor.pendingProductionContext?.action == .archiveRetry, "reverse archive retry must expose recovery confirmation")
+        let initial = try await fixture().requests
+        try check(!initial.contains { $0.path.hasSuffix("/archive/retry") }, "reverse recovery warning must not retry archive before consent")
+        guard let capturedConfirmation = h.editor.pendingProductionContext else {
+            throw HTTPTestFailure(description: "missing archive recovery confirmation")
+        }
+        h.editor.dismissProductionContextConfirmation()
+        _ = await h.editor.confirmProductionContextAndContinue(capturedConfirmation)
+        let requests = try await fixture().requests
+        guard let retry = requests.last(where: { $0.path.hasSuffix("/archive/retry") }) else {
+            throw HTTPTestFailure(description: "confirmed archive recovery must issue the original retry")
+        }
+        let body = try JSONSerialization.jsonObject(with: Data(retry.bodyText.utf8)) as? [String: Any]
+        try check(body?["acknowledged_context_token"] as? String == "synthetic-context-token", "archive retry must use the one server token")
+    }
+
+    @MainActor static func manualCheckerJobColdLoad() async throws {
+        let identityIssues: [[String: Any]] = [[
+            "kind": "ambiguous_character", "match_id": "same-name-1", "name": "林夕",
+            "name_candidates": [
+                ["character_id": "detective", "name": "林夕", "role": "侦探", "fixed_profile": "负责调查旧案"],
+                ["character_id": "reporter", "name": "林夕", "role": "记者", "fixed_profile": "追踪城市传闻"],
+            ],
+        ]]
+        for phase in ["done", "failed", "cancelled"] {
+            let h = try await Harness("manual-check-job", [
+                "finalized": true, "job_kind": "check", "job_phase": "idle",
+                "check_identity_issues": identityIssues,
+            ])
+            _ = await h.editor.rerunChecker()
+            try check(h.editor.visibleIdentityIssues.first?.candidates.count == 2, "manual Checker response must retain safe identity candidates")
+            _ = try await fixture("config", ["job_phase": phase])
+            await h.load(0)
+            try check(h.editor.currentChapter?.status == "finalized", "manual Checker \(phase) must never change accepted prose into Writer work")
+            try check(h.editor.checkerAppliesToVisibleDraft && h.editor.checkerResult?.isPassed == true, "manual Checker \(phase) must restore its visible result after a cold load")
+            try check(h.editor.visibleIdentityIssues.first?.candidates.map(\.characterId) == ["detective", "reporter"], "same-name choices must preserve server order and IDs")
+            if phase == "failed" {
+                guard case .failed(_, _, .bibleChecking) = h.editor.writingPhase else {
+                    throw HTTPTestFailure(description: "manual check failure must name the Checker stage")
+                }
+            }
+            if phase == "cancelled" {
+                guard case .cancelled(_, .bibleChecking) = h.editor.writingPhase else {
+                    throw HTTPTestFailure(description: "manual check cancellation must name the Checker stage")
+                }
+            }
+        }
+    }
+
+    @MainActor static func extractorJobKeepsVisibleChecker() async throws {
+        for (option, expectedPhase) in [("archive_complete", "done"), ("archive_failure", "failed")] {
+            let h = try await Harness("extract-visible-checker", [option: true])
+            _ = await h.editor.rerunChecker()
+            try check(h.editor.checkerAppliesToVisibleDraft && h.editor.checkerResult?.isPassed == true, "accepted prose must have a current check before the archive cold-load case")
+            await h.load(0)
+            try check(h.editor.currentChapter?.status == "finalized", "Extractor \(expectedPhase) must retain accepted prose")
+            try check(h.editor.checkerAppliesToVisibleDraft && h.editor.checkerResult?.isPassed == true, "Extractor \(expectedPhase) must restore only its visible current Checker result")
+            guard case .current(let verdict, _) = h.snapshot().evidence, verdict == .passed else {
+                throw HTTPTestFailure(description: "Extractor \(expectedPhase) must not turn an unchanged accepted draft into stale Checker evidence")
+            }
+        }
+    }
+
+    @MainActor static func generatedCandidateRetry() async throws {
+        let h = try await Harness("candidate-retry", [
+            "writing": true, "job_checker_rejected": true, "can_retry_checker": true,
+        ])
+        try await eventually("candidate checker failure") { h.editor.candidateCheckerRetrySourceJobID != nil }
+        let before = try await fixture().requests
+        _ = await h.editor.retryGeneratedCandidateChecker()
+        let after = try await fixture().requests
+        let newRequests = after.dropFirst(before.count)
+        try check(newRequests.contains { $0.path.hasSuffix("/checker/retry") }, "retry must use candidate-only endpoint")
+        try check(!newRequests.contains { $0.path.hasSuffix("/write") || $0.path.hasSuffix("/check") }, "candidate retry must not start Writer or recheck visible draft")
+        guard let retry = newRequests.last(where: { $0.path.hasSuffix("/checker/retry") }) else {
+            throw HTTPTestFailure(description: "candidate retry request missing")
+        }
+        let body = try JSONSerialization.jsonObject(with: Data(retry.bodyText.utf8)) as? [String: Any]
+        try check(body?["source_job_id"] as? String == h.chapters[0].id + "-source", "retry must contain only the opaque source job identity")
+
+        let dirty = try await Harness("candidate-dirty", [
+            "writing": true, "job_checker_rejected": true, "can_retry_checker": true,
+        ])
+        try await eventually("dirty candidate checker failure") { dirty.editor.candidateCheckerRetrySourceJobID != nil }
+        dirty.editor.editString(\.draftText, value: "作者尚未保存的新正文")
+        let dirtyBefore = try await fixture().requests.filter { $0.path.hasSuffix("/checker/retry") }.count
+        _ = await dirty.editor.retryGeneratedCandidateChecker()
+        let dirtyAfter = try await fixture().requests.filter { $0.path.hasSuffix("/checker/retry") }.count
+        try check(dirtyBefore == dirtyAfter, "dirty visible draft must block candidate retry before any candidate-retry request")
+        try check(dirty.notices.history.contains { $0.message.contains("尚未与服务器一致") }, "blocked candidate retry must name the required recovery")
     }
 
     @MainActor static func pollingIdentity() async throws {

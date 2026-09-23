@@ -5,7 +5,11 @@ import pytest
 import app.db as db_module
 from app.llm.factory import get_checker_client, get_memory_selector_client, get_writer_client
 from app.models import Book, Chapter, ChapterCharacter, Character
-from app.services.context import manual_checker_reference_context
+from app.services.context import (
+    draft_violations,
+    manual_checker_reference_context,
+    validate_character_preflight,
+)
 
 
 def make_story():
@@ -27,6 +31,11 @@ def make_story():
         current.character_links.extend([ChapterCharacter(character_id=lin.id), ChapterCharacter(character_id=jiang.id)])
         db.commit()
         return current.id
+
+
+def _context_ack(client, chapter_id: str, auth_headers: dict[str, str]) -> dict[str, str]:
+    readiness = client.get(f"/api/v1/chapters/{chapter_id}/production-readiness", headers=auth_headers).json()
+    return {"acknowledged_context_token": readiness["context_token"]} if readiness["limitations"] else {}
 
 
 class RecordingWriter:
@@ -60,7 +69,8 @@ class RecordingChecker:
         return {"verdict": self.verdict, "issues": [] if self.verdict == "passed" else [{
             "kind": "new_plot", "draft_evidence": "两人当场订婚。",
             "bible_evidence": "随后一起回家", "reason": "已有恋爱关系不授权本章新增订婚事件",
-        }]}
+            "source_kind": "bible", "source_id": "bible", "source_evidence": "随后一起回家",
+        }], "name_uses": []}
 
 
 @pytest.mark.parametrize("verdict", ["passed", "suspect", "violation"])
@@ -75,7 +85,10 @@ def test_generation_checker_receives_same_reference_snapshot_and_keeps_gate(
     client.app.dependency_overrides[get_writer_client] = lambda: writer
     client.app.dependency_overrides[get_checker_client] = lambda: checker
     client.app.dependency_overrides[get_memory_selector_client] = lambda: SourcedSelector()
-    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    client.post(
+        f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers,
+        json=_context_ack(client, chapter_id, auth_headers),
+    ).raise_for_status()
     status = wait_for_terminal(client, chapter_id, auth_headers)
     reference = writer.user.split("# 本章剧情 Bible", 1)[0]
     assert reference and checker.user.startswith(reference)
@@ -110,7 +123,10 @@ def test_manual_check_uses_current_cards_and_valid_prior_history_without_selecto
         raise AssertionError("manual checks must not invoke Selector")
 
     client.app.dependency_overrides[get_memory_selector_client] = unexpected_selector
-    response = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
+    response = client.post(
+        f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers,
+        json=_context_ack(client, chapter_id, auth_headers),
+    )
     assert response.status_code == 200
     reference = checker.user.split("# 本章剧情 Bible", 1)[0]
     assert "江川是林夕的男朋友" in reference and "林夕已经归还钥匙" in reference
@@ -154,10 +170,13 @@ def test_empty_bible_skips_requirements_and_allows_normal_accept(client, auth_he
             assert "江川是林夕的男朋友" in user and "现代小镇" in user
             assert "林夕已经归还钥匙" in user
             assert "历史人物不会自动获得本章出场权限" in user
-            return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
 
     client.app.dependency_overrides[get_checker_client] = NoBibleChecker
-    checked = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
+    checked = client.post(
+        f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers,
+        json=_context_ack(client, chapter_id, auth_headers),
+    )
     assert checked.status_code == 200
     assert checked.json()["checker_result"]["verdict"] == "passed"
     assert checked.json()["checker_result"]["issues"] == []
@@ -173,49 +192,51 @@ def test_empty_bible_keeps_other_issues_and_acceptance_gate(client, auth_headers
         chapter.user_prompt = ""
         chapter.draft_text = "林夕施展超自然力量，让雨停下。" + "雨滴落下。" * 1000
         db.commit()
-    issue = {"kind": "contradiction", "draft_evidence": "林夕施展超自然力量", "bible_evidence": "",
-             "reason": "世界观明确为现代小镇、没有超自然力量，与正文冲突。"}
+    issue = {
+        "kind": "contradiction", "draft_evidence": "林夕施展超自然力量", "bible_evidence": "",
+        "reason": "世界观明确为现代小镇、没有超自然力量，与正文冲突。",
+        "source_kind": "world", "source_id": "world", "source_evidence": "没有超自然力量",
+    }
 
     class ContradictionChecker:
         def complete_json(self, **kwargs):
-            return {"verdict": "violation", "issues": [issue]}
+            return {"verdict": "violation", "issues": [issue], "name_uses": []}
 
     client.app.dependency_overrides[get_checker_client] = ContradictionChecker
-    checked = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
+    checked = client.post(
+        f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers,
+        json=_context_ack(client, chapter_id, auth_headers),
+    )
     assert checked.status_code == 200
     result = checked.json()["checker_result"]
-    assert result["verdict"] == "violation" and result["issues"] == [issue]
+    assert result["verdict"] == "violation"
+    assert result["issues"][0]["kind"] == issue["kind"]
+    assert result["issues"][0]["reason"] == issue["reason"]
     assert not result.get("invalid_evidence")
     refused = client.post(f"/api/v1/chapters/{chapter_id}/accept", headers=auth_headers)
     assert refused.status_code == 409
     assert refused.json()["detail"]["code"] == "checker_override_required"
 
 
-def test_empty_bible_keeps_character_preflight_and_generation_requirement(client, auth_headers):
+def test_character_substrings_wait_for_checker_semantics(client, auth_headers):
     chapter_id = make_story()
     with db_module.SessionLocal() as db:
         chapter = db.get(Chapter, chapter_id)
         chapter.user_prompt = ""
         chapter.draft_text = "远客来到屋檐下。" + "雨滴落下。" * 1000
         db.commit()
-    checker = RecordingChecker()
-    client.app.dependency_overrides[get_checker_client] = lambda: checker
-    checked = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
-    assert checked.status_code == 409
-    assert any(v["code"] == "unselected_character" for v in checked.json()["detail"]["violations"])
-    assert checker.user == ""
-    generated = client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers)
-    assert generated.status_code == 409
-    assert generated.json()["detail"]["code"] == "bible_empty"
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        validate_character_preflight(db, chapter)
+        violations = draft_violations(db, chapter, chapter.draft_text, "manual_edit")
+    assert not [item for item in violations if item["code"] in {"unselected_character", "ambiguous_character"}]
 
 
 def test_nonempty_bible_retains_requirements_and_evidence_contract():
     from app.services.context import checker_user_message
-    from app.services.write_jobs import _valid_checker_result
     message = checker_user_message(Chapter(title="等雨"), "正文", "两人一起回家。", reference_context="已有资料")
     assert "Bible 决定核心事件、明确禁止事项及明确指定的顺序和结尾" in message
-    assert "每个 issue 必须同时引用正文和 Bible 证据" in message
+    assert "每个 issue 必须引用正文和对应冻结来源" in message
+    assert "# 程序提供的检查来源目录" in message
+    assert "# 待辨别姓名局部片段" in message
     assert "跳过“是否符合本章写作要求”这一项" not in message
-    invalid = {"verdict": "violation", "issues": [{"kind": "missing_event", "draft_evidence": "两人留下",
-                                                 "bible_evidence": "", "reason": "没有回家"}]}
-    assert _valid_checker_result(invalid, "snapshot")["invalid_evidence"] is True

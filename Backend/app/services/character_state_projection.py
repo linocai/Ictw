@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Any, Iterable
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -19,6 +19,21 @@ from app.models import (
 
 SNAPSHOT_SLOTS = ("当前位置", "当前行动", "情绪状态")
 PERSISTENT_SLOTS = ("身体状态", "当前目标", "秘密状态")
+
+
+@dataclass(frozen=True)
+class StateUncertainty:
+    """A verified state slot whose chapter-end value is deliberately unknown.
+
+    This is not a synthetic ``clear`` operation.  Replaying it masks an older
+    projected value until a later reliable delta for the same slot arrives.
+    """
+
+    character_id: str
+    other_character_id: str | None
+    scope: str
+    slot: str
+    payload: dict[str, Any]
 
 
 @dataclass
@@ -37,6 +52,34 @@ class StateProjectionCursor:
     relations: dict[tuple[str, str], str] = field(default_factory=dict)
     latest: dict[tuple[str, str, str | None], str] = field(default_factory=dict)
     snapshot_seen: set[tuple[str, str]] = field(default_factory=set)
+    uncertainties: dict[tuple[str, str, str | None], StateUncertainty] = field(default_factory=dict)
+
+    @staticmethod
+    def _key_for(
+        character_id: str,
+        scope: str,
+        slot: str,
+        other_character_id: str | None,
+    ) -> tuple[str, str, str | None]:
+        if scope == "relationship" and other_character_id:
+            left, right = sorted((character_id, other_character_id))
+            return (left, "relationship", right)
+        return (character_id, slot, None)
+
+    def _mask_uncertain(self, change: StateUncertainty) -> None:
+        key = self._key_for(
+            change.character_id, change.scope, change.slot, change.other_character_id
+        )
+        if change.scope == "relationship" and change.other_character_id:
+            self.relations.pop(tuple(sorted((change.character_id, change.other_character_id))), None)
+        else:
+            self.fields.setdefault(change.character_id, {}).pop(change.slot, None)
+        # ``latest`` drives the materialized effective-delta flags.  An
+        # uncertainty masks the old value itself, so it must also remove the
+        # old source row; otherwise character history says a hidden value is
+        # still current.
+        self.latest.pop(key, None)
+        self.uncertainties[key] = change
 
     @classmethod
     def for_characters(
@@ -52,8 +95,11 @@ class StateProjectionCursor:
             stable_relationship_keys=stable_relationship_keys,
         )
 
-    def apply(self, change: CharacterStateChange | ChapterArchiveStateDelta) -> None:
+    def apply(self, change: CharacterStateChange | ChapterArchiveStateDelta | StateUncertainty) -> None:
         """Apply one source row using the exact existing projection rules."""
+        if isinstance(change, StateUncertainty):
+            self._mask_uncertain(change)
+            return
         if change.scope == "snapshot":
             batch_key = (change.character_id, change.batch_id)
             if batch_key not in self.snapshot_seen:
@@ -69,6 +115,7 @@ class StateProjectionCursor:
             else:
                 self.fields.setdefault(change.character_id, {}).pop(change.slot, None)
             self.latest[key] = change.id
+            self.uncertainties.pop(key, None)
             return
         if change.scope == "persistent":
             key = (change.character_id, change.slot, None)
@@ -77,6 +124,7 @@ class StateProjectionCursor:
             else:
                 self.fields.setdefault(change.character_id, {}).pop(change.slot, None)
             self.latest[key] = change.id
+            self.uncertainties.pop(key, None)
             return
         if change.scope == "relationship" and change.other_character_id:
             pair = tuple(sorted((change.character_id, change.other_character_id)))
@@ -86,6 +134,7 @@ class StateProjectionCursor:
             else:
                 self.relations.pop(pair, None)
             self.latest[key] = change.id
+            self.uncertainties.pop(key, None)
 
     def materialize_fields(self) -> dict[str, dict[str, str]]:
         """Return a detached rendering so callers cannot mutate the cursor."""
@@ -102,6 +151,48 @@ class StateProjectionCursor:
                 if right in rendered and left in self.names:
                     rendered[right][f"与{self.names[left]}关系"] = value
         return rendered
+
+    def materialize_uncertainties(self) -> list[dict[str, Any]]:
+        """Return only slots which remain unknown after the replay prefix."""
+        return [
+            dict(change.payload)
+            for _key, change in sorted(
+                self.uncertainties.items(),
+                key=lambda item: (item[0][0], item[0][1], item[0][2] or ""),
+            )
+        ]
+
+
+def uncertainty_changes_for_revision(revision: ChapterArchiveRevision) -> list[StateUncertainty]:
+    """Read the additive JSON without letting malformed rows affect projection."""
+    rows = getattr(revision, "state_uncertainties", []) or []
+    if not isinstance(rows, list):
+        return []
+    result: list[StateUncertainty] = []
+    for payload in rows:
+        if not isinstance(payload, dict):
+            continue
+        character_id = payload.get("character_id")
+        other_character_id = payload.get("other_character_id")
+        scope = payload.get("scope")
+        slot = payload.get("slot")
+        if (
+            not isinstance(character_id, str)
+            or not isinstance(scope, str)
+            or not isinstance(slot, str)
+            or (other_character_id is not None and not isinstance(other_character_id, str))
+        ):
+            continue
+        result.append(
+            StateUncertainty(
+                character_id=character_id,
+                other_character_id=other_character_id,
+                scope=scope,
+                slot=slot,
+                payload=dict(payload),
+            )
+        )
+    return result
 
 
 def _changes_for_projection(db: Session, book_id: str, *, before_index: int | None = None) -> list:
@@ -130,6 +221,10 @@ def _changes_for_projection(db: Session, book_id: str, *, before_index: int | No
                     .order_by(ChapterArchiveStateDelta.position, ChapterArchiveStateDelta.id)
                 ).all()
             )
+            # A v2.1 uncertainty is a first-class projection event.  It comes
+            # after the chapter's reliable deltas so it masks all disputed
+            # variants independent of the model's array ordering.
+            changes.extend(uncertainty_changes_for_revision(active))
             continue
         # Existing databases receive legacy_archive_eligible=true.  The second
         # condition keeps direct v1 apply helpers useful in local compatibility
@@ -161,17 +256,42 @@ def project_state_changes(
     return cursor.materialize_fields(), set(cursor.latest.values())
 
 
+def projected_state_before_chapter(
+    db: Session,
+    chapter: Chapter,
+    *,
+    stable_relationship_keys: bool = False,
+) -> tuple[dict[str, dict[str, str]], list[dict[str, Any]]]:
+    """Current deterministic state and surviving unknown slots before a chapter."""
+    characters = list(db.scalars(select(Character).where(Character.book_id == chapter.book_id)).all())
+    cursor = StateProjectionCursor.for_characters(
+        characters, stable_relationship_keys=stable_relationship_keys
+    )
+    for change in _changes_for_projection(db, chapter.book_id, before_index=chapter.index):
+        cursor.apply(change)
+    return cursor.materialize_fields(), cursor.materialize_uncertainties()
+
+
+def state_uncertainties_before_chapter(
+    db: Session,
+    chapter: Chapter,
+    *,
+    stable_relationship_keys: bool = False,
+) -> list[dict[str, Any]]:
+    """Convenience read API shared by readiness and prompt-context callers."""
+    return projected_state_before_chapter(
+        db, chapter, stable_relationship_keys=stable_relationship_keys
+    )[1]
+
+
 def projected_fields_before_chapter(
     db: Session,
     chapter: Chapter,
     *,
     stable_relationship_keys: bool = False,
 ) -> dict[str, dict[str, str]]:
-    characters = list(db.scalars(select(Character).where(Character.book_id == chapter.book_id)).all())
-    return project_state_changes(
-        _changes_for_projection(db, chapter.book_id, before_index=chapter.index),
-        characters,
-        stable_relationship_keys=stable_relationship_keys,
+    return projected_state_before_chapter(
+        db, chapter, stable_relationship_keys=stable_relationship_keys
     )[0]
 
 

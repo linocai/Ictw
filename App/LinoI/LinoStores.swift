@@ -332,6 +332,9 @@ final class WorkspaceStore: ObservableObject {
             archiveSchema: chapter.archive?.archiveSchema ?? "none",
             archiveCanRetry: chapter.archive?.canRetry ?? false,
             archiveLatestAttemptStatus: chapter.archive?.latestAttemptStatus,
+            archiveEffectiveStatus: chapter.archive?.effectiveStatus ?? "none",
+            archiveStateStatus: chapter.archive?.stateStatus ?? "none",
+            archiveStateUncertaintyCount: chapter.archive?.stateUncertainties.count ?? 0,
             contentRevision: chapter.contentRevision
         )
         upsert(summary)
@@ -562,6 +565,24 @@ final class CharactersStore: ObservableObject {
 
 @MainActor
 final class ChapterEditorStore: ObservableObject {
+    enum ProductionContextAction: String, Sendable {
+        case write, check, archiveRetry
+        var title: String {
+            switch self {
+            case .write: "开始写作"
+            case .check: "复查正文"
+            case .archiveRetry: "重新整理记忆"
+            }
+        }
+    }
+
+    struct PendingProductionContext: Identifiable, Sendable {
+        let action: ProductionContextAction
+        let chapterID: String
+        let readiness: ProductionReadiness
+        var id: String { "\(action.rawValue)|\(chapterID)|\(readiness.contextToken)" }
+    }
+
     @Published var currentChapter: Chapter?
     @Published private(set) var isLoading = false
     @Published private(set) var isSaving = false
@@ -593,6 +614,9 @@ final class ChapterEditorStore: ObservableObject {
     /// Names the last preflight/job failure reported as unauthorized-but-present.
     /// Non-empty exactly when the editor should offer "本章豁免并重试".
     @Published private(set) var pendingExemptionNames: [String] = []
+    @Published private(set) var pendingProductionContext: PendingProductionContext?
+    /// Only the opaque server job ID is retained for the candidate retry.
+    @Published private(set) var candidateCheckerRetrySourceJobID: String?
 
     private let session: AppSession
     let sync: ClientSyncStore
@@ -612,6 +636,14 @@ final class ChapterEditorStore: ObservableObject {
 
     var draftCharCount: Int {
         currentChapter?.draftText.filter { !$0.isWhitespace }.count ?? 0
+    }
+
+    /// Identity choices are valid only when they were returned for the text
+    /// presently on screen. Hidden generated candidates never reach this
+    /// property, so a clarification card cannot reveal or act on them.
+    var visibleIdentityIssues: [CheckerIdentityIssue] {
+        guard checkerAppliesToVisibleDraft else { return [] }
+        return checkerResult?.identityIssues ?? []
     }
 
     var staleCheckerChangedRanges: [Range<String.Index>] {
@@ -677,6 +709,7 @@ final class ChapterEditorStore: ObservableObject {
         memoryContext = nil
         checkerResult = nil
         failedCandidateCheckerResult = nil
+        candidateCheckerRetrySourceJobID = nil
         checkerAppliesToVisibleDraft = false
         checkerRefreshing = false
         preflightAcceptanceMessage = nil
@@ -886,7 +919,7 @@ final class ChapterEditorStore: ObservableObject {
     /// job and returns immediately once it has been accepted by the server.
     /// Progress is observed via `writingPhase`/`currentChapter`, updated by
     /// the polling task started here.
-    func generate() async -> Chapter? {
+    func generate(acknowledgedContextToken: String? = nil) async -> Chapter? {
         guard let chapter = currentChapter, !writingPhase.isActive else { return nil }
         guard chapter.status != "finalized" else {
             // Kept as an internal invariant: normal UI flow reaches a
@@ -902,17 +935,21 @@ final class ChapterEditorStore: ObservableObject {
         currentValidationReason = nil
         checkerResult = nil
         failedCandidateCheckerResult = nil
+        candidateCheckerRetrySourceJobID = nil
         checkerAppliesToVisibleDraft = false
         preflightAcceptanceMessage = nil
         memoryContext = nil
-        guard await save() != nil else { return nil }
-        return await startWrite(replaceDraft: replace)
+        guard let saved = await save() else { return nil }
+        guard case let .proceed(token) = await productionReadiness(
+            for: saved, action: .write, acknowledgedContextToken: acknowledgedContextToken
+        ) else { return nil }
+        return await startWrite(replaceDraft: replace, acknowledgedContextToken: token)
     }
 
     /// Saves current edits, then starts the background Extractor job and
     /// returns immediately. Completion (chapter becomes `finalized`) is
     /// observed reactively via `currentChapter`.
-    func accept(overrideChecker: Bool = false) async -> Chapter? {
+    func accept(overrideChecker: Bool = false, allowShortDraft: Bool = false) async -> Chapter? {
         guard !writingPhase.isActive else { return nil }
         guard let saved = await save() else { return nil }
         let operationID = beginAction()
@@ -930,7 +967,7 @@ final class ChapterEditorStore: ObservableObject {
         do {
             let status = try await session.api.accept(
                 chapterId: saved.id, contentRevision: saved.contentRevision,
-                overrideChecker: overrideChecker
+                overrideChecker: overrideChecker, allowShortDraft: allowShortDraft
             )
             guard actionIsCurrent(operationID, chapterID: saved.id, revision: startingRevision) else { return nil }
             applyJobStatus(status, chapterId: saved.id)
@@ -979,8 +1016,14 @@ final class ChapterEditorStore: ObservableObject {
                 guard actionIsCurrent(operationID, chapterID: saved.id, revision: startingRevision) else {
                     return nil
                 }
-                checkerResult = nil
-                checkerAppliesToVisibleDraft = false
+                // A short-draft acknowledgement follows a successful Checker
+                // result. It is an independent author confirmation, never a
+                // failed recheck, so preserve that result for the dialog and
+                // the second request.
+                if !Self.isShortDraftConfirmationRequired(error) {
+                    checkerResult = nil
+                    checkerAppliesToVisibleDraft = false
+                }
                 preflightAcceptanceMessage = message
                 writingPhase = .idle
                 return nil
@@ -1000,7 +1043,7 @@ final class ChapterEditorStore: ObservableObject {
 
     /// Retries only the memory archive for prose the server has already
     /// accepted. This never re-runs Checker or asks the user to accept again.
-    func retryArchive() async -> Chapter? {
+    func retryArchive(acknowledgedContextToken: String? = nil) async -> Chapter? {
         guard !writingPhase.isActive else { return nil }
         guard let accepted = currentChapter, accepted.status == "finalized" else { return nil }
         // Archive retry has no author-input transition. Calling `save()` here
@@ -1012,6 +1055,9 @@ final class ChapterEditorStore: ObservableObject {
             session.notices.publish("本机正文或章节输入尚未与服务器一致；请先处理该修改后再重新整理记忆。", tone: .error)
             return nil
         }
+        guard case let .proceed(token) = await productionReadiness(
+            for: accepted, action: .archiveRetry, acknowledgedContextToken: acknowledgedContextToken
+        ) else { return nil }
         let operationID = beginAction()
         let startingRevision = localEditRevision
         let noticeLocation = noticeLocation(for: accepted)
@@ -1019,7 +1065,8 @@ final class ChapterEditorStore: ObservableObject {
         writingPhase = .extracting
         do {
             let status = try await session.api.retryArchive(
-                chapterId: accepted.id, contentRevision: accepted.contentRevision
+                chapterId: accepted.id, contentRevision: accepted.contentRevision,
+                acknowledgedContextToken: token
             )
             guard actionIsCurrent(operationID, chapterID: accepted.id, revision: startingRevision) else { return nil }
             applyJobStatus(status, chapterId: accepted.id)
@@ -1109,7 +1156,7 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
-    func rerunChecker() async -> CheckerResult? {
+    func rerunChecker(acknowledgedContextToken: String? = nil) async -> CheckerResult? {
         guard !writingPhase.isActive else { return nil }
         let operationID = beginAction()
         checkerRefreshing = true
@@ -1122,15 +1169,38 @@ final class ChapterEditorStore: ObservableObject {
         // Checker must therefore flush that exact text first; otherwise the
         // backend checks the previous server draft while the UI incorrectly
         // presents the result as belonging to the edited text.
-        guard let chapter = await save() else { return nil }
+        guard let current = currentChapter else { return nil }
+        let chapter: Chapter
+        if current.status == "finalized" {
+            // Accepted prose is immutable. A manual check reads the exact
+            // server revision, so it must not send an unrelated PATCH first.
+            guard !hasLocalInputDivergence else {
+                session.notices.publish("本机仍有未处理的章节修改，暂时不能复查已接受正文。", tone: .error)
+                return nil
+            }
+            chapter = current
+        } else {
+            guard let saved = await save() else { return nil }
+            chapter = saved
+        }
+        guard case let .proceed(token) = await productionReadiness(
+            for: chapter, action: .check, acknowledgedContextToken: acknowledgedContextToken
+        ) else { return nil }
         let runID = UUID().uuidString
         let startingRevision = localEditRevision
         let noticeLocation = noticeLocation(for: chapter)
         do {
             let response = try await session.api.rerunChecker(
-                chapterId: chapter.id, contentRevision: chapter.contentRevision
+                chapterId: chapter.id, contentRevision: chapter.contentRevision,
+                acknowledgedContextToken: token
             )
-            if let result = response.checkerResult,
+            var result = response.checkerResult
+            // During the additive rollout some Backend responses keep these
+            // fields beside `checker_result`; retain either public shape.
+            if !response.contextLimitations.isEmpty {
+                result?.contextLimitations = response.contextLimitations
+            }
+            if let result,
                !result.hasConcreteVerdict {
                 let presented = LinoErrorPresenter.present(checkerUnavailable: result)
                 // Completion notices belong to the action that caused them,
@@ -1144,18 +1214,19 @@ final class ChapterEditorStore: ObservableObject {
                 )
             }
             guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else {
-                return response.checkerResult
+                return result
             }
             guard ChapterRefreshReconciler.shouldReplaceLocal(
                 startingRevision: startingRevision,
                 currentRevision: localEditRevision,
                 hasLocalInputDivergence: hasLocalInputDivergence
             ) else { return nil }
-            checkerResult = response.checkerResult
+            checkerResult = result
             failedCandidateCheckerResult = nil
-            checkerAppliesToVisibleDraft = response.checkerResult != nil
+            checkerAppliesToVisibleDraft = result != nil
+            updatePendingIdentityNames(from: result)
             preflightAcceptanceMessage = nil
-            if let result = response.checkerResult, let checked = currentChapter, result.hasConcreteVerdict {
+            if let result, let checked = currentChapter, result.hasConcreteVerdict {
                 let snapshot = CheckedDraftSnapshot(chapter: checked, checkerResult: result)
                 if cache.saveCheckedSnapshot(snapshot) { staleCheckedSnapshot = snapshot }
                 // A successful recheck resolves only an earlier local accept
@@ -1166,10 +1237,12 @@ final class ChapterEditorStore: ObservableObject {
                     ChapterTaskOutcomeStore.clear(chapterID: checked.id)
                     writingPhase = .idle
                     currentValidationReason = nil
-                    pendingExemptionNames = []
+                    if result.identityIssues.isEmpty {
+                        pendingExemptionNames = []
+                    }
                 }
             }
-            return response.checkerResult
+            return result
         } catch {
             _ = await recordActionRevisionConflictIfNeeded(error, chapter: chapter)
             let presented = LinoErrorPresenter.present(error: error)
@@ -1186,6 +1259,96 @@ final class ChapterEditorStore: ObservableObject {
                 preflightAcceptanceMessage = message
             }
             return nil
+        }
+    }
+
+    /// Rechecks exactly the opaque generated candidate identified by the
+    /// server. The implementation deliberately does not route through
+    /// `rerunChecker()`, which would save and inspect the visible old draft.
+    func retryGeneratedCandidateChecker() async -> Chapter? {
+        guard !writingPhase.isActive,
+              let chapter = currentChapter,
+              let sourceJobID = candidateCheckerRetrySourceJobID else { return nil }
+        // A same-candidate retry may eventually promote server-side prose.
+        // Do not let that promotion race an author's unsaved visible draft.
+        guard !hasLocalInputDivergence else {
+            session.notices.publish(
+                "本机正文或章节输入尚未与服务器一致；请先保存或处理该修改后再重试检查生成稿。",
+                tone: .error
+            )
+            return nil
+        }
+        let operationID = beginAction()
+        let revision = localEditRevision
+        let location = noticeLocation(for: chapter)
+        writingPhase = .checking
+        do {
+            let status = try await session.api.retryCandidateChecker(
+                chapterId: chapter.id, sourceJobId: sourceJobID,
+                contentRevision: chapter.contentRevision
+            )
+            guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return nil }
+            applyJobStatus(status, chapterId: chapter.id)
+            if !Self.isTerminalPhase(status.phase) { pollJob(chapterId: chapter.id) }
+            return currentChapter
+        } catch {
+            applyStartFailure(
+                error, chapter: chapter, intendedStage: .bibleChecking,
+                operationID: operationID, revision: revision,
+                noticeLocation: location, action: "重试检查生成稿"
+            )
+            return nil
+        }
+    }
+
+    func dismissProductionContextConfirmation() { pendingProductionContext = nil }
+
+    func confirmProductionContextAndContinue(_ pending: PendingProductionContext) async -> Chapter? {
+        guard currentChapter?.id == pending.chapterID else {
+            pendingProductionContext = nil
+            return nil
+        }
+        pendingProductionContext = nil
+        switch pending.action {
+        case .write:
+            return await generate(acknowledgedContextToken: pending.readiness.contextToken)
+        case .check:
+            _ = await rerunChecker(acknowledgedContextToken: pending.readiness.contextToken)
+            return currentChapter
+        case .archiveRetry:
+            return await retryArchive(acknowledgedContextToken: pending.readiness.contextToken)
+        }
+    }
+
+    func confirmProductionContextAndContinue() async -> Chapter? {
+        guard let pending = pendingProductionContext else { return nil }
+        return await confirmProductionContextAndContinue(pending)
+    }
+
+    private enum ProductionReadinessGate {
+        case proceed(String?)
+        case confirmationRequired
+    }
+
+    private func productionReadiness(
+        for chapter: Chapter,
+        action: ProductionContextAction,
+        acknowledgedContextToken: String?
+    ) async -> ProductionReadinessGate {
+        if let acknowledgedContextToken { return .proceed(acknowledgedContextToken) }
+        do {
+            let readiness = try await session.api.productionReadiness(chapterId: chapter.id)
+            guard !readiness.limitations.isEmpty else { return .proceed(nil) }
+            pendingProductionContext = PendingProductionContext(
+                action: action, chapterID: chapter.id, readiness: readiness
+            )
+            return .confirmationRequired
+        } catch {
+            // A pre-v2.2 Backend cannot safely stand in for this new gate.
+            // Surface its capability failure and leave the requested action
+            // untouched; never swap it for a different request.
+            session.notices.publish(error)
+            return .confirmationRequired
         }
     }
 
@@ -1206,16 +1369,45 @@ final class ChapterEditorStore: ObservableObject {
         if cache.saveCheckedSnapshot(snapshot) { staleCheckedSnapshot = snapshot }
     }
 
-    /// Adds the names from the last unauthorized-character failure to this
-    /// chapter's exemption list, persists it, then retries generation.
-    func exemptAndRetry() async -> Chapter? {
-        guard !pendingExemptionNames.isEmpty, var chapter = currentChapter else { return nil }
-        let merged = Array(Set(chapter.exemptedCharacterNames).union(pendingExemptionNames)).sorted()
-        chapter.exemptedCharacterNames = merged
+    /// Keeps legacy editor surfaces and persisted task recovery in step with
+    /// the current visible Checker result. The detailed V2 card reads
+    /// `visibleIdentityIssues`; this name list remains only as a safe
+    /// compatibility fallback for backends that predate identity rows.
+    private func updatePendingIdentityNames(
+        from result: CheckerResult?,
+        additionalNames: [String] = []
+    ) {
+        let resultNames = result?.identityIssues.map(\.name) ?? []
+        pendingExemptionNames = Array(Set(resultNames + additionalNames)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+            .sorted()
+    }
+
+    /// Saves an explicit identity decision. It never restarts Writer or
+    /// Checker: after the author selects a character or marks a word as an
+    /// exemption, the next action remains their deliberate choice.
+    func saveNameClarification(
+        selectedCharacterIDs: [String] = [],
+        exemptedNames: [String] = []
+    ) async -> Chapter? {
+        guard var chapter = currentChapter else { return nil }
+        let links = Set(chapter.characterLinks.map(\.characterId)).union(selectedCharacterIDs)
+        chapter.characterLinks = links.sorted().map(ChapterLink.init(characterId:))
+        chapter.exemptedCharacterNames = Array(
+            Set(chapter.exemptedCharacterNames).union(exemptedNames)
+        ).sorted()
         currentChapter = chapter
+        guard let saved = await save() else { return nil }
         pendingExemptionNames = []
-        guard await save() != nil else { return nil }
-        return await generate()
+        currentValidationReason = nil
+        return saved
+    }
+
+    /// Compatibility entry point for the older editor surface. It now saves
+    /// the explicit exemption only; automatic regeneration was the dead path
+    /// that made a name decision look like a different writing action.
+    func exemptAndRetry() async -> Chapter? {
+        await saveNameClarification(exemptedNames: pendingExemptionNames)
     }
 
     func reopen() async -> Chapter? {
@@ -1387,7 +1579,7 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
-    private func startWrite(replaceDraft: Bool) async -> Chapter? {
+    private func startWrite(replaceDraft: Bool, acknowledgedContextToken: String?) async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
         let operationID = beginAction()
         let startingRevision = localEditRevision
@@ -1397,7 +1589,8 @@ final class ChapterEditorStore: ObservableObject {
         do {
             let status = try await session.api.startWrite(
                 chapterId: chapter.id, replaceDraft: replaceDraft,
-                contentRevision: chapter.contentRevision
+                contentRevision: chapter.contentRevision,
+                acknowledgedContextToken: acknowledgedContextToken
             )
             guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
             applyJobStatus(status, chapterId: chapter.id)
@@ -1604,7 +1797,11 @@ final class ChapterEditorStore: ObservableObject {
         case "checking":
             checkerAppliesToVisibleDraft = false
             writingPhase = .checking
-            setCurrentChapterStatus("writing", chapterId: chapterId)
+            // A manual check can target accepted prose. It observes the
+            // existing chapter and must never reopen it as Writer work.
+            if status.kind != "check" {
+                setCurrentChapterStatus("writing", chapterId: chapterId)
+            }
         case "revising":
             writingPhase = .legacyRevising
             setCurrentChapterStatus("writing", chapterId: chapterId)
@@ -1615,14 +1812,36 @@ final class ChapterEditorStore: ObservableObject {
         case "done":
             memoryContext = status.memoryContext ?? memoryContext
             failedCandidateCheckerResult = nil
-            if status.kind == "write" {
-                checkerResult = status.visibleCheckerResult ?? status.checkerResult
-                checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
+            let visibleResult: CheckerResult?
+            switch status.kind {
+            case "write":
+                // Writer jobs expose only an explicitly projected visible
+                // result. `checker_result` can describe a hidden candidate.
+                visibleResult = status.visibleCheckerResult
+            case "check":
+                // Manual Checker jobs only address the text the author can
+                // see, so their legacy `checker_result` remains safe too.
+                visibleResult = status.visibleCheckerResult
+                    ?? status.checkerResult
+            case "extract":
+                // Extractor never changes accepted prose. Its explicit
+                // visible projection is therefore the current manuscript's
+                // Checker result and must survive a cold archive reload.
+                // Never consult its redacted `checker_result`: that field
+                // can describe a hidden candidate on other job kinds.
+                visibleResult = status.visibleCheckerResult
+            default:
+                visibleResult = nil
+            }
+            if let visibleResult {
+                checkerResult = visibleResult
+                checkerAppliesToVisibleDraft = true
+                updatePendingIdentityNames(from: visibleResult)
             }
             if let chapter = status.chapter {
                 currentChapter = chapter
-                if status.kind == "write", status.visibleCheckerResult != nil {
-                    saveCheckedSnapshotIfCurrent(status.visibleCheckerResult, chapter: chapter)
+                if let visibleResult {
+                    saveCheckedSnapshotIfCurrent(visibleResult, chapter: chapter)
                 }
                 cache.saveClean(chapter)
                 saveState = .synced
@@ -1633,7 +1852,9 @@ final class ChapterEditorStore: ObservableObject {
             }
             ChapterTaskOutcomeStore.clear(chapterID: chapterId)
             writingPhase = .idle
-            pendingExemptionNames = []
+            if visibleResult == nil {
+                pendingExemptionNames = []
+            }
             currentValidationReason = nil
             taskMonitoringMessage = nil
             if let warning = status.completionWarning {
@@ -1643,17 +1864,22 @@ final class ChapterEditorStore: ObservableObject {
             applyJobFailure(status, chapterId: chapterId, announce: announceFailure)
         case "cancelled":
             failedCandidateCheckerResult = nil
-            let cancelledStage = writingPhase.currentStage ?? .drafting
+            let cancelledStage = status.kind == "check"
+                ? .bibleChecking
+                : (writingPhase.currentStage ?? .drafting)
             writingPhase = .cancelled(
                 message: "任务已取消，当前草稿已保留。",
                 stage: cancelledStage
             )
             currentValidationReason = nil
             pendingExemptionNames = []
-            if status.kind == "write" {
-                checkerResult = status.visibleCheckerResult
-                checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
-                saveCheckedSnapshotIfCurrent(status.visibleCheckerResult, chapter: currentChapter)
+            if status.kind == "write" || status.kind == "check" || status.kind == "extract" {
+                let visibleResult = status.visibleCheckerResult
+                    ?? (status.kind == "check" ? status.checkerResult : nil)
+                checkerResult = visibleResult
+                checkerAppliesToVisibleDraft = visibleResult != nil
+                updatePendingIdentityNames(from: visibleResult)
+                saveCheckedSnapshotIfCurrent(visibleResult, chapter: currentChapter)
             }
             if let chapter = currentChapter {
                 ChapterTaskOutcomeStore.save(
@@ -1685,9 +1911,32 @@ final class ChapterEditorStore: ObservableObject {
         }
         if status.kind == "write" {
             failedCandidateCheckerResult = status.failedCandidateCheckerResult
+            candidateCheckerRetrySourceJobID = status.canRetryChecker
+                ? (status.checkerSourceJobId ?? status.jobId)
+                : nil
             checkerResult = status.visibleCheckerResult
             checkerAppliesToVisibleDraft = status.visibleCheckerResult != nil
+            updatePendingIdentityNames(from: status.visibleCheckerResult)
             saveCheckedSnapshotIfCurrent(status.visibleCheckerResult, chapter: currentChapter)
+        } else if status.kind == "check" {
+            let visibleResult = status.visibleCheckerResult ?? status.checkerResult
+            failedCandidateCheckerResult = nil
+            candidateCheckerRetrySourceJobID = nil
+            checkerResult = visibleResult
+            checkerAppliesToVisibleDraft = visibleResult != nil
+            updatePendingIdentityNames(from: visibleResult)
+            saveCheckedSnapshotIfCurrent(visibleResult, chapter: currentChapter)
+        } else if status.kind == "extract" {
+            // A failed archive leaves accepted prose intact. Restore only
+            // the server-projected visible Checker result so its evidence
+            // remains current after reopening the chapter.
+            let visibleResult = status.visibleCheckerResult
+            failedCandidateCheckerResult = nil
+            candidateCheckerRetrySourceJobID = nil
+            checkerResult = visibleResult
+            checkerAppliesToVisibleDraft = visibleResult != nil
+            updatePendingIdentityNames(from: visibleResult)
+            saveCheckedSnapshotIfCurrent(visibleResult, chapter: currentChapter)
         }
         writingPhase = .failed(
             code: status.errorCode,
@@ -1701,11 +1950,15 @@ final class ChapterEditorStore: ObservableObject {
             // not leave a previous explanation on screen as though it caused it.
             currentValidationReason = nil
         }
-        pendingExemptionNames = []
-        if let violation = status.violations?.first(where: { $0.code == "unselected_character" }),
-           let names = violation.names, !names.isEmpty {
-            pendingExemptionNames = names
-        }
+        let violationNames = status.violations?
+            .filter { ["unselected_character", "ambiguous_character", "uncertain_character"].contains($0.code) }
+            .flatMap { $0.names ?? [] } ?? []
+        updatePendingIdentityNames(
+            from: ["write", "check", "extract"].contains(status.kind)
+                ? (status.visibleCheckerResult ?? (status.kind == "check" ? status.checkerResult : nil))
+                : nil,
+            additionalNames: violationNames
+        )
         if let chapter = currentChapter {
             ChapterTaskOutcomeStore.save(
                 phase: writingPhase,
@@ -1884,10 +2137,19 @@ final class ChapterEditorStore: ObservableObject {
 
     private static func preflightAcceptanceOverrideMessage(from error: Error) -> String? {
         guard let apiError = error as? APIError,
-              case let .validation(_, code, _, _, violations) = apiError,
-              ["checker_preflight_failed", "accept_preflight_failed", "accept_override_required"].contains(code),
+              case let .validation(_, code, _, _, violations) = apiError else { return nil }
+        if code == "short_draft_confirmation_required" {
+            return LinoErrorPresenter.present(error: apiError).message
+        }
+        guard ["checker_preflight_failed", "accept_preflight_failed", "accept_override_required"].contains(code),
               ChapterPreflightOverridePolicy.permitsExplicitAcceptance(violations) else { return nil }
         return LinoErrorPresenter.present(error: apiError).message
+    }
+
+    private static func isShortDraftConfirmationRequired(_ error: Error) -> Bool {
+        guard let apiError = error as? APIError,
+              case let .validation(_, code, _, _, _) = apiError else { return false }
+        return code == "short_draft_confirmation_required"
     }
 
     private func noticeLocation(for chapter: Chapter) -> String {
@@ -1968,7 +2230,7 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     private static func failureStage(from status: WriteJobStatus) -> ChapterGenerationStage? {
-        ChapterJobFailureStage.resolve(status)
+        status.kind == "check" ? .bibleChecking : ChapterJobFailureStage.resolve(status)
     }
 
     private static func isActiveJobPhase(_ phase: String) -> Bool {

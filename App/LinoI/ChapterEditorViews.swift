@@ -688,7 +688,7 @@ private struct LinoIChapterEditor: View {
             HStack(spacing: 9) {
                 Button("重新生成") { generateTapped() }
                     .buttonStyle(LinoIPrimaryButtonStyle(compact: true))
-                Button("本章豁免并重试") {
+                Button("保存为本章豁免") {
                     Task {
                         if let chapter = await editor.exemptAndRetry() {
                             workspace.upsert(chapter)

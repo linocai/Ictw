@@ -32,13 +32,15 @@ from app.services.character_state_projection import (
     PERSISTENT_SLOTS,
     SNAPSHOT_SLOTS,
     StateProjectionCursor,
-    projected_fields_before_chapter,
+    projected_state_before_chapter,
+    uncertainty_changes_for_revision,
 )
 from app.services.context import normalize_text
 
 
 ARCHIVE_SCHEMA_VERSION = 2
-ARCHIVE_CONTRACT_VERSION = "archive-v2.0"
+ARCHIVE_CONTRACT_VERSION = "archive-v2.1"
+LEGACY_ARCHIVE_CONTRACT_VERSION = "archive-v2.0"
 SOURCE_SPAN_VERSION = "sentence-v1"
 MAX_FACTS = 8
 RECOMMENDED_FACT_SPAN_SENTENCES = 4
@@ -47,13 +49,19 @@ MAX_SUMMARY_CHARS = 4000
 MAX_FACT_REF_CHARS = 16
 MAX_FACT_TEXT_CHARS = 500
 MAX_STATE_VALUE_CHARS = 300
+MAX_RAW_FACTS = MAX_FACTS * 3
+MAX_RAW_STATE_DELTAS = MAX_STATE_DELTAS * 3
 FACT_TYPES = ("剧情", "决定", "关系", "认知", "未决", "状态")
 _FORBIDDEN_VALUES = ("未知", "未明确", "不明确", "暂无", "无从得知", "待定")
 _SENTENCE_END = re.compile(r"(?<=[。！？!?；;])")
 
 
 class ArchiveV2ValidationError(ValueError):
-    pass
+    """A deterministic rejection with controlled author-visible diagnostics."""
+
+    def __init__(self, reason: str, *, diagnostics: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(reason)
+        self.diagnostics = diagnostics or []
 
 
 def archive_validation_message(reason: str | None) -> str | None:
@@ -102,10 +110,21 @@ class ValidatedDelta:
 
 
 @dataclass(frozen=True)
+class ValidatedUncertainty:
+    character_id: str
+    other_character_id: str | None
+    scope: str
+    slot: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ValidatedArchive:
     summary: str
     facts: tuple[ValidatedFact, ...]
     deltas: tuple[ValidatedDelta, ...]
+    state_uncertainties: tuple[ValidatedUncertainty, ...] = ()
+    diagnostics: tuple[dict[str, Any], ...] = ()
 
 
 def segment_source(text: str) -> list[SourceSpan]:
@@ -131,18 +150,25 @@ def _selected_character_identity(chapter: Chapter) -> list[dict[str, str]]:
     )
 
 
-def archive_input_fingerprint(chapter: Chapter) -> str:
+def archive_input_fingerprint(
+    chapter: Chapter,
+    *,
+    contract_version: str = ARCHIVE_CONTRACT_VERSION,
+) -> str:
     session = object_session(chapter)
     identities = _selected_character_identity(chapter)
-    projected = (
-        projected_fields_before_chapter(session, chapter, stable_relationship_keys=True)
-        if session is not None
-        else {}
-    )
+    if session is not None:
+        projected, uncertainties = projected_state_before_chapter(
+            session, chapter, stable_relationship_keys=True
+        )
+    else:
+        projected, uncertainties = {}, []
     return archive_input_fingerprint_for_projection(
         chapter,
         projected,
         character_ids=[item["id"] for item in identities],
+        contract_version=contract_version,
+        state_uncertainties=uncertainties,
     )
 
 
@@ -151,6 +177,8 @@ def archive_input_fingerprint_for_projection(
     projected: dict[str, dict[str, str]],
     *,
     character_ids: list[str],
+    contract_version: str = ARCHIVE_CONTRACT_VERSION,
+    state_uncertainties: list[dict[str, Any]] | None = None,
 ) -> str:
     """Hash an archive input from a caller-provided pre-chapter projection.
 
@@ -163,8 +191,10 @@ def archive_input_fingerprint_for_projection(
     # selected characters.  Hashing unrelated characters would make an
     # independent story line stale even though none of its model input changed.
     prior_fields = {character_id: projected.get(character_id, {}) for character_id in character_ids}
-    payload = {
-        "contract": ARCHIVE_CONTRACT_VERSION,
+    if contract_version not in {LEGACY_ARCHIVE_CONTRACT_VERSION, ARCHIVE_CONTRACT_VERSION}:
+        raise ValueError("unsupported archive contract version")
+    payload: dict[str, Any] = {
+        "contract": contract_version,
         "span_version": SOURCE_SPAN_VERSION,
         "draft_text": chapter.draft_text,
         # The selected-character identity, not its mutable display name, is the
@@ -172,11 +202,67 @@ def archive_input_fingerprint_for_projection(
         "character_ids": character_ids,
         "prior_state": prior_fields,
     }
+    if contract_version == ARCHIVE_CONTRACT_VERSION:
+        payload["prior_state_uncertainties"] = [
+            _fingerprint_uncertainty(item)
+            for item in _relevant_prior_state_uncertainties(
+                state_uncertainties, selected_character_ids=character_ids
+            )
+        ]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
-def build_archive_user_message(chapter: Chapter, prior_fields: dict[str, dict[str, str]]) -> str:
+def _fingerprint_uncertainty(item: dict[str, Any]) -> dict[str, Any]:
+    """Only semantic identity belongs in a dependency fingerprint."""
+    return {
+        "character_id": item.get("character_id"),
+        "other_character_id": item.get("other_character_id"),
+        "scope": item.get("scope"),
+        "slot": item.get("slot"),
+    }
+
+
+def _relevant_prior_state_uncertainties(
+    items: list[dict[str, Any]] | None,
+    *,
+    selected_character_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Use one bounded, deterministic unknown-state set for hash and prompt.
+
+    A chapter only receives state for people it selected.  Relationship slots
+    can affect either endpoint, so either selected ID is sufficient.  The
+    bound must be applied *before* fingerprinting: otherwise an unknown that
+    cannot reach the Extractor prompt would still stale an archive.
+    """
+    selected = set(selected_character_ids)
+    relevant = [
+        item
+        for item in items or []
+        if isinstance(item, dict)
+        and (
+            item.get("character_id") in selected
+            or item.get("other_character_id") in selected
+        )
+    ]
+    return sorted(
+        relevant,
+        key=lambda item: (
+            str(item.get("character_id") or ""),
+            str(item.get("scope") or ""),
+            str(item.get("slot") or ""),
+            str(item.get("other_character_id") or ""),
+        ),
+    )[:8]
+
+
+def build_archive_user_message(
+    chapter: Chapter,
+    prior_fields: dict[str, dict[str, str]],
+    *,
+    previous_diagnostics: list[dict[str, Any]] | None = None,
+    prior_state_uncertainties: list[dict[str, Any]] | None = None,
+) -> str:
     spans = segment_source(chapter.draft_text)
     characters = _selected_character_identity(chapter)
     character_names = "\n".join(f"- {item['name']}" for item in characters) or "（无已选人物）"
@@ -186,13 +272,12 @@ def build_archive_user_message(chapter: Chapter, prior_fields: dict[str, dict[st
         rendered = "；".join(f"{key}={value}" for key, value in sorted(fields.items())) or "（无）"
         state_lines.append(f"- {item['name']}：{rendered}")
     numbered_text = "\n".join(f"[{span.id}] {span.text}" for span in spans)
-    return "\n\n".join(
-        [
+    sections = [
             "# 唯一事实来源\n只能从下方已接受正文提取；不得使用 Bible、人物卡或历史补写。",
             "# 人物白名单\n" + character_names,
             "# 本章开始前状态（只用于判断章末净变化）\n" + ("\n".join(state_lines) or "（无）"),
             (
-                "# 输出规则\nsummary 是唯一摘要。facts 按重要性排序，最多 8 条；"
+                "# 输出规则\nsummary 是唯一摘要。facts 按重要性排序，去除完全重复后最多 8 条；"
                 "每条只表达一个可追溯事实。fact_ref 只需在本次输出内唯一，建议按 facts 数组顺序使用 F1、F2……；"
                 "后端会按数组顺序机械归一化编号。用正文中已有的连续 start_id/end_id 定位，不复制证据；"
                 f"首尾句均计入，优先把证据收敛在连续 {RECOMMENDED_FACT_SPAN_SENTENCES} 句以内；"
@@ -207,9 +292,49 @@ def build_archive_user_message(chapter: Chapter, prior_fields: dict[str, dict[st
                 "delta 不要重复输出 character_name 或 other_character_name，后端直接从 fact 推导关系双方。"
                 "没有明确章末净变化就不输出 delta，不得填未知或占位值。"
             ),
-            "# 已接受正文（稳定句号）\n" + numbered_text,
-        ]
-    )
+        "# 已接受正文（稳定句号）\n" + numbered_text,
+    ]
+    uncertainty_lines = []
+    selected_names = {item["id"]: item["name"] for item in characters}
+    for item in _relevant_prior_state_uncertainties(
+        prior_state_uncertainties,
+        selected_character_ids=list(selected_names),
+    ):
+        character_id = item.get("character_id")
+        other_character_id = item.get("other_character_id")
+        slot = item.get("slot")
+        if not isinstance(slot, str):
+            continue
+        # Names stored in a historical diagnostic are descriptive only.  The
+        # IDs are canonical, so render the chapter's current selected name.
+        name = selected_names.get(character_id) or selected_names.get(other_character_id)
+        if name:
+            uncertainty_lines.append(f"- {name}：{slot}尚无法确定（来源章状态待整理）")
+    if uncertainty_lines:
+        sections.insert(-1, "# 本章开始前的未知状态\n" + "\n".join(uncertainty_lines))
+    feedback = _retry_feedback(previous_diagnostics, character_names=selected_names)
+    if feedback:
+        sections.insert(-1, "# 上次整理需纠正项\n" + feedback)
+    return "\n\n".join(sections)
+
+
+def _retry_feedback(
+    diagnostics: list[dict[str, Any]] | None,
+    *,
+    character_names: dict[str, str] | None = None,
+) -> str:
+    """Render a bounded, controlled correction hint without replaying model output."""
+    if not diagnostics:
+        return ""
+    messages = []
+    for item in _controlled_diagnostics(diagnostics, character_names=character_names)[:6]:
+        message = item.get("message")
+        recovery = item.get("recovery")
+        if isinstance(message, str) and message.strip():
+            messages.append(message.strip()[:240])
+        if isinstance(recovery, str) and recovery.strip():
+            messages.append(recovery.strip()[:180])
+    return "\n".join(f"- {message}" for message in messages[:8])
 
 
 def _clean_text(value: Any, *, field: str, maximum: int) -> str:
@@ -221,7 +346,7 @@ def _clean_text(value: Any, *, field: str, maximum: int) -> str:
     return cleaned
 
 
-def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> ValidatedArchive:
+def _validate_archive_output_v20(chapter: Chapter, output: dict[str, Any]) -> ValidatedArchive:
     if not isinstance(output, dict):
         raise ArchiveV2ValidationError("archive output must be an object")
     if set(output) != {"summary", "facts", "end_state_delta"}:
@@ -394,6 +519,313 @@ def validate_archive_output(chapter: Chapter, output: dict[str, Any]) -> Validat
     return ValidatedArchive(summary, tuple(facts), tuple(deltas))
 
 
+def _root_diagnostic(reason: str) -> dict[str, Any]:
+    return {
+        "code": "archive_validation_failed",
+        "severity": "error",
+        "message": archive_validation_message(reason) or "归档结果未通过确定性校验",
+        "recovery": "请根据已接受正文重新整理归档。",
+    }
+
+
+def is_whole_state_placeholder(value: str) -> bool:
+    # The model often wraps a whole placeholder in quote marks or terminates
+    # it with a full stop.  Remove only exterior punctuation, never wording in
+    # the middle of a real state such as “调查身份未知的来客”.
+    normalized = re.sub(r"\s+", "", value).strip(
+        "\"'“”‘’「」『』（）()[]【】<>《》〈〉,，。；;:：!?！？…"
+    ).casefold()
+    return normalized in {item.casefold() for item in _FORBIDDEN_VALUES}
+
+
+def _whole_placeholder(value: str) -> bool:
+    """Private compatibility alias for the validator implementation."""
+    return is_whole_state_placeholder(value)
+
+
+def _delta_identity(
+    raw: Any,
+    *,
+    facts_by_source_ref: dict[str, ValidatedFact],
+    name_to_id: dict[str, str],
+) -> tuple[tuple[str, str, str, str | None], ValidatedFact, str, str, str | None, str, str]:
+    """Validate source/ownership first, then return a mechanically known slot."""
+    if not isinstance(raw, dict):
+        raise ArchiveV2ValidationError("state delta must be an object")
+    required_fields = {"fact_ref", "slot", "operation", "value"}
+    allowed_fields = required_fields | {"character_name", "other_character_name", "scope"}
+    if not required_fields.issubset(raw) or not set(raw).issubset(allowed_fields):
+        raise ArchiveV2ValidationError("state delta contains unsupported fields")
+    source_ref = raw.get("fact_ref")
+    fact = facts_by_source_ref.get(source_ref.strip()) if isinstance(source_ref, str) else None
+    if fact is None:
+        raise ArchiveV2ValidationError("state delta references an unknown fact")
+    slot, operation = raw.get("slot"), raw.get("operation")
+    if not isinstance(operation, str) or operation not in {"set", "clear"}:
+        raise ArchiveV2ValidationError("state delta operation must be set or clear")
+    if slot == "relationship":
+        if len(fact.participant_ids) != 2:
+            raise ArchiveV2ValidationError("relationship delta fact must have exactly two participants")
+        character_id, other_id = sorted(fact.participant_ids)
+        supplied_name, supplied_other_name = raw.get("character_name"), raw.get("other_character_name")
+        if supplied_name is not None or supplied_other_name is not None:
+            if (
+                not isinstance(supplied_name, str)
+                or supplied_name not in name_to_id
+                or not isinstance(supplied_other_name, str)
+                or supplied_other_name not in name_to_id
+                or supplied_name == supplied_other_name
+                or {name_to_id[supplied_name], name_to_id[supplied_other_name]} != {character_id, other_id}
+            ):
+                raise ArchiveV2ValidationError("legacy relationship delta participants must match its fact")
+        return (character_id, "relationship", "relationship", other_id), fact, character_id, "relationship", other_id, "relationship", operation
+    if slot not in SNAPSHOT_SLOTS and slot not in PERSISTENT_SLOTS:
+        raise ArchiveV2ValidationError("state delta slot is unsupported")
+    name = raw.get("character_name")
+    if not isinstance(name, str) or name not in name_to_id:
+        raise ArchiveV2ValidationError("state delta references an unselected character")
+    character_id = name_to_id[name]
+    if character_id not in fact.participant_ids:
+        raise ArchiveV2ValidationError("state delta owner must participate in its fact")
+    supplied_other_name = raw.get("other_character_name")
+    if supplied_other_name is not None and (
+        not isinstance(supplied_other_name, str) or supplied_other_name not in name_to_id
+    ):
+        raise ArchiveV2ValidationError("state delta references an unselected character")
+    scope = "snapshot" if slot in SNAPSHOT_SLOTS else "persistent"
+    return (character_id, scope, str(slot), None), fact, character_id, scope, None, str(slot), operation
+
+
+def _delta_value_problem(operation: str, value: Any) -> str | None:
+    if operation == "clear":
+        return None if value is None else "clear state delta value must be null"
+    if not isinstance(value, str) or not value.strip():
+        return "state delta value is required"
+    if len(value.strip()) > MAX_STATE_VALUE_CHARS:
+        return f"state delta value exceeds {MAX_STATE_VALUE_CHARS} characters"
+    if _whole_placeholder(value):
+        return "state delta value cannot be unknown or a placeholder"
+    return None
+
+
+def _uncertainty_for_slot(
+    key: tuple[str, str, str, str | None],
+    candidates: list[dict[str, Any]],
+    *,
+    id_to_name: dict[str, str],
+) -> ValidatedUncertainty:
+    character_id, scope, slot, other_id = key
+    fact_refs = list(dict.fromkeys(item["fact"].fact_ref for item in candidates))[:8]
+    span_ids = list(
+        dict.fromkeys(
+            span
+            for item in candidates
+            for span in (item["fact"].start_id, item["fact"].end_id)
+        )
+    )[:16]
+    variants: list[dict[str, str | None]] = []
+    for item in candidates:
+        value = item["value"] if isinstance(item["value"], str) and len(item["value"]) <= MAX_STATE_VALUE_CHARS else None
+        variant = {"operation": item["operation"], "value": value}
+        if variant not in variants:
+            variants.append(variant)
+    character_name = id_to_name.get(character_id, "相关人物")
+    other_name = id_to_name.get(other_id) if other_id else None
+    subject = f"{character_name}与{other_name}的关系" if other_name else f"{character_name}的{slot}"
+    payload: dict[str, Any] = {
+        "code": "state_slot_uncertain",
+        "severity": "warning",
+        "character_id": character_id,
+        "character_name": character_name,
+        "other_character_id": other_id,
+        "other_character_name": other_name,
+        "scope": scope,
+        "slot": slot,
+        "fact_refs": fact_refs,
+        "span_ids": span_ids,
+        "variants": variants[:4],
+        "message": f"本章中{subject}有多个不一致或不完整的结果，当前无法确定章末状态。",
+        "recovery": "请重新整理本章，并为该状态槽保留唯一、可追溯的章末结果。",
+    }
+    return ValidatedUncertainty(character_id, other_id, scope, slot, payload)
+
+
+def _validate_archive_output_v21(chapter: Chapter, output: dict[str, Any]) -> ValidatedArchive:
+    if not isinstance(output, dict):
+        raise ArchiveV2ValidationError("archive output must be an object")
+    if set(output) != {"summary", "facts", "end_state_delta"}:
+        raise ArchiveV2ValidationError("archive output contains unsupported fields")
+    summary = _clean_text(output.get("summary"), field="summary", maximum=MAX_SUMMARY_CHARS)
+    raw_facts, raw_deltas = output.get("facts"), output.get("end_state_delta")
+    if not isinstance(raw_facts, list):
+        raise ArchiveV2ValidationError("facts must be an array")
+    if not isinstance(raw_deltas, list):
+        raise ArchiveV2ValidationError("end_state_delta must be an array")
+    if len(raw_facts) > MAX_RAW_FACTS:
+        raise ArchiveV2ValidationError(f"facts exceed raw safety limit {MAX_RAW_FACTS}")
+    if len(raw_deltas) > MAX_RAW_STATE_DELTAS:
+        raise ArchiveV2ValidationError(f"end_state_delta exceeds raw safety limit {MAX_RAW_STATE_DELTAS}")
+
+    span_by_id = {span.id: span for span in segment_source(chapter.draft_text)}
+    name_to_id: dict[str, str] = {}
+    id_to_name: dict[str, str] = {}
+    for link in chapter.character_links:
+        name = link.character.name.strip()
+        if not name or (name in name_to_id and name_to_id[name] != link.character_id):
+            raise ArchiveV2ValidationError("selected character names must be non-empty and unique")
+        name_to_id[name] = link.character_id
+        id_to_name[link.character_id] = name
+
+    facts: list[ValidatedFact] = []
+    facts_by_source_ref: dict[str, ValidatedFact] = {}
+    canonical_facts: dict[tuple[Any, ...], ValidatedFact] = {}
+    for raw in raw_facts:
+        if not isinstance(raw, dict):
+            raise ArchiveV2ValidationError("fact must be an object")
+        if set(raw) != {"fact_ref", "type", "importance", "text", "participant_names", "start_id", "end_id"}:
+            raise ArchiveV2ValidationError("fact contains unsupported fields")
+        source_ref = _clean_text(raw.get("fact_ref"), field="fact_ref", maximum=MAX_FACT_REF_CHARS)
+        fact_type = raw.get("type")
+        if fact_type not in FACT_TYPES:
+            raise ArchiveV2ValidationError("fact type is unsupported")
+        importance = raw.get("importance")
+        if not isinstance(importance, int) or isinstance(importance, bool) or not 1 <= importance <= 3:
+            raise ArchiveV2ValidationError("fact importance must be 1..3")
+        text = _clean_text(raw.get("text"), field="fact text", maximum=MAX_FACT_TEXT_CHARS)
+        raw_names = raw.get("participant_names")
+        if not isinstance(raw_names, list) or len(raw_names) > 4:
+            raise ArchiveV2ValidationError("participant_names must be an array of at most 4 names")
+        participant_ids: list[str] = []
+        for name in raw_names:
+            if not isinstance(name, str) or name not in name_to_id:
+                raise ArchiveV2ValidationError("fact references an unselected character")
+            character_id = name_to_id[name]
+            if character_id in participant_ids:
+                raise ArchiveV2ValidationError("duplicate fact participant")
+            participant_ids.append(character_id)
+        if fact_type == "关系" and len(participant_ids) != 2:
+            raise ArchiveV2ValidationError("relationship fact must have exactly two participants")
+        start_id, end_id = raw.get("start_id"), raw.get("end_id")
+        if start_id not in span_by_id or end_id not in span_by_id:
+            raise ArchiveV2ValidationError("fact source span does not exist")
+        if span_by_id[end_id].ordinal < span_by_id[start_id].ordinal:
+            raise ArchiveV2ValidationError("fact source span is reversed")
+        duplicate_key = (
+            fact_type,
+            "".join(ch for ch in normalize_text(text).casefold() if ch.isalnum()),
+            tuple(sorted(participant_ids)),
+        )
+        source_payload = (
+            fact_type,
+            importance,
+            text,
+            tuple(participant_ids),
+            str(start_id),
+            str(end_id),
+        )
+        previous_source = facts_by_source_ref.get(source_ref)
+        if previous_source is not None:
+            previous_payload = (
+                previous_source.fact_type,
+                previous_source.importance,
+                previous_source.text,
+                previous_source.participant_ids,
+                previous_source.start_id,
+                previous_source.end_id,
+            )
+            if previous_payload != source_payload:
+                raise ArchiveV2ValidationError("duplicate fact_ref")
+            # The duplicate object has still passed every structural/source
+            # check above.  Keep its source reference mapped to the existing
+            # canonical fact so deltas remain deterministic.
+            continue
+        fact = canonical_facts.get(duplicate_key)
+        if fact is None:
+            fact = ValidatedFact(
+                f"F{len(facts) + 1}", fact_type, importance, text, tuple(participant_ids), str(start_id), str(end_id)
+            )
+            canonical_facts[duplicate_key] = fact
+            facts.append(fact)
+        facts_by_source_ref[source_ref] = fact
+    if len(facts) > MAX_FACTS:
+        raise ArchiveV2ValidationError(f"facts exceed chapter limit {MAX_FACTS}")
+
+    candidates_by_key: dict[tuple[str, str, str, str | None], list[dict[str, Any]]] = {}
+    for raw in raw_deltas:
+        key, fact, character_id, scope, other_id, slot, operation = _delta_identity(
+            raw, facts_by_source_ref=facts_by_source_ref, name_to_id=name_to_id
+        )
+        value = raw.get("value")
+        problem = _delta_value_problem(operation, value)
+        candidates_by_key.setdefault(key, []).append(
+            {
+                "fact": fact,
+                "character_id": character_id,
+                "scope": scope,
+                "other_character_id": other_id,
+                "slot": slot,
+                "operation": operation,
+                "value": value.strip() if isinstance(value, str) and not problem else value,
+                "problem": problem,
+            }
+        )
+
+    deltas: list[ValidatedDelta] = []
+    uncertainties: list[ValidatedUncertainty] = []
+    for key, candidates in candidates_by_key.items():
+        signatures = {
+            (item["operation"], item["value"])
+            for item in candidates
+            if item["problem"] is None
+        }
+        if any(item["problem"] is not None for item in candidates) or len(signatures) > 1:
+            uncertainties.append(_uncertainty_for_slot(key, candidates, id_to_name=id_to_name))
+            continue
+        if not candidates:
+            continue
+        item = candidates[0]
+        batch_id = f"snapshot:{item['character_id']}" if item["scope"] == "snapshot" else ""
+        deltas.append(
+            ValidatedDelta(
+                item["fact"].fact_ref,
+                item["character_id"],
+                item["other_character_id"],
+                item["scope"],
+                item["slot"],
+                item["operation"],
+                item["value"],
+                batch_id,
+            )
+        )
+    if len(deltas) + len(uncertainties) > MAX_STATE_DELTAS:
+        raise ArchiveV2ValidationError(
+            f"end_state_delta and state uncertainties exceed limit {MAX_STATE_DELTAS}"
+        )
+    if len(deltas) > MAX_STATE_DELTAS:
+        raise ArchiveV2ValidationError(f"end_state_delta exceeds limit {MAX_STATE_DELTAS}")
+    diagnostics = tuple(item.payload for item in uncertainties)
+    return ValidatedArchive(summary, tuple(facts), tuple(deltas), tuple(uncertainties), diagnostics)
+
+
+def validate_archive_output(
+    chapter: Chapter,
+    output: dict[str, Any],
+    *,
+    contract_version: str = ARCHIVE_CONTRACT_VERSION,
+) -> ValidatedArchive:
+    """Validate the revision's own contract; v2.0 remains byte-compatible."""
+    try:
+        if contract_version == LEGACY_ARCHIVE_CONTRACT_VERSION:
+            return _validate_archive_output_v20(chapter, output)
+        if contract_version != ARCHIVE_CONTRACT_VERSION:
+            raise ArchiveV2ValidationError("unsupported archive contract version")
+        return _validate_archive_output_v21(chapter, output)
+    except ArchiveV2ValidationError as exc:
+        if exc.diagnostics:
+            raise
+        raise ArchiveV2ValidationError(str(exc), diagnostics=[_root_diagnostic(str(exc))]) from exc
+
+
 def create_archive_revision(
     db: Session,
     chapter: Chapter,
@@ -418,6 +850,7 @@ def create_archive_revision(
         provenance=provenance,
         input_fingerprint=fingerprint,
         status="pending",
+        contract_version=ARCHIVE_CONTRACT_VERSION,
     )
     db.add(revision)
     db.flush()
@@ -445,7 +878,7 @@ def activate_archive_revision(
     db.refresh(chapter)
     db.refresh(revision)
     run = db.get(JobRun, job_id) if job_id else None
-    current = archive_input_fingerprint(chapter)
+    current = archive_input_fingerprint(chapter, contract_version=revision.contract_version)
     if (
         chapter.status != "finalized"
         or revision.status != "extracting"
@@ -472,6 +905,14 @@ def activate_archive_revision(
             chapter.archive_status = "stale"
         raise ArchiveFingerprintMismatch(revision.error_message)
 
+    if (
+        len(validated.deltas) + len(validated.state_uncertainties) > MAX_STATE_DELTAS
+        or len(validated.diagnostics) > MAX_STATE_DELTAS
+    ):
+        raise ArchiveV2ValidationError(
+            f"end_state_delta and state uncertainties exceed limit {MAX_STATE_DELTAS}"
+        )
+
     db.execute(
         update(ChapterArchiveRevision)
         .where(ChapterArchiveRevision.chapter_id == chapter.id, ChapterArchiveRevision.is_active.is_(True))
@@ -479,6 +920,8 @@ def activate_archive_revision(
     )
     revision.summary = validated.summary
     revision.model_name = model_name
+    revision.diagnostics = [dict(item) for item in validated.diagnostics]
+    revision.state_uncertainties = [dict(item.payload) for item in validated.state_uncertainties]
     fact_models: dict[str, ChapterArchiveFact] = {}
     for position, fact in enumerate(validated.facts, start=1):
         model = ChapterArchiveFact(
@@ -521,6 +964,10 @@ def activate_archive_revision(
         updated_character_ids.add(delta.character_id)
         if delta.other_character_id:
             updated_character_ids.add(delta.other_character_id)
+    for uncertainty in validated.state_uncertainties:
+        updated_character_ids.add(uncertainty.character_id)
+        if uncertainty.other_character_id:
+            updated_character_ids.add(uncertainty.other_character_id)
     revision.status = "complete"
     revision.is_active = True
     revision.validation_errors = []
@@ -528,7 +975,7 @@ def activate_archive_revision(
     revision.error_message = None
     revision.finished_at = utc_now()
     chapter.active_archive_revision_id = revision.id
-    chapter.archive_status = "complete"
+    chapter.archive_status = "partial" if validated.state_uncertainties else "complete"
     chapter.archive_input_fingerprint = revision.input_fingerprint
     chapter.legacy_archive_eligible = False
     db.flush()
@@ -573,10 +1020,13 @@ def mark_revision_partial(
     *,
     reason: str,
     summary: str = "",
+    diagnostics: list[dict[str, Any]] | None = None,
 ) -> None:
     revision.status = "partial"
     revision.summary = summary.strip() if isinstance(summary, str) else ""
     revision.validation_errors = [reason]
+    revision.diagnostics = diagnostics or [_root_diagnostic(reason)]
+    revision.state_uncertainties = []
     revision.error_code = "archive_validation_failed"
     revision.error_message = archive_validation_message(reason)
     revision.finished_at = utc_now()
@@ -589,10 +1039,13 @@ def mark_revision_failed(
     *,
     error_code: str,
     error_message: str,
+    diagnostics: list[dict[str, Any]] | None = None,
 ) -> None:
     revision.status = "failed"
     revision.error_code = error_code
     revision.error_message = error_message
+    revision.diagnostics = diagnostics or [_root_diagnostic(error_message)]
+    revision.state_uncertainties = []
     revision.finished_at = utc_now()
     chapter.archive_status = "complete" if chapter.active_archive_revision_id else "failed"
 
@@ -604,14 +1057,13 @@ def invalidate_archive_if_input_changed(
     previous_fingerprint: str | None = None,
     force: bool = False,
 ) -> bool:
-    fingerprint = archive_input_fingerprint(chapter)
+    active = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id) if chapter.active_archive_revision_id else None
+    contract_version = active.contract_version if active is not None else ARCHIVE_CONTRACT_VERSION
+    fingerprint = archive_input_fingerprint(chapter, contract_version=contract_version)
     baseline = previous_fingerprint or chapter.archive_input_fingerprint
     if not force and (baseline is None or baseline == fingerprint):
         return False
     changed = bool(chapter.active_archive_revision_id or chapter.legacy_archive_eligible)
-    active = None
-    if chapter.active_archive_revision_id:
-        active = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id)
     if active is not None and active.is_active:
         active.is_active = False
         active.status = "stale"
@@ -639,7 +1091,9 @@ def invalidate_downstream_archives(db: Session, book_id: str, *, after_index: in
         revision = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id)
         if revision is None or not revision.is_active or revision.status != "complete":
             continue
-        if revision.input_fingerprint == archive_input_fingerprint(chapter):
+        if revision.input_fingerprint == archive_input_fingerprint(
+            chapter, contract_version=revision.contract_version
+        ):
             continue
         revision.is_active = False
         revision.status = "stale"
@@ -648,7 +1102,9 @@ def invalidate_downstream_archives(db: Session, book_id: str, *, after_index: in
         revision.finished_at = utc_now()
         chapter.active_archive_revision_id = None
         chapter.archive_status = "stale"
-        chapter.archive_input_fingerprint = archive_input_fingerprint(chapter)
+        chapter.archive_input_fingerprint = archive_input_fingerprint(
+            chapter, contract_version=revision.contract_version
+        )
         chapter.legacy_archive_eligible = False
         db.flush()
         invalidated.append(chapter.id)
@@ -661,7 +1117,9 @@ def active_archive_revision(db: Session, chapter: Chapter) -> ChapterArchiveRevi
     revision = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id)
     if revision is None or not revision.is_active or revision.status != "complete":
         return None
-    if revision.input_fingerprint != archive_input_fingerprint(chapter):
+    if revision.input_fingerprint != archive_input_fingerprint(
+        chapter, contract_version=revision.contract_version
+    ):
         return None
     return revision
 
@@ -723,10 +1181,13 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
     result: dict[str, dict[str, Any]] = {}
     for chapter in sorted(chapters, key=lambda item: (item.index, item.id)):
         active = by_id.get(chapter.active_archive_revision_id or "")
+        contract_version = active.contract_version if active is not None else ARCHIVE_CONTRACT_VERSION
         expected_fingerprint = archive_input_fingerprint_for_projection(
             chapter,
             cursor.materialize_fields(),
             character_ids=selected_by_chapter.get(chapter.id, []),
+            contract_version=contract_version,
+            state_uncertainties=cursor.materialize_uncertainties(),
         )
         active_valid = (
             active is not None
@@ -735,13 +1196,24 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
             and active.input_fingerprint == expected_fingerprint
         )
         latest = latest_by_chapter.get(chapter.id)
+        has_state_gaps = bool(getattr(active, "state_uncertainties", []) or []) if active_valid else False
         retry_allowed = (
             chapter.status == "finalized"
             and latest is not None
-            and latest.status in {"partial", "failed", "stale"}
+            and (
+                latest.status in {"partial", "failed", "stale"}
+                # A v2.1 revision remains DB-complete and active while a
+                # verified unknown slot is outstanding.  It is still an
+                # author-actionable recovery state, not a terminal success.
+                or (
+                    latest.is_active
+                    and latest.status == "complete"
+                    and bool(getattr(latest, "state_uncertainties", []) or [])
+                )
+            )
         )
         if active_valid:
-            schema, status = "v2", "complete"
+            schema, status = "v2", ("partial" if has_state_gaps else "complete")
         elif chapter.status == "finalized" and chapter.legacy_archive_eligible:
             schema, status = "legacy", "complete"
         else:
@@ -751,6 +1223,12 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
             "archive_schema": schema,
             "archive_can_retry": retry_allowed,
             "archive_latest_attempt_status": latest.status if latest is not None else chapter.archive_status,
+            "archive_effective_status": (
+                "with_state_gaps" if has_state_gaps else "full"
+            ) if active_valid or schema == "legacy" else "none",
+            "archive_state_status": "partial" if has_state_gaps else (
+                "complete" if active_valid or schema == "legacy" else "none"
+            ),
         }
         # Match _changes_for_projection exactly: its status-only active test is
         # deliberate to avoid fingerprint recursion, and legacy is a fallback
@@ -760,10 +1238,132 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
         if active is not None and active.is_active and active.status == "complete":
             for delta in deltas_by_revision.get(active.id, []):
                 cursor.apply(delta)
+            for uncertainty in uncertainty_changes_for_revision(active):
+                cursor.apply(uncertainty)
         elif chapter.legacy_archive_eligible or chapter.archive_input_fingerprint is None:
             for change in legacy_by_chapter.get(chapter.id, []):
                 cursor.apply(change)
     return result
+
+
+_DIAGNOSTIC_STRING_LIMITS = {
+    "code": 64,
+    "severity": 16,
+    "character_id": 64,
+    "character_name": 120,
+    "other_character_id": 64,
+    "other_character_name": 120,
+    "scope": 32,
+    "slot": 64,
+    "message": 500,
+    "recovery": 300,
+}
+
+
+def _state_uncertainty_display_message(
+    record: dict[str, Any],
+    *,
+    character_names: dict[str, str],
+) -> str | None:
+    """Regenerate name-bearing text from canonical IDs for public records."""
+    character_id = record.get("character_id")
+    scope = record.get("scope")
+    slot = record.get("slot")
+    if not isinstance(character_id, str) or not isinstance(scope, str) or not isinstance(slot, str):
+        return None
+    character_name = character_names.get(character_id)
+    if not character_name:
+        return None
+    if scope == "relationship":
+        other_id = record.get("other_character_id")
+        other_name = character_names.get(other_id) if isinstance(other_id, str) else None
+        if not other_name:
+            return None
+        subject = f"{character_name}与{other_name}的关系"
+    elif scope in {"snapshot", "persistent"}:
+        subject = f"{character_name}的{slot}"
+    else:
+        return None
+    return f"本章中{subject}有多个不一致或不完整的结果，当前无法确定章末状态。"
+
+
+def _controlled_diagnostics(
+    value: Any,
+    *,
+    character_names: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Whitelist persisted diagnostics before exposing them or reusing prompts."""
+    if not isinstance(value, list):
+        return []
+    records: list[dict[str, Any]] = []
+    for item in value[:MAX_STATE_DELTAS]:
+        if not isinstance(item, dict):
+            continue
+        record: dict[str, Any] = {}
+        for key, limit in _DIAGNOSTIC_STRING_LIMITS.items():
+            field = item.get(key)
+            if field is None and key in {"other_character_id", "other_character_name"}:
+                record[key] = None
+            elif isinstance(field, str) and field.strip():
+                record[key] = field.strip()[:limit]
+        for key, limit in (("fact_refs", 8), ("span_ids", 16)):
+            values = item.get(key)
+            if isinstance(values, list):
+                record[key] = [entry[:16] for entry in values[:limit] if isinstance(entry, str) and entry.strip()]
+            else:
+                record[key] = []
+        variants = item.get("variants")
+        record["variants"] = [
+            {
+                "operation": entry["operation"],
+                "value": entry.get("value")[:MAX_STATE_VALUE_CHARS]
+                if isinstance(entry.get("value"), str) else None,
+            }
+            for entry in variants[:4]
+            if isinstance(entry, dict)
+            and isinstance(entry.get("operation"), str)
+            and entry.get("operation") in {"set", "clear"}
+        ] if isinstance(variants, list) else []
+        # IDs, rather than old diagnostic display names, are the durable
+        # identity.  A renamed card must be rendered with its current name.
+        if character_names:
+            for id_key, name_key in (
+                ("character_id", "character_name"),
+                ("other_character_id", "other_character_name"),
+            ):
+                character_id = record.get(id_key)
+                if isinstance(character_id, str) and character_id in character_names:
+                    record[name_key] = character_names[character_id]
+            if record.get("code") == "state_slot_uncertain":
+                message = _state_uncertainty_display_message(record, character_names=character_names)
+                if message is not None:
+                    record["message"] = message
+                    record["recovery"] = "请重新整理本章，并为该状态槽保留唯一、可追溯的章末结果。"
+        if all(key in record for key in ("code", "severity", "message", "recovery")):
+            records.append(record)
+    return records
+
+
+def canonicalize_archive_diagnostics(
+    value: Any,
+    *,
+    character_names: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Return a controlled archive diagnostic rendering for public transport."""
+    return _controlled_diagnostics(value, character_names=character_names)
+
+
+def _latest_attempt_read(revision: ChapterArchiveRevision | None) -> dict[str, Any] | None:
+    if revision is None:
+        return None
+    return {
+        "revision_id": revision.id,
+        "revision": revision.revision,
+        "status": revision.status,
+        "error_code": revision.error_code,
+        "error_message": archive_validation_message(revision.error_message),
+        "finished_at": revision.finished_at,
+    }
 
 
 def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
@@ -776,7 +1376,14 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
     retry_allowed = (
         chapter.status == "finalized"
         and latest is not None
-        and latest.status in {"partial", "failed", "stale"}
+        and (
+            latest.status in {"partial", "failed", "stale"}
+            or (
+                latest.is_active
+                and latest.status == "complete"
+                and bool(getattr(latest, "state_uncertainties", []) or [])
+            )
+        )
     )
     inactive_preview = None
     if latest is not None and latest is not active and latest.status in {"partial", "failed", "stale"}:
@@ -791,8 +1398,22 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "state_delta_count": len(latest.state_deltas),
         }
     if active is not None:
+        current_names = {
+            link.character_id: link.character.name
+            for link in chapter.character_links
+            if link.character_id and link.character.name
+        }
+        state_uncertainties = _controlled_diagnostics(
+            getattr(active, "state_uncertainties", []), character_names=current_names
+        )
+        diagnostics = _controlled_diagnostics(
+            getattr(active, "diagnostics", []), character_names=current_names
+        )
+        has_state_gaps = bool(state_uncertainties)
         return {
-            "status": "complete",
+            # The legacy field is a display aggregate.  It deliberately does
+            # not turn the complete DB revision into a partial active row.
+            "status": "partial" if has_state_gaps else "complete",
             "schema": "v2",
             "revision_id": active.id,
             "revision": active.revision,
@@ -815,6 +1436,11 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "can_retry": retry_allowed,
             "latest_attempt_status": latest.status if latest is not None else active.status,
             "inactive_preview": inactive_preview,
+            "effective_status": "with_state_gaps" if has_state_gaps else "full",
+            "state_status": "partial" if has_state_gaps else "complete",
+            "state_uncertainties": state_uncertainties,
+            "diagnostics": diagnostics,
+            "latest_attempt": _latest_attempt_read(latest),
         }
     if chapter.status == "finalized" and chapter.legacy_archive_eligible:
         return {
@@ -830,6 +1456,11 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "can_retry": retry_allowed,
             "latest_attempt_status": latest.status if latest is not None else "legacy",
             "inactive_preview": inactive_preview,
+            "effective_status": "full",
+            "state_status": "complete",
+            "state_uncertainties": [],
+            "diagnostics": _controlled_diagnostics(getattr(latest, "diagnostics", [])) if latest else [],
+            "latest_attempt": _latest_attempt_read(latest),
         }
     return {
         "status": chapter.archive_status,
@@ -844,4 +1475,9 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
         "can_retry": retry_allowed,
         "latest_attempt_status": latest.status if latest is not None else chapter.archive_status,
         "inactive_preview": inactive_preview,
+        "effective_status": "none",
+        "state_status": "none",
+        "state_uncertainties": [],
+        "diagnostics": _controlled_diagnostics(getattr(latest, "diagnostics", [])) if latest else [],
+        "latest_attempt": _latest_attempt_read(latest),
     }

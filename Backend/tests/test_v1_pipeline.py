@@ -399,7 +399,7 @@ def test_memory_selector_retries_pathological_chapter_by_chapter_output():
     assert "程序退回" in llm.users[1]
 
 
-def test_memory_selector_tolerates_malformed_id_payload_shapes():
+def test_memory_selector_rejects_malformed_payload_shapes_after_one_correction():
     class ShapedLLM:
         def __init__(self, payload):
             self.payload = payload
@@ -407,17 +407,27 @@ def test_memory_selector_tolerates_malformed_id_payload_shapes():
         def complete_json(self, **kwargs):
             return self.payload
 
-    # Mixed non-string items are filtered, not fatal.
+    # A malformed response gets one specific correction. It must not be
+    # silently reduced to empty history, which would hide a broken Selector.
     agent = MemorySelectorAgent(ShapedLLM({"briefs": [{"text": "事实", "source_ids": ["chapter:x:headline"]}, 123], "conflicts": []}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input").briefs == [{"text": "事实", "source_ids": ["chapter:x:headline"]}]
-    # Invalid shapes degrade to the legal empty selection.
-    agent = MemorySelectorAgent(ShapedLLM({"briefs": {"a": 1}, "conflicts": {}}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input").briefs == []
-    agent = MemorySelectorAgent(ShapedLLM({}), "selector")  # type: ignore[arg-type]
-    assert agent.select("input").briefs == []
+    with pytest.raises(LLMError) as malformed_item:
+        agent.select("input")
+    assert malformed_item.value.code == "memory_selection_invalid"
 
-    selected = MemorySelectorAgent(  # type: ignore[arg-type]
+    agent = MemorySelectorAgent(ShapedLLM({"briefs": {"a": 1}, "conflicts": {}}), "selector")  # type: ignore[arg-type]
+    with pytest.raises(LLMError) as malformed_arrays:
+        agent.select("input")
+    assert malformed_arrays.value.code == "memory_selection_invalid"
+
+    agent = MemorySelectorAgent(ShapedLLM({}), "selector")  # type: ignore[arg-type]
+    with pytest.raises(LLMError) as missing_arrays:
+        agent.select("input")
+    assert missing_arrays.value.code == "memory_selection_invalid"
+
+    agent = MemorySelectorAgent(  # type: ignore[arg-type]
         ShapedLLM({"briefs": [], "conflicts": [], "previous_ending_start_id": " previous_ending:x:p2 "}),
         "selector",
-    ).select("input")
-    assert selected.previous_ending_start_id == "previous_ending:x:p2"
+    )
+    with pytest.raises(LLMError) as malformed_ending_id:
+        agent.select("input")
+    assert malformed_ending_id.value.code == "memory_selection_invalid"

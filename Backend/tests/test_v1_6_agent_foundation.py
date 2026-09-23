@@ -28,7 +28,7 @@ class RecordingJSONLLM:
         self.schema = schema
         if "previous_ending_start_id" in schema.get("properties", {}):
             return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
-        return {"verdict": "passed", "issues": []}
+        return {"verdict": "passed", "issues": [], "name_uses": []}
 
 
 class RecordingStreamLLM:
@@ -43,7 +43,7 @@ class RecordingStreamLLM:
 def test_checker_foundation_uses_its_fixed_protocol() -> None:
     llm = RecordingJSONLLM()
     result = CheckerAgent(llm, "可编辑人格").check("Bible 与正文")
-    assert result == {"verdict": "passed", "issues": []}
+    assert result == {"verdict": "passed", "issues": [], "name_uses": []}
     assert llm.schema == CHECKER_SCHEMA
     assert llm.system == f"可编辑人格\n\n{PROGRAM_PROTOCOLS['checker']}"
 

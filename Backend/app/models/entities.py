@@ -260,6 +260,15 @@ class ChapterArchiveRevision(Base):
     validation_errors: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
     )
+    # v2.2 preserves bounded, whitelist-shaped validation detail separately
+    # from the active narrative facts.  A complete v2.1 revision may carry
+    # unresolved state slots without making those slots look determined.
+    diagnostics: Mapped[list[dict[str, Any]]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
+    )
+    state_uncertainties: Mapped[list[dict[str, Any]]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list, nullable=False, server_default="[]"
+    )
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -513,6 +522,15 @@ class JobRun(Base):
     added_event_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     memory_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     checker_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # The durable check-attempt record.  Candidate text remains server-only;
+    # these references let a retry reuse exactly the candidate and frozen
+    # production input that produced it without holding a transaction open
+    # during an LLM call.
+    candidate_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    parent_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    input_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    input_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    context_limitations: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # No endpoint/key is retained here. This documents the exact effective
     # model settings captured when an in-flight task was started.
     model_binding_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -544,6 +562,14 @@ class ChapterDraftCandidate(Base):
     finish_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     deterministic_violations: Mapped[list | None] = mapped_column(JSON, nullable=True)
     checker_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Mutable aggregate for the newest completed checker attempt.  Every
+    # individual attempt is immutable in JobRun; this row is only updated by
+    # a compare-and-set against `latest_checker_attempt_id`.
+    checker_input_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSON), default=dict, nullable=False, server_default="{}"
+    )
+    checker_input_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    latest_checker_attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     bible_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     draft_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_current: Mapped[bool] = mapped_column(default=False, nullable=False)

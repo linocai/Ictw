@@ -89,7 +89,7 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
     ),
     "checker": (
         "不可编辑程序协议：只输出 JSON 检查结论 passed、suspect 或 violation，以及逐项"
-        "kind、draft_evidence、bible_evidence、reason。必须基于证据；不得修改、续写正文"
+        "kind、draft_evidence、bible_evidence、reason、source_kind、source_id、source_evidence。必须基于证据；不得修改、续写正文"
         "或作任何文风评价。检查前必须核对提供的世界观、人物卡、章前状态和有效历史；"
         "既有身份与关系不因 Bible 未重复说明而成为新增事实。必须区分既有事实的自然呈现与本章新增变化，"
         "历史不授权白名单外人物。剧情边界按本协议理解，人格中笼统的‘不新增剧情或关系变化’不应限制自然展开。"
@@ -99,6 +99,9 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
         "Bible 为空或仅含空白时，跳过是否符合本章写作要求的检查，不能仅因此报告问题或判为 suspect、violation。"
         "其余基于已提供资料及正文的事实一致性、人物授权检查照常；此时 bible_evidence 留空，"
         "其他问题在 reason 中说明对应资料证据，不得补造 Bible。"
+        "每次还必须按程序局部片段分组返回 name_uses：每项含 hit_ids、classification、reason 和可选 character_id；"
+        "classification 只能是 character、ordinary_word 或 uncertain。不要把不同局部片段或候选组一概归类。ordinary_word 不视为人物；character 或 uncertain 必须同时给出对应身份问题，"
+        "不得凭此授权人物。"
     ),
     "extractor": (
         "不可编辑程序协议：只以用户已接受正文为事实来源，一次输出"

@@ -296,6 +296,75 @@ struct ChapterArchiveFact: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// A bounded public explanation of a state slot that could not be safely
+/// projected. It deliberately contains identifiers and author-facing copy,
+/// never hidden model output or a rejected candidate.
+struct ChapterArchiveDiagnostic: Codable, Hashable, Sendable, Identifiable {
+    var id: String { "\(code)|\(scope)|\(slot)|\(message)" }
+    var code: String
+    var severity: String
+    var characterId: String?
+    var characterName: String?
+    var otherCharacterId: String?
+    var otherCharacterName: String?
+    var scope: String
+    var slot: String
+    var factRefs: [String]
+    var spanIds: [String]
+    var variants: [Variant]
+    var message: String
+    var recovery: String
+
+    struct Variant: Codable, Hashable, Sendable {
+        var operation: String
+        var value: String
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case code, severity, scope, slot, variants, message, recovery
+        case characterId = "character_id"
+        case characterName = "character_name"
+        case otherCharacterId = "other_character_id"
+        case otherCharacterName = "other_character_name"
+        case factRefs = "fact_refs"
+        case spanIds = "span_ids"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        code = try c.decodeIfPresent(String.self, forKey: .code) ?? "archive_attention"
+        severity = try c.decodeIfPresent(String.self, forKey: .severity) ?? "warning"
+        characterId = try c.decodeIfPresent(String.self, forKey: .characterId)
+        characterName = try c.decodeIfPresent(String.self, forKey: .characterName)
+        otherCharacterId = try c.decodeIfPresent(String.self, forKey: .otherCharacterId)
+        otherCharacterName = try c.decodeIfPresent(String.self, forKey: .otherCharacterName)
+        scope = try c.decodeIfPresent(String.self, forKey: .scope) ?? "chapter"
+        slot = try c.decodeIfPresent(String.self, forKey: .slot) ?? ""
+        factRefs = try c.decodeIfPresent([String].self, forKey: .factRefs) ?? []
+        spanIds = try c.decodeIfPresent([String].self, forKey: .spanIds) ?? []
+        variants = try c.decodeIfPresent([Variant].self, forKey: .variants) ?? []
+        message = try c.decodeIfPresent(String.self, forKey: .message) ?? "这部分状态暂时无法确定。"
+        recovery = try c.decodeIfPresent(String.self, forKey: .recovery) ?? "可重新整理这一章的记忆。"
+    }
+}
+
+struct ChapterArchiveLatestAttempt: Codable, Hashable, Sendable {
+    var revisionId: String?
+    var revision: Int?
+    var status: String
+    var errorCode: String?
+    var errorMessage: String?
+    var finishedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case revision, status
+        case revisionId = "revision_id"
+        case errorCode = "error_code"
+        case errorMessage = "error_message"
+        case finishedAt = "finished_at"
+    }
+}
+
 struct ChapterArchive: Codable, Hashable, Sendable {
     var status: String
     var archiveSchema: String
@@ -309,6 +378,13 @@ struct ChapterArchive: Codable, Hashable, Sendable {
     var canRetry: Bool
     var latestAttemptStatus: String?
     var inactivePreview: ChapterArchiveInactivePreview?
+    /// Effective memory and the most recent attempt are separate facts. A
+    /// later failed attempt must not erase older usable facts.
+    var effectiveStatus: String = "none"
+    var stateStatus: String = "none"
+    var stateUncertainties: [ChapterArchiveDiagnostic] = []
+    var diagnostics: [ChapterArchiveDiagnostic] = []
+    var latestAttempt: ChapterArchiveLatestAttempt?
 
     enum CodingKeys: String, CodingKey {
         case status, summary, facts, revision
@@ -320,6 +396,122 @@ struct ChapterArchive: Codable, Hashable, Sendable {
         case canRetry = "can_retry"
         case latestAttemptStatus = "latest_attempt_status"
         case inactivePreview = "inactive_preview"
+        case effectiveStatus = "effective_status"
+        case stateStatus = "state_status"
+        case stateUncertainties = "state_uncertainties"
+        case diagnostics
+        case latestAttempt = "latest_attempt"
+    }
+
+    init(
+        status: String, archiveSchema: String, revisionId: String?, revision: Int?,
+        summary: String, facts: [ChapterArchiveFact], stateDeltaCount: Int,
+        errorCode: String?, errorMessage: String?, canRetry: Bool,
+        latestAttemptStatus: String?, inactivePreview: ChapterArchiveInactivePreview?,
+        effectiveStatus: String = "none", stateStatus: String = "none",
+        stateUncertainties: [ChapterArchiveDiagnostic] = [],
+        diagnostics: [ChapterArchiveDiagnostic] = [],
+        latestAttempt: ChapterArchiveLatestAttempt? = nil
+    ) {
+        self.status = status; self.archiveSchema = archiveSchema
+        self.revisionId = revisionId; self.revision = revision
+        self.summary = summary; self.facts = facts; self.stateDeltaCount = stateDeltaCount
+        self.errorCode = errorCode; self.errorMessage = errorMessage; self.canRetry = canRetry
+        self.latestAttemptStatus = latestAttemptStatus; self.inactivePreview = inactivePreview
+        self.effectiveStatus = effectiveStatus; self.stateStatus = stateStatus
+        self.stateUncertainties = stateUncertainties; self.diagnostics = diagnostics
+        self.latestAttempt = latestAttempt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "stale"
+        archiveSchema = try c.decodeIfPresent(String.self, forKey: .archiveSchema) ?? "none"
+        revisionId = try c.decodeIfPresent(String.self, forKey: .revisionId)
+        revision = try c.decodeIfPresent(Int.self, forKey: .revision)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        facts = try c.decodeIfPresent([ChapterArchiveFact].self, forKey: .facts) ?? []
+        stateDeltaCount = try c.decodeIfPresent(Int.self, forKey: .stateDeltaCount) ?? 0
+        errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        canRetry = try c.decodeIfPresent(Bool.self, forKey: .canRetry) ?? false
+        latestAttemptStatus = try c.decodeIfPresent(String.self, forKey: .latestAttemptStatus)
+        inactivePreview = try c.decodeIfPresent(ChapterArchiveInactivePreview.self, forKey: .inactivePreview)
+        effectiveStatus = try c.decodeIfPresent(String.self, forKey: .effectiveStatus) ?? (status == "complete" ? "full" : "none")
+        stateStatus = try c.decodeIfPresent(String.self, forKey: .stateStatus) ?? (status == "complete" ? "complete" : "none")
+        stateUncertainties = try c.decodeIfPresent([ChapterArchiveDiagnostic].self, forKey: .stateUncertainties) ?? []
+        diagnostics = try c.decodeIfPresent([ChapterArchiveDiagnostic].self, forKey: .diagnostics) ?? []
+        latestAttempt = try c.decodeIfPresent(ChapterArchiveLatestAttempt.self, forKey: .latestAttempt)
+    }
+}
+
+/// Read-only readiness guard for actions that could use incomplete history.
+/// The confirmation token is generated by the server and only authorizes the
+/// exact current request; the client never reconstructs it or calls a model.
+struct ProductionReadiness: Codable, Hashable, Sendable {
+    struct Limitation: Codable, Hashable, Sendable, Identifiable {
+        var chapterId: String
+        var index: Int
+        var title: String
+        var reason: String
+        var effectiveStatus: String
+        var id: String { chapterId }
+        enum CodingKeys: String, CodingKey {
+            case index, title, reason, kind
+            case chapterId = "chapter_id"
+            case effectiveStatus = "effective_status"
+            case chapterIndexLegacy = "chapter_index"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            chapterId = try c.decode(String.self, forKey: .chapterId)
+            index = try c.decodeIfPresent(Int.self, forKey: .index)
+                ?? c.decodeIfPresent(Int.self, forKey: .chapterIndexLegacy)
+                ?? 0
+            title = try c.decodeIfPresent(String.self, forKey: .title) ?? "第 \(index) 章"
+            reason = try c.decodeIfPresent(String.self, forKey: .reason)
+                ?? c.decodeIfPresent(String.self, forKey: .kind)
+                ?? "历史资料尚不完整"
+            effectiveStatus = try c.decodeIfPresent(String.self, forKey: .effectiveStatus) ?? "none"
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(chapterId, forKey: .chapterId)
+            try c.encode(index, forKey: .index)
+            try c.encode(title, forKey: .title)
+            try c.encode(reason, forKey: .reason)
+            try c.encode(effectiveStatus, forKey: .effectiveStatus)
+        }
+    }
+
+    struct RecommendedRecovery: Codable, Hashable, Sendable, Identifiable {
+        var chapterId: String
+        var index: Int
+        var title: String
+        var reason: String
+        var id: String { chapterId }
+        enum CodingKeys: String, CodingKey {
+            case index, title, reason
+            case chapterId = "chapter_id"
+        }
+    }
+
+    var contextToken: String
+    var limitations: [Limitation]
+    var recommendedRecovery: RecommendedRecovery?
+    enum CodingKeys: String, CodingKey {
+        case limitations
+        case contextToken = "context_token"
+        case recommendedRecovery = "recommended_recovery"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        contextToken = try c.decodeIfPresent(String.self, forKey: .contextToken) ?? ""
+        limitations = try c.decodeIfPresent([Limitation].self, forKey: .limitations) ?? []
+        recommendedRecovery = try c.decodeIfPresent(RecommendedRecovery.self, forKey: .recommendedRecovery)
     }
 }
 
@@ -338,6 +530,78 @@ struct ChapterArchiveInactivePreview: Codable, Hashable, Sendable {
         case revisionId = "revision_id"
         case factCount = "fact_count"
         case stateDeltaCount = "state_delta_count"
+    }
+}
+
+extension ChapterArchive {
+    var hasUsableMemory: Bool { effectiveStatus == "full" || effectiveStatus == "with_state_gaps" }
+
+    private var latestAttemptNeedsModelConfiguration: Bool {
+        guard let code = latestAttempt?.errorCode else { return false }
+        return [
+            "not_configured",
+            "bad_url",
+            "unauthorized",
+            "llm_profile_not_configured",
+            "llm_profile_missing",
+            "api_key_undecryptable",
+        ].contains(code) || code.hasSuffix("_thinking_not_disableable")
+    }
+
+    /// The server's bounded recovery instruction remains available after a
+    /// reload, alongside all unresolved state entries.
+    var recoverySuggestion: String {
+        if latestAttemptNeedsModelConfiguration {
+            return "请先修复 Extractor 的模型配置，再重新整理这一章的记忆。"
+        }
+        let recovery = (stateUncertainties + diagnostics)
+            .map(\.recovery)
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return recovery ?? "可重新整理这一章的记忆。"
+    }
+
+    /// Keep unknown state visibly unknown. This is deliberately a bounded
+    /// summary for the author rather than a reconstructed state value.
+    var attentionSummary: String? {
+        var parts: [String] = []
+        if !stateUncertainties.isEmpty {
+            parts.append("摘要与事实仍可用；部分人物状态待整理。")
+            let issue = stateUncertainties[0]
+            if !issue.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts.append("原因：\(issue.message)")
+            }
+        }
+        if latestAttempt?.status == "failed" || latestAttemptStatus == "failed" {
+            parts.append("旧记忆仍可用；最近一次整理没有完成。")
+            if latestAttemptNeedsModelConfiguration {
+                parts.append("Extractor 的模型配置需要先处理。")
+            }
+            if let message = latestAttempt?.errorMessage,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts.append("原因：\(message)")
+            }
+            if let code = latestAttempt?.errorCode,
+               !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts.append("错误代码：\(code)")
+            }
+        }
+        if parts.isEmpty, let diagnostic = diagnostics.first {
+            parts.append(diagnostic.message)
+        }
+        if parts.isEmpty, let errorMessage,
+           !errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(errorMessage)
+        }
+        guard !parts.isEmpty else { return nil }
+        parts.append("恢复：\(recoverySuggestion)")
+        return parts.joined(separator: " ")
+    }
+
+    /// State gaps and diagnostics can overlap. Preserve the server order but
+    /// avoid rendering an identical bounded item twice.
+    var attentionDiagnostics: [ChapterArchiveDiagnostic] {
+        var seen = Set<String>()
+        return (stateUncertainties + diagnostics).filter { seen.insert($0.id).inserted }
     }
 }
 
@@ -451,6 +715,9 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
     var archiveSchema: String
     var archiveCanRetry: Bool
     var archiveLatestAttemptStatus: String?
+    var archiveEffectiveStatus: String = "none"
+    var archiveStateStatus: String = "none"
+    var archiveStateUncertaintyCount: Int = 0
     var contentRevision: Int = 0
 
     enum CodingKeys: String, CodingKey {
@@ -461,6 +728,9 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
         case archiveSchema = "archive_schema"
         case archiveCanRetry = "archive_can_retry"
         case archiveLatestAttemptStatus = "archive_latest_attempt_status"
+        case archiveEffectiveStatus = "archive_effective_status"
+        case archiveStateStatus = "archive_state_status"
+        case archiveStateUncertaintyCount = "archive_state_uncertainty_count"
         case contentRevision = "content_revision"
     }
 
@@ -477,6 +747,9 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
         archiveSchema = try container.decodeIfPresent(String.self, forKey: .archiveSchema) ?? "none"
         archiveCanRetry = try container.decodeIfPresent(Bool.self, forKey: .archiveCanRetry) ?? false
         archiveLatestAttemptStatus = try container.decodeIfPresent(String.self, forKey: .archiveLatestAttemptStatus)
+        archiveEffectiveStatus = try container.decodeIfPresent(String.self, forKey: .archiveEffectiveStatus) ?? (archiveStatus == "complete" ? "full" : "none")
+        archiveStateStatus = try container.decodeIfPresent(String.self, forKey: .archiveStateStatus) ?? (archiveStatus == "complete" ? "complete" : "none")
+        archiveStateUncertaintyCount = try container.decodeIfPresent(Int.self, forKey: .archiveStateUncertaintyCount) ?? 0
         contentRevision = try container.decodeIfPresent(Int.self, forKey: .contentRevision) ?? 0
     }
 
@@ -484,12 +757,16 @@ struct ChapterSummary: Codable, Identifiable, Hashable, Sendable {
         id: String, bookId: String, index: Int, title: String, status: String,
         source: String, updatedAt: String, archiveStatus: String = "stale",
         archiveSchema: String = "none", archiveCanRetry: Bool = false,
-        archiveLatestAttemptStatus: String? = nil, contentRevision: Int = 0
+        archiveLatestAttemptStatus: String? = nil, archiveEffectiveStatus: String = "none",
+        archiveStateStatus: String = "none", archiveStateUncertaintyCount: Int = 0,
+        contentRevision: Int = 0
     ) {
         self.id = id; self.bookId = bookId; self.index = index; self.title = title
         self.status = status; self.source = source; self.updatedAt = updatedAt
         self.archiveStatus = archiveStatus; self.archiveSchema = archiveSchema
         self.archiveCanRetry = archiveCanRetry; self.archiveLatestAttemptStatus = archiveLatestAttemptStatus
+        self.archiveEffectiveStatus = archiveEffectiveStatus; self.archiveStateStatus = archiveStateStatus
+        self.archiveStateUncertaintyCount = archiveStateUncertaintyCount
         self.contentRevision = contentRevision
     }
 }
@@ -1151,6 +1428,10 @@ struct WriteJobStatus: Decodable, Sendable {
     var memoryContext: MemoryContext? = nil
     var checkerResult: CheckerResult? = nil
     var visibleCheckerResult: CheckerResult? = nil
+    /// The only public handle for a same-candidate retry. The candidate and
+    /// its evidence remain server-only.
+    var canRetryChecker: Bool = false
+    var checkerSourceJobId: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case chapterId = "chapter_id"
@@ -1166,6 +1447,49 @@ struct WriteJobStatus: Decodable, Sendable {
         case memoryContext = "memory_context"
         case checkerResult = "checker_result"
         case visibleCheckerResult = "visible_checker_result"
+        case canRetryChecker = "can_retry_checker"
+        case checkerSourceJobId = "checker_source_job_id"
+    }
+
+    init(
+        chapterId: String, jobId: String? = nil, outcomeCurrent: Bool? = nil,
+        kind: String, phase: String, attempt: Int? = nil, errorCode: String? = nil,
+        errorMessage: String? = nil, errorContext: JobErrorContext? = nil,
+        violations: [Violation]? = nil, chapter: Chapter? = nil,
+        updatedCharacterIds: [String]? = nil, addedEventIds: [String]? = nil,
+        memoryContext: MemoryContext? = nil, checkerResult: CheckerResult? = nil,
+        visibleCheckerResult: CheckerResult? = nil, canRetryChecker: Bool = false,
+        checkerSourceJobId: String? = nil
+    ) {
+        self.chapterId = chapterId; self.jobId = jobId; self.outcomeCurrent = outcomeCurrent
+        self.kind = kind; self.phase = phase; self.attempt = attempt; self.errorCode = errorCode
+        self.errorMessage = errorMessage; self.errorContext = errorContext; self.violations = violations
+        self.chapter = chapter; self.updatedCharacterIds = updatedCharacterIds; self.addedEventIds = addedEventIds
+        self.memoryContext = memoryContext; self.checkerResult = checkerResult
+        self.visibleCheckerResult = visibleCheckerResult; self.canRetryChecker = canRetryChecker
+        self.checkerSourceJobId = checkerSourceJobId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chapterId = try c.decode(String.self, forKey: .chapterId)
+        jobId = try c.decodeIfPresent(String.self, forKey: .jobId)
+        outcomeCurrent = try c.decodeIfPresent(Bool.self, forKey: .outcomeCurrent)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "write"
+        phase = try c.decodeIfPresent(String.self, forKey: .phase) ?? "idle"
+        attempt = try c.decodeIfPresent(Int.self, forKey: .attempt)
+        errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        errorContext = try c.decodeIfPresent(JobErrorContext.self, forKey: .errorContext)
+        violations = try c.decodeIfPresent([Violation].self, forKey: .violations)
+        chapter = try c.decodeIfPresent(Chapter.self, forKey: .chapter)
+        updatedCharacterIds = try c.decodeIfPresent([String].self, forKey: .updatedCharacterIds)
+        addedEventIds = try c.decodeIfPresent([String].self, forKey: .addedEventIds)
+        memoryContext = try c.decodeIfPresent(MemoryContext.self, forKey: .memoryContext)
+        checkerResult = try c.decodeIfPresent(CheckerResult.self, forKey: .checkerResult)
+        visibleCheckerResult = try c.decodeIfPresent(CheckerResult.self, forKey: .visibleCheckerResult)
+        canRetryChecker = try c.decodeIfPresent(Bool.self, forKey: .canRetryChecker) ?? false
+        checkerSourceJobId = try c.decodeIfPresent(String.self, forKey: .checkerSourceJobId)
     }
 
     /// Failure details for the backend-only candidate that Checker rejected.
@@ -1258,13 +1582,31 @@ struct CheckerIssue: Codable, Hashable, Sendable, Identifiable {
     var draftEvidence: String
     var bibleEvidence: String
     var reason: String
-    enum CodingKeys: String, CodingKey { case kind, reason; case draftEvidence = "draft_evidence"; case bibleEvidence = "bible_evidence" }
+    /// Source metadata is available only for the current visible manuscript.
+    /// Candidate-job payloads continue to decode with these fields empty.
+    var sourceKind: String = ""
+    var sourceId: String = ""
+    var sourceEvidence: String = ""
+    enum CodingKeys: String, CodingKey {
+        case kind, reason
+        case draftEvidence = "draft_evidence"
+        case bibleEvidence = "bible_evidence"
+        case sourceKind = "source_kind"
+        case sourceId = "source_id"
+        case sourceEvidence = "source_evidence"
+    }
 
-    init(kind: String, draftEvidence: String, bibleEvidence: String, reason: String) {
+    init(
+        kind: String, draftEvidence: String, bibleEvidence: String, reason: String,
+        sourceKind: String = "", sourceId: String = "", sourceEvidence: String = ""
+    ) {
         self.kind = kind
         self.draftEvidence = draftEvidence
         self.bibleEvidence = bibleEvidence
         self.reason = reason
+        self.sourceKind = sourceKind
+        self.sourceId = sourceId
+        self.sourceEvidence = sourceEvidence
     }
 
     init(from decoder: Decoder) throws {
@@ -1276,6 +1618,63 @@ struct CheckerIssue: Codable, Hashable, Sendable, Identifiable {
         reason = try container.decodeIfPresent(String.self, forKey: .reason) ?? ""
         draftEvidence = try container.decodeIfPresent(String.self, forKey: .draftEvidence) ?? ""
         bibleEvidence = try container.decodeIfPresent(String.self, forKey: .bibleEvidence) ?? ""
+        sourceKind = try container.decodeIfPresent(String.self, forKey: .sourceKind) ?? ""
+        sourceId = try container.decodeIfPresent(String.self, forKey: .sourceId) ?? ""
+        sourceEvidence = try container.decodeIfPresent(String.self, forKey: .sourceEvidence) ?? ""
+    }
+}
+
+/// A deterministic identity choice returned only for the current visible
+/// draft. The server deliberately withholds this from hidden candidates.
+struct CheckerIdentityIssue: Codable, Hashable, Sendable, Identifiable {
+    struct Candidate: Codable, Hashable, Sendable, Identifiable {
+        var characterId: String
+        var name: String
+        var role: String
+        var fixedProfile: String
+        var id: String { characterId }
+        enum CodingKeys: String, CodingKey {
+            case name, role
+            case characterId = "character_id"
+            case fixedProfile = "fixed_profile"
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            characterId = try c.decode(String.self, forKey: .characterId)
+            name = try c.decodeIfPresent(String.self, forKey: .name) ?? "未命名人物"
+            role = try c.decodeIfPresent(String.self, forKey: .role) ?? ""
+            fixedProfile = try c.decodeIfPresent(String.self, forKey: .fixedProfile) ?? ""
+        }
+    }
+
+    var kind: String
+    var name: String
+    var matchId: String
+    var candidates: [Candidate]
+    var id: String { matchId.isEmpty ? "\(kind)|\(name)" : matchId }
+    enum CodingKeys: String, CodingKey {
+        case kind, name, candidates
+        case matchId = "match_id"
+        case nameCandidates = "name_candidates"
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "uncertain_character"
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        matchId = try c.decodeIfPresent(String.self, forKey: .matchId) ?? ""
+        // `name_candidates` is the current public contract. The old
+        // `candidates` spelling is decoded only for cached v2.2 previews.
+        candidates = try c.decodeIfPresent([Candidate].self, forKey: .nameCandidates)
+            ?? c.decodeIfPresent([Candidate].self, forKey: .candidates)
+            ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(name, forKey: .name)
+        try c.encode(matchId, forKey: .matchId)
+        try c.encode(candidates, forKey: .nameCandidates)
     }
 }
 
@@ -1291,6 +1690,10 @@ struct CheckerResult: Codable, Hashable, Sendable {
     var errorMessage: String?
     var errorContext: JobErrorContext?
     var wasOverridden: Bool?
+    var checkAttemptId: String?
+    var inputFingerprint: String?
+    var contextLimitations: [ProductionReadiness.Limitation] = []
+    var identityIssues: [CheckerIdentityIssue] = []
     enum CodingKeys: String, CodingKey {
         case verdict, status, issues
         case draftFingerprint = "draft_fingerprint"
@@ -1298,6 +1701,43 @@ struct CheckerResult: Codable, Hashable, Sendable {
         case errorMessage = "error_message"
         case errorContext = "error_context"
         case wasOverridden = "override"
+        case checkAttemptId = "check_attempt_id"
+        case inputFingerprint = "input_fingerprint"
+        case contextLimitations = "context_limitations"
+        case identityIssues = "identity_issues"
+    }
+
+    init(
+        verdict: String? = nil, status: String? = nil, draftFingerprint: String? = nil,
+        issues: [CheckerIssue]? = nil, errorCode: String? = nil,
+        errorMessage: String? = nil, errorContext: JobErrorContext? = nil,
+        wasOverridden: Bool? = nil, checkAttemptId: String? = nil,
+        inputFingerprint: String? = nil,
+        contextLimitations: [ProductionReadiness.Limitation] = [],
+        identityIssues: [CheckerIdentityIssue] = []
+    ) {
+        self.verdict = verdict; self.status = status; self.draftFingerprint = draftFingerprint
+        self.issues = issues; self.errorCode = errorCode; self.errorMessage = errorMessage
+        self.errorContext = errorContext; self.wasOverridden = wasOverridden
+        self.checkAttemptId = checkAttemptId; self.inputFingerprint = inputFingerprint
+        self.contextLimitations = contextLimitations
+        self.identityIssues = identityIssues
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        verdict = try c.decodeIfPresent(String.self, forKey: .verdict)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
+        draftFingerprint = try c.decodeIfPresent(String.self, forKey: .draftFingerprint)
+        issues = try c.decodeIfPresent([CheckerIssue].self, forKey: .issues)
+        errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        errorContext = try c.decodeIfPresent(JobErrorContext.self, forKey: .errorContext)
+        wasOverridden = try c.decodeIfPresent(Bool.self, forKey: .wasOverridden)
+        checkAttemptId = try c.decodeIfPresent(String.self, forKey: .checkAttemptId)
+        inputFingerprint = try c.decodeIfPresent(String.self, forKey: .inputFingerprint)
+        contextLimitations = try c.decodeIfPresent([ProductionReadiness.Limitation].self, forKey: .contextLimitations) ?? []
+        identityIssues = try c.decodeIfPresent([CheckerIdentityIssue].self, forKey: .identityIssues) ?? []
     }
     var displayVerdict: String { verdict ?? status ?? "unavailable" }
     var isPassed: Bool { displayVerdict == "passed" }
@@ -1330,7 +1770,20 @@ enum ChapterArchiveRailState: Equatable, Sendable {
     case pending
     case attention
 
-    static func resolve(status: String, canRetry: Bool) -> Self {
+    static func resolve(
+        status: String,
+        canRetry: Bool,
+        effectiveStatus: String = "none",
+        latestAttemptStatus: String? = nil,
+        stateUncertaintyCount: Int = 0
+    ) -> Self {
+        // A newer failed attempt or an explicit unknown slot needs a durable
+        // rail marker even while an older active memory remains available.
+        if effectiveStatus == "with_state_gaps"
+            || latestAttemptStatus == "failed"
+            || stateUncertaintyCount > 0 {
+            return .attention
+        }
         switch status {
         case "pending", "extracting": return .pending
         case "partial", "failed", "stale": return canRetry ? .attention : .none
@@ -1357,7 +1810,23 @@ enum BookPersonaResponsePolicy {
 
 struct CheckerRunResult: Decodable, Sendable {
     var checkerResult: CheckerResult?
-    enum CodingKeys: String, CodingKey { case checkerResult = "checker_result" }
+    var checkAttemptId: String?
+    var inputFingerprint: String?
+    var contextLimitations: [ProductionReadiness.Limitation] = []
+    enum CodingKeys: String, CodingKey {
+        case checkerResult = "checker_result"
+        case checkAttemptId = "check_attempt_id"
+        case inputFingerprint = "input_fingerprint"
+        case contextLimitations = "context_limitations"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        checkerResult = try c.decodeIfPresent(CheckerResult.self, forKey: .checkerResult)
+        checkAttemptId = try c.decodeIfPresent(String.self, forKey: .checkAttemptId)
+        inputFingerprint = try c.decodeIfPresent(String.self, forKey: .inputFingerprint)
+        contextLimitations = try c.decodeIfPresent([ProductionReadiness.Limitation].self, forKey: .contextLimitations) ?? []
+    }
 }
 
 enum ChapterJobReconciliationDecision: Equatable, Sendable {
@@ -1387,12 +1856,11 @@ enum ChapterJobReconciler {
                 return .obsoleteTerminal
             }
             // Accepted prose remains immutable, but its current Extractor
-            // failure is still actionable: it is the one terminal outcome
-            // that can offer a memory-only retry from the Reader. A write or
-            // checker failure arriving after finalization is necessarily old
-            // state and must never repaint the accepted chapter.
+            // failure is still actionable. A current manual Checker result
+            // describes that same finalized text and is equally safe to
+            // restore; Writer outcomes are never allowed to repaint it.
             if chapter.status == "finalized",
-               !(status.kind == "extract" && status.outcomeCurrent == true) {
+               !(["extract", "check"].contains(status.kind) && status.outcomeCurrent == true) {
                 return .obsoleteTerminal
             }
             switch status.outcomeCurrent {
@@ -1401,7 +1869,8 @@ enum ChapterJobReconciler {
             case nil: return .unverifiedTerminal
             }
         case "cancelled":
-            if hasLocalInputDivergence || chapter.status == "finalized" {
+            if hasLocalInputDivergence
+                || (chapter.status == "finalized" && !(status.kind == "check" && status.outcomeCurrent == true)) {
                 return .obsoleteTerminal
             }
             switch status.outcomeCurrent {

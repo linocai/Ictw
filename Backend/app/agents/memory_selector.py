@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from app.llm.base import LLMClient, LLMError
 from app.services.context import (
@@ -64,7 +64,12 @@ class MemorySelectorAgent:
         self.llm = llm
         self.system_prompt = compose_system_prompt("memory_selector", editable_persona)
 
-    def select(self, user_message: str) -> MemorySelection:
+    def select(
+        self,
+        user_message: str,
+        *,
+        validator: Callable[[MemorySelection], str | None] | None = None,
+    ) -> MemorySelection:
         correction = ""
         for attempt in range(2):
             try:
@@ -79,11 +84,23 @@ class MemorySelectorAgent:
                     temperature=0.1,
                     timeout=180,
                 )
-                briefs = output.get("briefs") if isinstance(output.get("briefs"), list) else []
-                conflicts = output.get("conflicts") if isinstance(output.get("conflicts"), list) else []
-                briefs = [item for item in briefs if isinstance(item, dict)]
-                conflicts = [item for item in conflicts if isinstance(item, dict)]
+                briefs = output.get("briefs")
+                conflicts = output.get("conflicts")
+                start_id = output.get("previous_ending_start_id")
+                selection = MemorySelection(
+                    briefs=briefs if isinstance(briefs, list) else [],
+                    conflicts=conflicts if isinstance(conflicts, list) else [],
+                    # Keep ID tokens verbatim for the shared strict validator.
+                    # Whitespace is a malformed source ID, not harmless prose
+                    # normalization; it gets the same one correction chance as
+                    # every other bad ID.
+                    previous_ending_start_id=start_id if isinstance(start_id, str) and start_id else None,
+                )
                 problem = _selection_limit_problem(briefs, conflicts)
+                if problem is None and isinstance(start_id, str) and start_id != start_id.strip():
+                    problem = "上一章结尾起点 ID 含前后空白，必须原样复制"
+                if problem is None and validator is not None:
+                    problem = validator(selection)
                 if problem:
                     if attempt == 0:
                         correction = (
@@ -97,12 +114,7 @@ class MemorySelectorAgent:
                         code="memory_selection_invalid",
                         retryable=False,
                     )
-                start_id = output.get("previous_ending_start_id")
-                return MemorySelection(
-                    briefs=briefs,
-                    conflicts=conflicts,
-                    previous_ending_start_id=start_id.strip() if isinstance(start_id, str) and start_id.strip() else None,
-                )
+                return selection
             except LLMError as exc:
                 if attempt == 0 and exc.retryable:
                     continue
@@ -110,17 +122,24 @@ class MemorySelectorAgent:
         raise RuntimeError("memory selector failed")
 
 
-def _selection_limit_problem(briefs: list[dict[str, Any]], conflicts: list[dict[str, Any]]) -> str | None:
+def _selection_limit_problem(briefs: Any, conflicts: Any) -> str | None:
+    if not isinstance(briefs, list) or not isinstance(conflicts, list):
+        return "briefs 与 conflicts 必须都是数组"
     if len(briefs) > MAX_MEMORY_BRIEFS:
         return f"简报 {len(briefs)} 条，超过 {MAX_MEMORY_BRIEFS} 条"
     if len(conflicts) > MAX_MEMORY_CONFLICTS:
         return f"冲突 {len(conflicts)} 条，超过 {MAX_MEMORY_CONFLICTS} 条"
     unique_sources: set[str] = set()
     for item in briefs + conflicts:
+        if not isinstance(item, dict):
+            return "每条简报或冲突必须是对象"
         source_ids = item.get("source_ids")
-        if not isinstance(source_ids, list):
-            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip() or not isinstance(source_ids, list) or not source_ids:
+            return "每条简报或冲突必须含非空 text 与 source_ids"
         ids = {value.strip() for value in source_ids if isinstance(value, str) and value.strip()}
+        if len(ids) != len(source_ids):
+            return "来源 ID 必须为非空且不得重复"
         if len(ids) > MAX_SOURCES_PER_BRIEF:
             return f"单条引用 {len(ids)} 个来源，超过 {MAX_SOURCES_PER_BRIEF} 个"
         unique_sources.update(ids)

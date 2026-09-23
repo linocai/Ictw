@@ -107,6 +107,25 @@ def test_book_persona_downgrade_accepts_only_a_verified_stopped_service_backup(t
     assert _revision(database) == "20260809_0011"
 
 
+def test_v220_contract_downgrade_fails_before_ddl_without_recovery_proof(tmp_path, monkeypatch) -> None:
+    database, config = _upgrade_to(tmp_path, monkeypatch, "20260923_0014")
+    before = _sha256(database)
+
+    with pytest.raises(RuntimeError, match="destructive downgrade refused"):
+        command.downgrade(config, "20260830_0013")
+
+    assert _sha256(database) == before
+    connection = sqlite3.connect(database)
+    try:
+        candidate_columns = {row[1] for row in connection.execute("PRAGMA table_info(chapter_draft_candidates)")}
+        revision_columns = {row[1] for row in connection.execute("PRAGMA table_info(chapter_archive_revisions)")}
+    finally:
+        connection.close()
+    assert {"checker_input_snapshot", "latest_checker_attempt_id"}.issubset(candidate_columns)
+    assert {"diagnostics", "state_uncertainties"}.issubset(revision_columns)
+    assert _revision(database) == "20260923_0014"
+
+
 def test_archive_ledger_downgrade_fails_before_ddl_without_recovery_proof(tmp_path, monkeypatch) -> None:
     database, config = _upgrade_to(tmp_path, monkeypatch, "20260805_0010")
     before = _sha256(database)
@@ -156,6 +175,7 @@ def test_every_existing_logical_data_loss_downgrade_uses_the_guard() -> None:
         "20260809_0011_writer_generation.py",
         "20260814_0012_book_agent_personas.py",
         "20260830_0013_reliable_sync_search_models.py",
+        "20260923_0014_v220_production_contract.py",
     }
     for filename in protected:
         source = (versions / filename).read_text(encoding="utf-8")

@@ -144,6 +144,7 @@ struct V2IOSChapterReaderView: View {
                 connectionInterrupted: editor.pollingConnectionInterrupted,
                 taskMonitoringMessage: editor.taskMonitoringMessage,
                 preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
+                canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
                 isLastChapterInBook: V2DeskChapterPosition.isLastChapter(chapter.id, in: workspace.chapters)
             )
         ).commands
@@ -162,6 +163,7 @@ struct V2IOSChapterReaderView: View {
                 connectionInterrupted: editor.pollingConnectionInterrupted,
                 taskMonitoringMessage: editor.taskMonitoringMessage,
                 preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
+                canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
                 isLastChapterInBook: V2DeskChapterPosition.isLastChapter(chapter.id, in: workspace.chapters)
             )
         )
@@ -339,10 +341,42 @@ struct V2IOSChapterDeskView: View {
                 .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
         }
         .confirmationDialog("这一章会被记为完成", isPresented: $showingAcceptWarning, titleVisibility: .visible) {
-            Button("仍然接受", role: .destructive) { Task { if let chapter = await editor.accept(overrideChecker: true) { workspace.upsert(chapter) } } }
+            Button("仍然接受", role: .destructive) {
+                Task {
+                    let shortConfirmation = editor.preflightAcceptanceMessage != nil
+                    if let chapter = await editor.accept(
+                        overrideChecker: !shortConfirmation,
+                        allowShortDraft: shortConfirmation
+                    ) { workspace.upsert(chapter) }
+                }
+            }
             Button("返回", role: .cancel) {}
         } message: {
             Text(editor.preflightAcceptanceMessage ?? "检查发现的问题不会再提醒你；正文和本章意图会保留，随后会单独整理记忆。")
+        }
+        .confirmationDialog(
+            "历史资料有待处理项",
+            isPresented: Binding(
+                get: { editor.pendingProductionContext != nil },
+                set: { if !$0 { editor.dismissProductionContextConfirmation() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let recovery = editor.pendingProductionContext?.readiness.recommendedRecovery,
+               let target = workspace.chapters.first(where: { $0.id == recovery.chapterId }) {
+                Button("查看第 \(recovery.index) 章") {
+                    editor.dismissProductionContextConfirmation()
+                    workspace.replaceCurrentDestination(with: target)
+                    dismiss()
+                }
+            }
+            Button("知情继续", role: .destructive) {
+                guard let pending = editor.pendingProductionContext else { return }
+                Task { if let chapter = await editor.confirmProductionContextAndContinue(pending) { workspace.upsert(chapter) } }
+            }
+            Button("返回", role: .cancel) { editor.dismissProductionContextConfirmation() }
+        } message: {
+            Text(productionContextMessage)
         }
     }
 
@@ -358,8 +392,19 @@ struct V2IOSChapterDeskView: View {
             connectionInterrupted: editor.pollingConnectionInterrupted,
             taskMonitoringMessage: editor.taskMonitoringMessage,
             preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
+            canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
             isLastChapterInBook: V2DeskChapterPosition.isLastChapter(editor.currentChapter?.id, in: workspace.chapters)
         )
+    }
+
+    private var productionContextMessage: String {
+        guard let pending = editor.pendingProductionContext else { return "" }
+        let chapters = pending.readiness.limitations
+            .sorted { $0.index < $1.index }
+            .map { "第 \($0.index) 章：\($0.reason)" }
+            .joined(separator: "\n")
+        let action = pending.action.title
+        return "\(chapters)\n\n这些资料尚不完整。你可以先恢复建议章节，或仅本次知情后继续\(action)。"
     }
 
     private var pageIndicator: some View {
@@ -380,6 +425,7 @@ struct V2IOSChapterDeskView: View {
         case .generate, .retryGeneration: Task { if let chapter = await editor.generate() { workspace.upsert(chapter) } }
         case .cancelGeneration: Task { if let chapter = await editor.cancelWriting() { workspace.upsert(chapter) } }
         case .rerunChecker: Task { _ = await editor.rerunChecker() }
+        case .retryGeneratedCandidateChecker: Task { if let chapter = await editor.retryGeneratedCandidateChecker() { workspace.upsert(chapter) } }
         case .accept: Task { if let chapter = await editor.accept() { workspace.upsert(chapter) } }
         case .acceptWithWarning: showingAcceptWarning = true
         case .startNewChapter: Task { await workspace.createChapter() }

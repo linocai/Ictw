@@ -1,0 +1,173 @@
+{
+  "version": "2.2.0",
+  "build": 60,
+  "date": "2026-09-23",
+  "baseline": "b342d42225aa13df7316dfe3a9b01d052723da66",
+  "production_unchanged": "v2.1.1-build59 / e7b14b0 / Alembic 20260830_0013",
+  "backend": {
+    "passed": 305,
+    "skipped": 12,
+    "skip_reason": "Obsolete v1.6 online extractor contract replaced by v1.8 atomic ledger",
+    "alembic_head": "20260923_0014"
+  },
+  "client": {
+    "state_tests": "passed",
+    "store_http_passed": 38,
+    "os_minimum": "27.0",
+    "mac_final_ui": "passed: short draft explicit accept, incomplete history acknowledgement, archive retry, unknown state detail, persistent latest failure, current Checker after archive failure, accepted reader/edit actions",
+    "ios_simulator_install_launch": "passed; final build binary",
+    "ios_interactive_ui": "not completed: Device Hub/Xcode accessibility connection timed out",
+    "physical_device_ui": "not performed",
+    "device_support_pending": []
+  },
+  "builds": {
+    "mac": {
+      "platform": "mac",
+      "exit_code": 0,
+      "bundle_identifier": "com.lino.ictw.v220.validation.mac",
+      "errors": [],
+      "warnings": [
+        "2026-09-23 20:42:11.042 appintentsmetadataprocessor[99566:2288238] warning: Metadata extraction skipped, no AppIntents.framework dependency found"
+      ]
+    },
+    "ios": {
+      "platform": "ios",
+      "exit_code": 0,
+      "bundle_identifier": "com.lino.ictw.v220.validation.ios",
+      "errors": [],
+      "warnings": [
+        "2026-09-23 20:42:39.301 appintentsmetadataprocessor[99639:2288957] warning: Metadata extraction skipped, no AppIntents.framework dependency found"
+      ]
+    }
+  },
+  "http_smoke": {
+    "short_check_passed": true,
+    "short_accept_requires_confirmation": true,
+    "extractor_configuration_failure_preserves_acceptance": true,
+    "archive_retry_succeeds": true,
+    "checker_retry_reuses_writer_output": true,
+    "prior_change_prevents_reusing_pass": true,
+    "conditional_requests_with_if_match": true,
+    "completed_checker_retry_cannot_repeat": true,
+    "calls": {
+      "writer": 1,
+      "checker": 3,
+      "selector": 1,
+      "extractor": 1
+    }
+  },
+  "http_concurrency": {
+    "other_chapter_patch_seconds": 0.0067661670000000035,
+    "stale_check_rejected": true,
+    "new_draft_preserved": true
+  },
+  "independent_reviews": {
+    "checker": "no remaining findings",
+    "archive": "no remaining findings",
+    "central_sop": "no remaining findings"
+  },
+  "source_sha256": {
+    "Backend/alembic/versions/20260923_0014_v220_production_contract.py": "83f7bac8a0573c7b6d316392483d7641ef30d85dd0ffb0331f22c60abe589644",
+    "Backend/app/services/checker_validation.py": "e30deed133cfca139250830c384c41f0ea3c8a6f0ec9814713bbff235a920e91",
+    "Backend/app/services/production_context.py": "82176432838f43553ba9857c749749af4f883b4a27d5cbc42455013895f055c6",
+    "Backend/tests/test_v2_2_archive_recovery.py": "dbd12c2b80574d497090a50d3bc535322bceb63f9c43fd4b3f0d8877de443d5a",
+    "Backend/tests/test_v2_2_checker_context.py": "2e10fc18c7e25fdf228194bc63cb506c46cf74dd5dc6c97b6e75ced1add575b6",
+    "App/LinoI.xcodeproj/project.pbxproj": "295a42ed5e7730e983ef5ae7244ac8d60184fafc02c59494adf42ce7c827342c",
+    "App/LinoI/ChapterEditorViews.swift": "3b418e125db2f0b404134335f88e3520b46cf7bc8746b8612c3716edb61b67cd",
+    "App/LinoI/ClientSyncStore.swift": "b0d6011b241106acd0772b1c1ca579e6914a8d21dec3542a70bbcfc545c8d9b5",
+    "App/LinoI/LinoAPI.swift": "798091f16d0d08f4da2f11d81fda2257e45989c2daf0130636ded5e062282fb2",
+    "App/LinoI/LinoModels.swift": "27439d6466aa2af493c63ae7200de9133807e7abd623bea5070996ac34ff99bf",
+    "App/LinoI/LinoStores.swift": "581b174a553c57c38503cdfc603dccea6e0c3d6029bd17229211060d51c8821f",
+    "App/LinoI/V2IOS/V2IOSChapterDeskView.swift": "efb9bca0415489a520c06ca2eb48c72ed17ee6159425c5ee23b41ff0c99acd15",
+    "App/LinoI/V2IOS/V2IOSChapterFaces.swift": "da2452cc332476f8db05d8c2cb0aac66631f64825e9589c7cab868e11f779323",
+    "App/LinoI/V2IOS/V2IOSChapterRailView.swift": "38d2894914c55eb14c51c1f56a225413ed22a7c6ac46c380e24ebdd768caf057",
+    "App/LinoI/V2Shared/V2DeskPresentation.swift": "ca6f8082845fd911ed5ba659b51612134a3624eab8efb12a5ce97fa4e6f823e5",
+    "App/LinoI/WorkspaceViews.swift": "08415eaf3efb6789feffa07baa08a3db06ec390cc734ff55203492a39f6e99d4",
+    "App/LinoIMac/MacChapterEditor.swift": "8c8ac21e72012d42f69ec397474c804d88aa46d8c4a0c72fbc3dae0760a49231",
+    "App/LinoIMac/V2/V2MacDeskEditor.swift": "fa9a62fd629c4bc6b0f5c467a65398350425b3ae9c273d6240b612c9e0ee48c6",
+    "App/LinoIMac/V2/V2MacDeskRoot.swift": "1281b91989c53b54cac058d0b4e56084cbec749dbd738bf2cd0059242c9b1724",
+    "App/Tests/ClientStateTests.swift": "aa2a93b5c6710da4a922e886d6baee795dc5968ad0903c7755ae99508d3c3fc7",
+    "App/Tests/V211StoreHTTPTests.swift": "732e6174188ac74478df9cb87aebdb0428e0297e6e633a9f8a3c3f33334e7c7c",
+    "App/Tests/v211_http_fixture.py": "7bedd6a9afabfd5cd30497518647a030f5390bfd06341e892bea77a7ac914304",
+    "Backend/app/agents/checker.py": "413cfeee3e3418658f7234f7efc95e054329c3399e659ab7917b2dd7f9413895",
+    "Backend/app/agents/extractor.py": "9cf4080542e7edfc0ec582fa3c78df5a9b305e752cb99fb9a2fa1c5e73374a0f",
+    "Backend/app/agents/memory_selector.py": "e1c1fb578b6666a073ceb3858771d2a411947cc19acac97f168e46137bcd484f",
+    "Backend/app/main.py": "16200a77155b53f6122cf221f14e3c333f307e43a9bd7ee208cfc9266588e1c7",
+    "Backend/app/models/entities.py": "1a872582adb77c7846ebeb2a05c25bfab081ce61638f20747fa25dc5c5ff53a4",
+    "Backend/app/routers/books.py": "3c242ead7ef5c64b7d8ff6e6f12492c133952b83776a6018eca4f6f1d8e70ff9",
+    "Backend/app/routers/chapters.py": "d026a368f2b98fa2191ca612731daf696d3ba6b5bcc30fb9f16ce8544990dd03",
+    "Backend/app/schemas/chapter.py": "1bb3c8480d452a66698a5bead6a7d5d84d3d60da3214c550580a1c01e61c216a",
+    "Backend/app/services/archive_v2.py": "c69260410a6df0d78ab3cf4fc30784ba3d33b30180128fde20ab80724c4d6767",
+    "Backend/app/services/character_state_projection.py": "e97583d0ec182a9110042ffd03f4fa34d433455411897ac7055a21408cbbd943",
+    "Backend/app/services/content_revisions.py": "0e51172dea530ea7924634a344b5d9440479788d90b2944711429c63d3edc172",
+    "Backend/app/services/context.py": "46c286faf5f4ac3f12c6fed8d405dcf1772a95bef7ec8dca1b1345a0581a55ac",
+    "Backend/app/services/personas.py": "2f2a1a3ef7dbe6a78b855db57af727391683faf826cfe84a4a3cf458cbf90fbb",
+    "Backend/app/services/project_packages.py": "eddf0da1f739bb28636a559b0e4d83bb17289ec99dc47e20b21844bbdf248a9b",
+    "Backend/app/services/write_jobs.py": "3f0d1f69dfc572cc9664a4b275eacdd02120095c730ce148249cdbc8e0458f76",
+    "Backend/pyproject.toml": "0598d067b3ac8c7a557f73290302b9d673c5f60595f71ee54c1fcdc6339f67ca",
+    "Backend/tests/conftest.py": "67b08875ee47369fba48fcf213ded0dbc11b60f18b15e4d7c432e71b536665af",
+    "Backend/tests/test_api.py": "85e6cfca215b3c6e568b1e487934627ad49ebca9bfff5a53a6fd3cf0092b07f1",
+    "Backend/tests/test_checker_context.py": "1c5a081942520a5404a7f2924a58df0902c780dc4bb99580c79a3251ae57b74c",
+    "Backend/tests/test_migration_safety.py": "45f40acdc186df9664f22541e159ea43dd342dad7beef603e89abc9c89ec0947",
+    "Backend/tests/test_prompt.py": "3ff8d223fa097b55082ce512a690c80d66a9f1fe249d9d9e569bd31dc278e8cb",
+    "Backend/tests/test_v1_1_features.py": "cd6102a6f5daba36d6c13ebd4c01b35240eff63b251ba85e3d682f43edafa87e",
+    "Backend/tests/test_v1_6_agent_foundation.py": "b5327db336cd3837a46a3efd7a93c3afdd1ce2aac94911c97897ed73714de298",
+    "Backend/tests/test_v1_8_archive.py": "1b4f24b5c3816fd144dd68d37ceef1fab373da92198b624022d2131e9257107a",
+    "Backend/tests/test_v1_9_inspiration.py": "bd25263c07a890a31ca84b3c8af4ed8546deaf65dd4e7726dda0f0ea0e239518",
+    "Backend/tests/test_v1_pipeline.py": "dce3ae02e8c97668a976974a0bc46e865ef97d1bdc70d955d8aa409747d7b79b",
+    "Backend/tests/test_v2_1_1_error_visibility.py": "960c62b350c9ad4cfe21b693f87c2337d5970ba963e8bed6f849acaae3252f1a",
+    "Backend/tests/test_v2_1_project_and_archive.py": "8d0e5ff8a85fa8612664ebc06f11b440ce73e9e6028b01e5f253368d37258532"
+  },
+  "protected_scheme_sha256": "78853f0899c1c97363cf48dbeae0e8e615cfb2e79f52710d78bbe76e0cd9b2b8",
+  "limitations": [
+    "Synthetic deterministic model doubles; no real provider calls",
+    "Debug builds; no signed Release distribution or deployment",
+    "No production migration, real-book re-extraction or production Mac replacement"
+  ],
+  "cleanup": {
+    "status": "completed",
+    "removed_roots": [
+      "/tmp/ictw-v220-20260923",
+      "/Users/linotsai/Library/Caches/com.lino.ictw.v220.validation.mac"
+    ],
+    "files_and_links": 5762,
+    "logical_file_bytes_before": 575425097,
+    "allocated_bytes_before": 590913536,
+    "bytes_after": 0,
+    "deletion_manifest_sha256": "ca1cc51ada1e676fb2224d0f5bf4f1eeff323240417899a19549b5c4e59fb7e7",
+    "content_verified_before_deletion": true,
+    "open_files_before_deletion": 0,
+    "processes": {
+      "stopped": [
+        {
+          "kind": "synthetic_backend",
+          "pid": 99769
+        },
+        {
+          "kind": "isolated_mac",
+          "pid": 99683
+        }
+      ],
+      "simulator": "isolated app removed; restored original Shutdown state",
+      "simulator_data_container_removed": true
+    },
+    "mac_isolated_preferences_removed": true,
+    "system_and_user_temp_client_fixtures_remaining": 0,
+    "remote_artifacts_created": false,
+    "retained": "Only source regressions, review/plan records and this validation summary; no temporary DB, DerivedData, test apps or logs retained.",
+    "preference_files_removed": [
+      {
+        "path": "/Users/linotsai/Library/Preferences/com.lino.ictw.v220.validation.mac.plist",
+        "sha256": "9261ecceda608ef174256e5fdc774c1e6e3dcf533409c1bc393d490d01c713f1",
+        "bytes": 42,
+        "allocated_bytes": 4096
+      },
+      {
+        "path": "/Users/linotsai/Library/Preferences/com.lino.ictw.v220.validation.preferences.plist",
+        "sha256": "9261ecceda608ef174256e5fdc774c1e6e3dcf533409c1bc393d490d01c713f1",
+        "bytes": 42,
+        "allocated_bytes": 4096
+      }
+    ]
+  }
+}

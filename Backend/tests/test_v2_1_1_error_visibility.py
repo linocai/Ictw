@@ -10,7 +10,7 @@ from app.llm.base import LLMError
 from app.llm.factory import get_checker_client
 from app.main import recover_interrupted_chapters
 from app.models import Book, Chapter, ChapterArchiveRevision, ChapterDraftCandidate, Character, JobRun, LLMCallAudit
-from app.services.archive_v2 import archive_input_fingerprint
+from app.services.archive_v2 import ARCHIVE_CONTRACT_VERSION, archive_input_fingerprint
 
 
 def story(text="雨落在屋檐。" * 1000):
@@ -30,7 +30,7 @@ class CheckerStub:
     last_usage = {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
 
     def __init__(self, result=None, error=None):
-        self.result = result if result is not None else {"verdict": "passed", "issues": []}
+        self.result = result if result is not None else {"verdict": "passed", "issues": [], "name_uses": []}
         self.error = error
         self.calls = 0
 
@@ -89,7 +89,7 @@ def test_manual_checker_retains_safe_failure_and_audits_once(client, auth_header
     ({"verdict": "passed", "issues": "bad"}, None, "checker_invalid_response"),
     ({"verdict": "passed", "issues": {}}, None, "checker_invalid_response"),
     ({"verdict": "passed", "issues": 1}, None, "checker_invalid_response"),
-    (None, RuntimeError("private unexpected payload"), "checker_failed"),
+    (None, RuntimeError("private unexpected payload"), "checker_invalid_response"),
     (None, LLMError("private response", code="private unknown error code",
                     upstream_reason="private provider body"), "llm_upstream_error"),
 ])
@@ -122,7 +122,7 @@ def test_manual_checker_success_audits_one_call_without_failure_fields(client, a
 
 
 @pytest.mark.parametrize("violation", ["minimum_length", "unselected_character", "ambiguous_character"])
-def test_manual_preflight_explains_rule_and_makes_no_model_call(client, auth_headers, violation):
+def test_manual_check_defers_length_and_name_identity_to_checker(client, auth_headers, violation):
     text = "短稿。" if violation == "minimum_length" else "隔离人物在等雨。" + "雨落。" * 1400
     chapter_id, book_id = story(text)
     if violation != "minimum_length":
@@ -134,14 +134,17 @@ def test_manual_preflight_explains_rule_and_makes_no_model_call(client, auth_hea
     stub = CheckerStub()
     client.app.dependency_overrides[get_checker_client] = lambda: stub
     response = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
-    assert response.status_code == 409 and stub.calls == 0
-    detail = response.json()["detail"]
-    issue = next(item for item in detail["violations"] if item["code"] == violation)
-    assert issue["message"] in detail["message"]  # Old clients still see the exact reason.
+    assert response.status_code == 200 and stub.calls == 1
+    result = response.json()["checker_result"]
     if violation == "minimum_length":
-        assert issue["current_chars"] == len(text) and "4000" in detail["message"]
+        assert result["verdict"] == "passed"
+    else:
+        # A generic fixture that declines to classify the supplied name is not
+        # a valid conclusion; the route persists it as unavailable rather than
+        # guessing from a raw substring.
+        assert result["error_code"] == "checker_invalid_response"
     with db_module.SessionLocal() as db:
-        assert not db.scalars(select(LLMCallAudit)).all()
+        assert len(db.scalars(select(LLMCallAudit)).all()) == 1
 
 
 @pytest.mark.parametrize("phase,role", [
@@ -158,7 +161,9 @@ def test_restart_public_job_retains_stage_without_changing_accepted_prose(client
             chapter.archive_status = "extracting"
             revision = ChapterArchiveRevision(
                 chapter_id=chapter_id, revision=1, provenance="live",
-                input_fingerprint=archive_input_fingerprint(chapter), status="extracting",
+                input_fingerprint=archive_input_fingerprint(chapter),
+                contract_version=ARCHIVE_CONTRACT_VERSION,
+                status="extracting",
             )
             db.add(revision)
             db.flush()

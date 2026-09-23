@@ -7,10 +7,10 @@ from app.llm.base import LLMClient
 from app.services.character_state_projection import PERSISTENT_SLOTS, SNAPSHOT_SLOTS
 from app.services.archive_v2 import (
     FACT_TYPES,
-    MAX_FACTS,
     MAX_FACT_REF_CHARS,
     MAX_FACT_TEXT_CHARS,
-    MAX_STATE_DELTAS,
+    MAX_RAW_FACTS,
+    MAX_RAW_STATE_DELTAS,
     MAX_STATE_VALUE_CHARS,
     MAX_SUMMARY_CHARS,
     RECOMMENDED_FACT_SPAN_SENTENCES,
@@ -128,11 +128,18 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "summary": {"type": "string", "minLength": 1, "maxLength": MAX_SUMMARY_CHARS},
-            "facts": {"type": "array", "items": fact, "maxItems": MAX_FACTS},
+            # The deterministic validator checks every raw item before it
+            # collapses exact aliases, then applies the canonical 8-item cap.
+            # This permits a duplicate-heavy but otherwise valid model reply to
+            # be safely normalized instead of failing before validation.
+            "facts": {"type": "array", "items": fact, "maxItems": MAX_RAW_FACTS},
             "end_state_delta": {
                 "type": "array",
                 "items": delta,
-                "maxItems": min(MAX_STATE_DELTAS, MAX_STATE_DELTAS if selected_character_names else 0),
+                "maxItems": min(
+                    MAX_RAW_STATE_DELTAS,
+                    MAX_RAW_STATE_DELTAS if selected_character_names else 0,
+                ),
                 **empty_when_no_characters,
             },
         },

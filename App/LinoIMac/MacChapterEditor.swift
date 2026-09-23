@@ -364,7 +364,7 @@ struct MacChapterEditor: View {
                     if let chapter = await editor.exemptAndRetry() { workspace.upsert(chapter) }
                 }
             } label: {
-                Label("本章豁免并重试", systemImage: "checkmark.shield")
+                Label("保存为本章豁免", systemImage: "checkmark.shield")
             }
             .buttonStyle(LinoITintButtonStyle(compact: true))
             .onHover { pointer($0) }

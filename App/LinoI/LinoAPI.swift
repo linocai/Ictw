@@ -112,10 +112,16 @@ struct APIClient {
     /// Starts (or restarts) the background write job for a chapter. The server
     /// answers immediately with the freshly created job's status; progress is
     /// observed by polling `jobStatus(chapterId:)`.
-    func startWrite(chapterId: String, replaceDraft: Bool, contentRevision: Int) async throws -> WriteJobStatus {
+    func startWrite(
+        chapterId: String, replaceDraft: Bool, contentRevision: Int,
+        acknowledgedContextToken: String? = nil
+    ) async throws -> WriteJobStatus {
         try await request(
             "/chapters/\(chapterId)/write", method: "POST",
-            body: ["replace_draft": replaceDraft], ifMatch: contentRevision
+            body: WriteStartPayload(
+                replace_draft: replaceDraft,
+                acknowledged_context_token: acknowledgedContextToken
+            ), ifMatch: contentRevision
         )
     }
 
@@ -125,19 +131,50 @@ struct APIClient {
     }
 
     /// Starts the background Extractor job for a chapter's draft.
-    func accept(chapterId: String, contentRevision: Int, overrideChecker: Bool = false) async throws -> WriteJobStatus {
+    func accept(
+        chapterId: String, contentRevision: Int, overrideChecker: Bool = false,
+        allowShortDraft: Bool = false
+    ) async throws -> WriteJobStatus {
         try await request(
             "/chapters/\(chapterId)/accept", method: "POST",
-            body: CheckerAcceptPayload(override_checker: overrideChecker), ifMatch: contentRevision
+            body: CheckerAcceptPayload(
+                override_checker: overrideChecker,
+                allow_short_draft: allowShortDraft
+            ), ifMatch: contentRevision
         )
     }
 
-    func retryArchive(chapterId: String, contentRevision: Int) async throws -> WriteJobStatus {
-        try await request("/chapters/\(chapterId)/archive/retry", method: "POST", ifMatch: contentRevision)
+    func retryArchive(
+        chapterId: String, contentRevision: Int, acknowledgedContextToken: String? = nil
+    ) async throws -> WriteJobStatus {
+        try await request(
+            "/chapters/\(chapterId)/archive/retry", method: "POST",
+            body: ArchiveRetryPayload(acknowledged_context_token: acknowledgedContextToken),
+            ifMatch: contentRevision
+        )
     }
 
-    func rerunChecker(chapterId: String, contentRevision: Int) async throws -> CheckerRunResult {
-        try await request("/chapters/\(chapterId)/check", method: "POST", ifMatch: contentRevision)
+    func rerunChecker(
+        chapterId: String, contentRevision: Int, acknowledgedContextToken: String? = nil
+    ) async throws -> CheckerRunResult {
+        try await request(
+            "/chapters/\(chapterId)/check", method: "POST",
+            body: CheckerRunPayload(acknowledged_context_token: acknowledgedContextToken),
+            ifMatch: contentRevision
+        )
+    }
+
+    func retryCandidateChecker(
+        chapterId: String, sourceJobId: String, contentRevision: Int
+    ) async throws -> WriteJobStatus {
+        try await request(
+            "/chapters/\(chapterId)/checker/retry", method: "POST",
+            body: CheckerRetryPayload(source_job_id: sourceJobId), ifMatch: contentRevision
+        )
+    }
+
+    func productionReadiness(chapterId: String) async throws -> ProductionReadiness {
+        try await request("/chapters/\(chapterId)/production-readiness")
     }
 
     func cancelWrite(chapterId: String) async throws -> Chapter {
@@ -237,7 +274,27 @@ struct APIClient {
     }
 }
 
-private struct CheckerAcceptPayload: Encodable, Sendable { let override_checker: Bool }
+private struct WriteStartPayload: Encodable, Sendable {
+    let replace_draft: Bool
+    let acknowledged_context_token: String?
+}
+
+private struct CheckerAcceptPayload: Encodable, Sendable {
+    let override_checker: Bool
+    let allow_short_draft: Bool
+}
+
+private struct ArchiveRetryPayload: Encodable, Sendable {
+    let acknowledged_context_token: String?
+}
+
+private struct CheckerRunPayload: Encodable, Sendable {
+    let acknowledged_context_token: String?
+}
+
+private struct CheckerRetryPayload: Encodable, Sendable {
+    let source_job_id: String
+}
 
 struct AnyEncodable: Encodable, @unchecked Sendable {
     private let encodeBlock: (Encoder) throws -> Void

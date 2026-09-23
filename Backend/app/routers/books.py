@@ -19,7 +19,7 @@ from app.schemas.settings import (
     BookAgentPersonaPut, BookAgentPersonaRead,
 )
 from app.schemas.search import SearchResponse
-from app.services.archive_v2 import active_archive_revision
+from app.services.archive_v2 import active_archive_revision, archive_health_summaries
 from app.services.personas import AGENT_ROLES, DEFAULT_PERSONAS, PROGRAM_PROTOCOLS
 from app.services.write_ownership import cancel_local_writer_jobs, chapters_for_book, invalidate_writer_inputs
 from app.services.content_revisions import (
@@ -261,29 +261,36 @@ def delete_book_persona(
 
 
 def book_read(db: Session, book: Book) -> BookRead:
-    chapter_count = db.scalar(select(func.count()).select_from(Chapter).where(Chapter.book_id == book.id)) or 0
+    chapters = list(db.scalars(
+        select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.index, Chapter.id)
+    ).all())
+    chapter_count = len(chapters)
     character_count = db.scalar(select(func.count()).select_from(Character).where(Character.book_id == book.id)) or 0
     data = BookRead.model_validate(book)
     data.chapter_count = chapter_count
     data.character_count = character_count
-    data.archive_pending_count = db.scalar(
-        select(func.count()).select_from(Chapter).where(
-            Chapter.book_id == book.id,
-            Chapter.archive_status.in_(("pending", "extracting")),
+    health = archive_health_summaries(db, chapters)
+    attempted_ids = set(db.scalars(
+        select(ChapterArchiveRevision.chapter_id).where(
+            ChapterArchiveRevision.chapter_id.in_([chapter.id for chapter in chapters])
         )
-    ) or 0
-    data.archive_attention_count = db.scalar(
-        select(func.count()).select_from(Chapter).where(
-            Chapter.book_id == book.id,
-            Chapter.archive_status.in_(("stale", "partial", "failed")),
-            # New editable chapters start stale before any archive exists.
-            # Attention means a real archive lifecycle has since become
-            # incomplete or invalid, not merely "not archived yet".
-            select(ChapterArchiveRevision.id)
-            .where(ChapterArchiveRevision.chapter_id == Chapter.id)
-            .exists(),
-        )
-    ) or 0
+    ).all()) if chapters else set()
+    data.archive_pending_count = sum(
+        health.get(chapter.id, {}).get("archive_status") in {"pending", "extracting"}
+        or health.get(chapter.id, {}).get("archive_latest_attempt_status") in {"pending", "extracting"}
+        for chapter in chapters
+    )
+    # A healthy active archive does not hide its later failed/partial/stale
+    # attempt, and a v2.1 active revision with state gaps needs attention even
+    # when the chapter's historical scalar still says complete.
+    data.archive_attention_count = sum(
+        health.get(chapter.id, {}).get("archive_status") in {"stale", "partial", "failed"}
+        and chapter.id in attempted_ids
+        or health.get(chapter.id, {}).get("archive_latest_attempt_status") in {"partial", "failed", "stale"}
+        and chapter.id in attempted_ids
+        or health.get(chapter.id, {}).get("archive_effective_status") == "with_state_gaps"
+        for chapter in chapters
+    )
     return data
 
 

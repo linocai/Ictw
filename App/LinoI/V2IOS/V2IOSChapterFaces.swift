@@ -164,15 +164,63 @@ struct V2IOSManuscriptFace: View {
 struct V2IOSEvidenceFace: View {
     let snapshot: V2DeskSnapshot
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var editor: ChapterEditorStore
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 V2IOSSectionLabel(title: "证据")
                 evidence
+                nameClarification
                 archive
             }
             .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 16)
+        }
+    }
+
+    @ViewBuilder private var nameClarification: some View {
+        let issues = editor.visibleIdentityIssues
+        if !issues.isEmpty {
+            VStack(alignment: .leading, spacing: 9) {
+                Text("请澄清姓名")
+                    .font(V2DeskType.control(12.5, weight: .medium))
+                Text("以下姓名尚未能安全判定。请明确选择出场人物，或标为本章普通词豁免；保存失败会保留此处选择。")
+                    .font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary)
+                ForEach(issues) { issue in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(issue.name).font(V2DeskType.control(12, weight: .medium))
+                        if issue.candidates.isEmpty {
+                            Text("请到「本章意图」选择出场人物，或将它标为普通词。")
+                                .font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary)
+                        } else {
+                            ForEach(issue.candidates) { candidate in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(candidate.name).font(V2DeskType.control(11.5, weight: .medium))
+                                    if !candidate.role.v2IOSTrimmed.isEmpty {
+                                        Text(candidate.role).font(V2DeskType.control(11)).foregroundStyle(Color.secondary)
+                                    }
+                                    if !candidate.fixedProfile.v2IOSTrimmed.isEmpty {
+                                        Text(candidate.fixedProfile).lineLimit(2)
+                                            .font(V2DeskType.control(11)).foregroundStyle(Color.secondary)
+                                    }
+                                    Button("选为这位人物") {
+                                        Task { _ = await editor.saveNameClarification(selectedCharacterIDs: [candidate.characterId]) }
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                                .padding(8)
+                                .v2IOSPaper(.rail)
+                            }
+                        }
+                        Button("标为普通词") {
+                            Task { _ = await editor.saveNameClarification(exemptedNames: [issue.name]) }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+            .padding(12)
+            .v2IOSPaper(.card)
         }
     }
 
@@ -190,6 +238,7 @@ struct V2IOSEvidenceFace: View {
                         .font(V2DeskType.control(13, weight: .medium))
                 }
                 ForEach(issues) { V2IOSEvidenceCard(item: $0) }
+                checkerContextLimitations
             }
         case .stale(let verdict, let issues, _):
             VStack(alignment: .leading, spacing: 12) {
@@ -207,6 +256,22 @@ struct V2IOSEvidenceFace: View {
         }
     }
 
+    @ViewBuilder private var checkerContextLimitations: some View {
+        let limitations = editor.checkerResult?.contextLimitations ?? []
+        if !limitations.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("本次检查仅依据已提供的资料")
+                    .font(V2DeskType.control(11.5, weight: .medium))
+                ForEach(limitations) { item in
+                    Text("第 \(item.index) 章：\(item.reason)")
+                        .font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary)
+                }
+            }
+            .padding(10)
+            .v2IOSPaper(.card)
+        }
+    }
+
     @ViewBuilder private var archive: some View {
         switch snapshot.archive {
         case .notStarted: EmptyView()
@@ -220,11 +285,75 @@ struct V2IOSEvidenceFace: View {
                 V2DeskStatusMark(marker: .confirmed)
                 Text("这一章留下的 · \(facts) 条事实").font(V2DeskType.control(12.5))
             }.padding(.top, 12)
+        case .usableWithAttention(let facts, let gaps, let detail):
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    V2DeskStatusMark(marker: .confirmed)
+                    Text("这一章留下的 · \(facts) 条事实").font(V2DeskType.control(12.5))
+                }
+                HStack(spacing: 7) {
+                    V2DeskStatusMark(marker: .unreliable)
+                    Text(gaps > 0 ? "部分人物状态待整理" : "本次更新没有完成")
+                        .font(V2DeskType.control(11.5, weight: .medium))
+                }
+                if let detail, !detail.v2IOSTrimmed.isEmpty {
+                    Text(detail).font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary)
+                }
+                if let archive = editor.currentChapter?.archive {
+                    V2IOSArchiveAttentionDetails(archive: archive)
+                }
+            }.padding(.top, 12)
         case .attention(_, let preview):
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) { V2DeskStatusMark(marker: .unreliable); Text("记忆需要重新整理").font(V2DeskType.control(12.5, weight: .medium)) }
                 if let preview { Text("第 \(preview.status) 个归档版本仅供预览，不进入后续写作。") .font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary) }
             }.padding(.top, 12)
+        }
+    }
+}
+
+private struct V2IOSArchiveAttentionDetails: View {
+    let archive: ChapterArchive
+
+    var body: some View {
+        let diagnostics = archive.attentionDiagnostics
+        if !diagnostics.isEmpty || archive.latestAttempt?.status == "failed" || archive.latestAttemptStatus == "failed" {
+            DisclosureGroup("查看待整理详情") {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(diagnostics) { item in
+                        DisclosureGroup(ArchiveDiagnosticPresentation.title(for: item)) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(item.message)
+                                ForEach(Array(item.variants.enumerated()), id: \.offset) { _, variant in
+                                    Text(ArchiveDiagnosticPresentation.variantLabel(variant))
+                                }
+                                Text("恢复：\(item.recovery)")
+                            }
+                            .font(V2DeskType.control(11.5))
+                            .foregroundStyle(Color.secondary)
+                            .padding(.top, 4)
+                        }
+                        .font(V2DeskType.control(11.5, weight: .medium))
+                    }
+                    if archive.latestAttempt?.status == "failed" || archive.latestAttemptStatus == "failed" {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("最近一次整理没有完成")
+                                .font(V2DeskType.control(11.5, weight: .medium))
+                            if let message = archive.latestAttempt?.errorMessage, !message.v2IOSTrimmed.isEmpty {
+                                Text("原因：\(message)")
+                            }
+                            if let code = archive.latestAttempt?.errorCode, !code.v2IOSTrimmed.isEmpty {
+                                Text("错误代码：\(code)")
+                            }
+                            Text("恢复：\(archive.recoverySuggestion)")
+                        }
+                        .font(V2DeskType.control(11.5))
+                        .foregroundStyle(Color.secondary)
+                    }
+                }
+                .padding(.top, 8)
+            }
+            .font(V2DeskType.control(11.5, weight: .medium))
         }
     }
 }
@@ -241,6 +370,12 @@ private struct V2IOSEvidenceCard: View {
             Text(item.reason).font(V2DeskType.control(13, weight: .medium))
             if !item.draftEvidence.v2IOSTrimmed.isEmpty { Text(item.draftEvidence).font(V2DeskType.prose(14)).lineSpacing(5) }
             if !item.bibleEvidence.v2IOSTrimmed.isEmpty { Text("意图：\(item.bibleEvidence)").font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary) }
+            if let label = CheckerEvidenceSourcePresentation.label(for: item.sourceKind),
+               !item.sourceEvidence.v2IOSTrimmed.isEmpty,
+               !(item.sourceKind == "bible" && item.sourceEvidence == item.bibleEvidence) {
+                Text("\(label)：\(item.sourceEvidence)")
+                    .font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary)
+            }
         }.padding(13).v2IOSPaper(.card)
     }
 }

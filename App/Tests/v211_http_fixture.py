@@ -29,6 +29,12 @@ def reset(options):
         chapter = chapters[prefix + "-c1"]
         chapter["status"] = "finalized"
         chapter["archive"] = archive("failed")
+    if options.get("archive_complete"):
+        chapter = chapters[prefix + "-c1"]
+        chapter["status"] = "finalized"
+        chapter["archive"] = archive("complete")
+    if options.get("finalized"):
+        chapters[prefix + "-c1"]["status"] = "finalized"
     if options.get("writing"):
         chapters[prefix + "-c1"]["status"] = "writing"
     if options.get("writing_second"):
@@ -47,7 +53,10 @@ def archive(status):
         summary="虚构归档" if status == "complete" else "", facts=[], state_delta_count=0,
         error_code="llm_timeout" if status == "failed" else None,
         error_message="整理记忆请求超时" if status == "failed" else None,
-        can_retry=status == "failed", latest_attempt_status=status)
+        can_retry=status == "failed", latest_attempt_status=status,
+        effective_status="full" if status == "complete" else "none",
+        state_status="complete" if status == "complete" else "none",
+        state_uncertainties=[], diagnostics=[], latest_attempt=None)
 
 
 def job(chapter, phase=None, kind=None):
@@ -55,16 +64,22 @@ def job(chapter, phase=None, kind=None):
     phase = phase or ("failed" if archived == "failed" else
                       "done" if archived == "complete" else
                       "writing" if chapter["status"] == "writing" else "idle")
-    kind = kind or ("extract" if archived else "write")
+    kind = kind or STATE["options"].get("job_kind") or ("extract" if archived else "write")
     if phase == "done" and kind == "write" and chapter["status"] == "writing":
         chapter["status"] = "draft_ready"
     result = dict(chapter_id=chapter["id"], job_id=chapter["id"] + "-job",
         outcome_current=True, phase=phase, kind=kind,
         chapter=copy.deepcopy(chapter) if phase == "done" else None,
-        visible_checker_result=STATE["checker"].get(chapter["id"]))
+        visible_checker_result=STATE["checker"].get(chapter["id"]),
+        can_retry_checker=bool(STATE["options"].get("can_retry_checker")),
+        checker_source_job_id=chapter["id"] + "-source" if STATE["options"].get("can_retry_checker") else None)
     if phase == "failed":
-        result.update(error_code="llm_timeout", error_message="整理记忆请求超时",
-                      error_context=dict(agent_role="extractor", model_name="test-extractor"))
+        if kind == "check":
+            result.update(error_code="checker_failed", error_message="手动检查暂时不可用",
+                          error_context=dict(agent_role="checker", model_name="test-checker"))
+        else:
+            result.update(error_code="llm_timeout", error_message="整理记忆请求超时",
+                          error_context=dict(agent_role="extractor", model_name="test-extractor"))
     return result
 
 
@@ -173,6 +188,14 @@ class Handler(BaseHTTPRequestHandler):
                 status = options.get("job_status", 200)
                 failure = {"detail": {"code": "upstream_unavailable", "message": "暂时无法读取任务"}} if options.get("structured_status") else {"detail": "unauthorized"}
                 return self.send(status, captured if status == 200 else failure)
+            if action == "production-readiness":
+                limitations = options.get("readiness_limitations", [])
+                recovery = options.get("readiness_recovery")
+                return self.send(200, {
+                    "context_token": options.get("readiness_token", "synthetic-context-token"),
+                    "limitations": limitations,
+                    "recommended_recovery": recovery,
+                })
             if action == "check":
                 mode = options.get("check_mode", "passed")
                 if mode in ("minimum_length", "unselected_character", "ambiguous_character"):
@@ -181,6 +204,10 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "正文3字，少于最低要求4000字" if mode == "minimum_length" else "人物选择需要修正",
                         "current_chars": 3, "names": [] if mode == "minimum_length" else ["虚构人物"]}]}})
                 result = dict(verdict="passed", issues=[], draft_fingerprint="test-fingerprint")
+                if options.get("check_context_limitations"):
+                    result["context_limitations"] = options["check_context_limitations"]
+                if options.get("check_identity_issues"):
+                    result["identity_issues"] = options["check_identity_issues"]
                 if mode in ("unavailable", "timeout", "invalid", "legacy"):
                     code, message = {
                         "unavailable": ("llm_content_blocked", "上游模型拦截了本次检查请求"),
@@ -198,14 +225,23 @@ class Handler(BaseHTTPRequestHandler):
                         result["error_context"].pop("http_status")
                 STATE["checker"][cid] = result
                 return self.send(200, {"checker_result": result})
+            if action == "checker/retry":
+                if options.get("checker_retry_reject"):
+                    return self.send(409, {"detail": {"code": "checker_retry_unavailable", "message": "生成稿已不能安全复查"}})
+                return self.send(200, job(chapter, "done", "write"))
             if action == "accept":
                 preflight = options.get("accept_preflight")
-                if preflight and (preflight != "minimum_length" or not payload.get("override_checker")):
+                if preflight and (preflight != "minimum_length" or not (payload.get("override_checker") or payload.get("allow_short_draft"))):
                     code = "accept_override_required" if preflight == "minimum_length" else "accept_preflight_failed"
                     return self.send(409, {"detail": {"code": code,
                         "message": "正文未通过确定性校验", "violations": [{"code": preflight,
                         "message": "正文3字，少于最低要求4000字" if preflight == "minimum_length" else "人物选择需要修正",
                         "current_chars": 3, "names": [] if preflight == "minimum_length" else ["虚构人物"]}]}})
+                if options.get("accept_short_confirmation") and not payload.get("allow_short_draft"):
+                    return self.send(409, {"detail": {
+                        "code": "short_draft_confirmation_required",
+                        "message": "正文少于4000字，请明确确认后继续",
+                    }})
                 if options.get("accept_status"):
                     status = options["accept_status"]
                     failure = {"detail": {"code": "upstream_unavailable", "message": "接受状态暂时无法读取"}} if options.get("structured_status") else {"detail": "unavailable"}

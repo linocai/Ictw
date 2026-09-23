@@ -103,8 +103,14 @@ def require_matching_revision(
         # SQLite has no SELECT ... FOR UPDATE. Acquiring the write reservation
         # before refreshing the resource makes the version comparison and the
         # following mutation one serialized transaction rather than merely a
-        # best-effort timestamp check.
-        db.execute(text("BEGIN IMMEDIATE"))
+        # best-effort timestamp check.  A caller that already reserved its
+        # own short SQLite CAS (for example accept after registry admission)
+        # must retain that transaction instead of issuing a nested BEGIN.
+        connection = db.connection()
+        raw = connection.connection
+        driver = getattr(raw, "driver_connection", raw)
+        if not getattr(driver, "in_transaction", False):
+            db.execute(text("BEGIN IMMEDIATE"))
         db.refresh(resource)
     current = int(resource.content_revision)
     if submitted != current:

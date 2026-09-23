@@ -55,7 +55,9 @@ def _accepted_archive(db, chapter: Chapter, character: Character | None = None) 
     chapter.active_archive_revision_id = revision.id
     chapter.archive_status = "complete"
     db.flush()
-    revision.input_fingerprint = archive_input_fingerprint(chapter)
+    revision.input_fingerprint = archive_input_fingerprint(
+        chapter, contract_version=revision.contract_version
+    )
     chapter.archive_input_fingerprint = revision.input_fingerprint
 
 

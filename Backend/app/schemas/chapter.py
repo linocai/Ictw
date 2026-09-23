@@ -72,6 +72,8 @@ class ChapterSummary(ORMModel):
     archive_schema: str = "none"
     archive_can_retry: bool = False
     archive_latest_attempt_status: str | None = None
+    archive_effective_status: str = "none"
+    archive_state_status: str = "none"
 
 
 class RewriteImpactChapter(BaseModel):
@@ -113,6 +115,15 @@ class ArchiveInactivePreviewRead(BaseModel):
     state_delta_count: int = 0
 
 
+class ArchiveLatestAttemptRead(BaseModel):
+    revision_id: str
+    revision: int
+    status: str
+    error_code: str | None = None
+    error_message: str | None = None
+    finished_at: datetime | None = None
+
+
 class ChapterArchiveRead(BaseModel):
     status: str
     archive_schema: str = Field(alias="schema", serialization_alias="schema")
@@ -125,6 +136,11 @@ class ChapterArchiveRead(BaseModel):
     error_message: str | None = None
     can_retry: bool = False
     latest_attempt_status: str | None = None
+    effective_status: Literal["full", "with_state_gaps", "none"] = "none"
+    state_status: Literal["complete", "partial", "none"] = "none"
+    state_uncertainties: list[dict] = Field(default_factory=list)
+    diagnostics: list[dict] = Field(default_factory=list)
+    latest_attempt: ArchiveLatestAttemptRead | None = None
     # An inactive revision is display-only troubleshooting context.  It is
     # intentionally separate from summary/facts above, which remain active
     # memory only.
@@ -161,6 +177,7 @@ class ChapterRead(ORMModel):
 
 class WriteRequest(BaseModel):
     replace_draft: bool = False
+    acknowledged_context_token: str | None = None
 
 
 class InspirationRequest(BaseModel):
@@ -188,6 +205,9 @@ class CheckerAcceptRequest(BaseModel):
     # Required for an invalid/unavailable Checker state; omitted remains
     # compatible for the normal passed path used by old clients.
     override_checker: bool = False
+    # Writer output stays subject to its own minimum-length gate.  An author
+    # may deliberately accept a shorter manuscript only in this request.
+    allow_short_draft: bool = False
 
 
 class ArchiveRetryRequest(BaseModel):
@@ -196,6 +216,36 @@ class ArchiveRetryRequest(BaseModel):
     # maintenance flow and requires the report's exact draft hash.
     provenance: Literal["manual_retry", "selective_reextract"] = "manual_retry"
     expected_draft_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    acknowledged_context_token: str | None = None
+
+
+class CheckerRunRequest(BaseModel):
+    acknowledged_context_token: str | None = None
+
+
+class CheckerRetryRequest(BaseModel):
+    source_job_id: str = Field(min_length=1, max_length=36)
+
+
+class ProductionContextLimitationRead(BaseModel):
+    chapter_id: str
+    index: int
+    title: str
+    reason: str
+    effective_status: str
+
+
+class ProductionRecoveryRecommendationRead(BaseModel):
+    chapter_id: str
+    index: int
+    title: str
+    reason: str
+
+
+class ProductionReadinessRead(BaseModel):
+    context_token: str
+    limitations: list[ProductionContextLimitationRead] = Field(default_factory=list)
+    recommended_recovery: ProductionRecoveryRecommendationRead | None = None
 
 
 class CheckerRunRead(ORMModel):
@@ -212,6 +262,8 @@ class CheckerRunRead(ORMModel):
     checker_result: dict | None = None
     bible_sha256: str | None = None
     draft_fingerprint: str | None = None
+    check_attempt_id: str | None = None
+    input_fingerprint: str | None = None
     is_current: bool
     created_at: datetime
 
@@ -239,3 +291,5 @@ class WriteJobStatus(BaseModel):
     # The Checker result that belongs to the currently visible chapter text.
     # Rejected candidate text and metadata remain backend-only.
     visible_checker_result: dict | None = None
+    can_retry_checker: bool = False
+    checker_source_job_id: str | None = None

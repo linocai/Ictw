@@ -88,6 +88,7 @@ class MemoryBlock:
 class PackedWriterContext:
     memories: list[MemoryBlock]
     previous_ending: str = ""
+    conflicts: list[MemoryBlock] | None = None
 
     def manifest(self) -> dict[str, Any]:
         return {
@@ -103,6 +104,10 @@ class PackedWriterContext:
             ],
             "previous_ending": self.previous_ending,
             "memory_non_whitespace_count": sum(nonspace_len(block.text) for block in self.memories),
+            "conflicts": [
+                {"text": block.text, "source_ids": block.id.split("|")}
+                for block in (self.conflicts or [])
+            ],
             "previous_ending_non_whitespace_count": nonspace_len(self.previous_ending),
         }
 
@@ -285,9 +290,11 @@ def prefilter_memory_candidates(
 def memory_selector_user_message(
     chapter: Chapter, blocks: list[MemoryBlock], budget: int, *, bible: str | None = None,
     dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
+    unknown_state_slots: list[dict[str, Any]] | None = None,
 ) -> str:
     selected = _selected_characters(chapter)
     cards = _character_cards(selected, include_ids=True, dynamic_fields_by_character=dynamic_fields_by_character)
+    unknown_state_text = _format_unknown_state_slots(unknown_state_slots or [])
     ending_blocks = [block for block in blocks if block.memory_type == "previous_ending"]
     ordinary_blocks = [block for block in blocks if block.memory_type != "previous_ending"]
     candidates = "\n\n".join(f"[{block.id}]\n{block.text}" for block in ordinary_blocks) or "（没有可用历史记忆）"
@@ -296,6 +303,8 @@ def memory_selector_user_message(
         [
             "# 本章剧情 Bible（原文快照）\n" + (bible if bible is not None else chapter.user_prompt).strip(),
             "# 本章允许人物及当前状态\n" + (cards or "（无已选人物）"),
+            "# 本章开始前待定状态\n" + unknown_state_text,
+            "待定只表示资料尚不足，不能推定相反状态、人物冲突或本章必须补写的事件。",
             f"# 历史记忆简报预算\n最终记忆简报最多 {budget} 个去空白字符；上一章结尾独立，最多 {PREVIOUS_ENDING_MAX_CHARS} 字。"
             "只压缩有来源且会直接约束本章写作的历史事实，不得改写 Bible 或补足历史。"
             f"最多 {MAX_MEMORY_BRIEFS} 条简报、{MAX_MEMORY_CONFLICTS} 条冲突、合计 {MAX_MEMORY_SOURCES} 个不同来源；"
@@ -372,11 +381,121 @@ def pack_writer_context(
             0,
         )
         previous_ending = "\n\n".join(block.text for block in ending_blocks[start:])
-        previous_ending = truncate_to_nonspace(previous_ending, min(budget, PREVIOUS_ENDING_MAX_CHARS))
-    remaining = max(0, budget - nonspace_len(previous_ending))
+        # The adjacent ending has a dedicated 700-character allowance.  It
+        # must not consume the separate 2,400-character brief/conflict budget.
+        previous_ending = truncate_to_nonspace(previous_ending, PREVIOUS_ENDING_MAX_CHARS)
     return PackedWriterContext(
-        memories=pack_selected_memories(blocks, selected_ids, remaining),
+        memories=pack_selected_memories(blocks, selected_ids, budget),
         previous_ending=previous_ending,
+    )
+
+
+class MemorySelectionValidationError(ValueError):
+    """Selector output is structurally valid JSON but not a valid selection."""
+
+
+def memory_selection_problem(
+    blocks: list[MemoryBlock],
+    briefs: Any,
+    conflicts: Any,
+    previous_ending_start_id: Any,
+    *,
+    budget: int = MEMORY_BUDGET_CHARS,
+) -> str | None:
+    """Return a human-actionable rejection reason for one Selector response.
+
+    This is deliberately stricter than the old packers.  An unknown source or
+    an over-budget item is a failed selection that gets exactly one model
+    correction, never a silent downgrade to an empty history context.
+    """
+    if not isinstance(briefs, list) or not isinstance(conflicts, list):
+        return "briefs 与 conflicts 必须都是数组"
+    if len(briefs) > MAX_MEMORY_BRIEFS:
+        return f"简报 {len(briefs)} 条，超过 {MAX_MEMORY_BRIEFS} 条"
+    if len(conflicts) > MAX_MEMORY_CONFLICTS:
+        return f"冲突 {len(conflicts)} 条，超过 {MAX_MEMORY_CONFLICTS} 条"
+    if previous_ending_start_id is not None:
+        ending_ids = {block.id for block in blocks if block.memory_type == "previous_ending"}
+        if not isinstance(previous_ending_start_id, str) or previous_ending_start_id not in ending_ids:
+            return "上一章结尾起点不是本次候选中的有效 ID"
+
+    by_id = {block.id: block for block in blocks if block.memory_type != "previous_ending"}
+    source_ids: set[str] = set()
+    used = 0
+    seen: set[tuple[str, tuple[str, ...], str]] = set()
+    for category, items in (("简报", briefs), ("冲突", conflicts)):
+        for position, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                return f"{category}第 {position} 条不是对象"
+            if set(item) != {"text", "source_ids"}:
+                return f"{category}第 {position} 条字段不符合协议"
+            text = item.get("text")
+            raw_ids = item.get("source_ids")
+            if not isinstance(text, str) or not text.strip():
+                return f"{category}第 {position} 条缺少 text"
+            if not isinstance(raw_ids, list) or not raw_ids:
+                return f"{category}第 {position} 条缺少 source_ids"
+            if len(raw_ids) > MAX_SOURCES_PER_BRIEF:
+                return f"{category}第 {position} 条引用超过 {MAX_SOURCES_PER_BRIEF} 个来源"
+            if any(not isinstance(value, str) or not value.strip() for value in raw_ids):
+                return f"{category}第 {position} 条包含空来源 ID"
+            # Source IDs are protocol tokens, not prose.  Do not validate a
+            # trimmed value and then hand the original token to the packer:
+            # that deferred a bad ID into a KeyError outside Selector's one
+            # permitted correction attempt.
+            if any(value != value.strip() for value in raw_ids):
+                return f"{category}第 {position} 条来源 ID 含前后空白，必须原样复制"
+            ids = tuple(dict.fromkeys(raw_ids))
+            if len(ids) != len(raw_ids):
+                return f"{category}第 {position} 条重复引用来源"
+            unknown = [value for value in ids if value not in by_id]
+            if unknown:
+                return f"{category}第 {position} 条引用了本次候选外的来源：{unknown[0]}"
+            key = (normalize_text(text).strip(), ids, category)
+            if key in seen:
+                return f"{category}中有重复条目"
+            seen.add(key)
+            used += nonspace_len(text)
+            if used > budget:
+                return f"简报与冲突合计 {used} 字，超过 {budget} 字"
+            source_ids.update(ids)
+            if len(source_ids) > MAX_MEMORY_SOURCES:
+                return f"合计引用 {len(source_ids)} 个来源，超过 {MAX_MEMORY_SOURCES} 个"
+    return None
+
+
+def pack_selector_context(
+    blocks: list[MemoryBlock],
+    briefs: list[dict[str, Any]],
+    conflicts: list[dict[str, Any]],
+    previous_ending_start_id: str | None,
+    *,
+    budget: int = MEMORY_BUDGET_CHARS,
+) -> PackedWriterContext:
+    """Turn a *validated* Selector selection into the exact Writer/Checker input."""
+    problem = memory_selection_problem(
+        blocks, briefs, conflicts, previous_ending_start_id, budget=budget,
+    )
+    if problem:
+        raise MemorySelectionValidationError(problem)
+    by_id = {block.id: block for block in blocks if block.memory_type != "previous_ending"}
+
+    def packed(items: list[dict[str, Any]], memory_type: str) -> list[MemoryBlock]:
+        result: list[MemoryBlock] = []
+        for item in items:
+            ids = tuple(item["source_ids"])
+            primary = by_id[ids[0]]
+            result.append(MemoryBlock(
+                "|".join(ids), item["text"].strip(), primary.chapter_index,
+                primary.character_id, memory_type,
+            ))
+        return result
+
+    ending = pack_writer_context(blocks, [], previous_ending_start_id, budget).previous_ending
+    return PackedWriterContext(
+        memories=packed(briefs, "memory_brief"),
+        conflicts=packed(conflicts, "memory_conflict"),
+        previous_ending=ending,
     )
 
 
@@ -437,20 +556,33 @@ def writing_reference_context(
     previous_ending: str = "",
     *,
     dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
+    conflicts: list[MemoryBlock] | None = None,
+    unknown_state_slots: list[dict[str, Any]] | None = None,
 ) -> str:
     characters = _selected_characters(chapter)
-    allow = "、".join(character.name for character in characters) or "（没有已知人物卡；Bible 明写的临时角色仍可出现）"
+    allow = "、".join(character.name for character in characters) or "（没有已选人物）"
+    exemptions = sorted({normalize_text(name).strip() for name in (chapter.exempted_character_names or []) if isinstance(name, str) and normalize_text(name).strip()})
+    exemption_text = "、".join(exemptions) or "（无）"
     memory_text = "\n\n".join(block.text for block in (memories or [])) or "（本章不需要其他历史记忆）"
+    conflict_text = "\n\n".join(block.text for block in (conflicts or [])) or "（无）"
     ending_text = previous_ending.strip() or "（没有可用的紧邻上一章结尾）"
     return "\n\n".join(
         [
             "# 世界观（硬约束）\n" + (book.world_setting.strip() or "（无）"),
             (
-                "# 本章允许人物白名单\n"
-                f"{allow}\n"
-                "白名单表示允许出现或被提及，不要求全部使用。历史记忆中出现的人物不会因此获得本章出场权限。"
+                "# 本章人物授权\n"
+                f"已选人物：{allow}\n"
+                f"仅可提及的姓名豁免：{exemption_text}\n"
+                "已选人物可出现或被提及，不要求全部使用。姓名豁免仅许可提及该姓名，不代表人物卡身份、人物关系或状态归属。"
+                "历史记忆中出现的人物不会因此获得本章出场权限。"
             ),
             "# 人物卡（固定设定与本章开始前当前动态状态）\n" + (_character_cards(characters, dynamic_fields_by_character=dynamic_fields_by_character) or "（无）"),
+            (
+                "# 本章开始前待定状态\n"
+                + _format_unknown_state_slots(unknown_state_slots or [])
+                + "\n待定槽不能从旧人物卡、历史事实或常识补回为确定状态；它也不是已证实的相反事实，"
+                "不得仅因待定而把正文判为矛盾或要求补写。只有本章正文明确写出后才能形成新事实。"
+            ),
             (
                 "# 历史参考资料（只读，低于本章 Bible）\n"
                 "## 紧邻上一章结尾原文（仅用于开场衔接）\n"
@@ -459,6 +591,8 @@ def writing_reference_context(
                 + ending_text
                 + "\n\n## 其他工作记忆\n"
                 + memory_text
+                + "\n\n## 待核对的历史冲突（不覆盖本章 Bible）\n"
+                + conflict_text
             ),
         ]
     )
@@ -579,7 +713,7 @@ def extractor_user_message(db: Session, book: Book, chapter: Chapter) -> str:
 
 def manual_checker_reference_context(db: Session, chapter: Chapter) -> str:
     """Bounded current facts for manual checks; no extra Selector/model call."""
-    from app.services.character_state_projection import projected_fields_before_chapter
+    from app.services import character_state_projection as projection
 
     blocks = prefilter_memory_candidates(
         memory_candidates(db, chapter), chapter=chapter,
@@ -589,15 +723,113 @@ def manual_checker_reference_context(db: Session, chapter: Chapter) -> str:
         blocks, [block.id for block in blocks if block.memory_type != "previous_ending"],
         None, MEMORY_BUDGET_CHARS,
     )
+    state_reader = getattr(projection, "projected_state_before_chapter", None)
+    if callable(state_reader):
+        prior_state, unknown_slots = state_reader(db, chapter, stable_relationship_keys=True)
+    else:
+        prior_state = projection.projected_fields_before_chapter(db, chapter, stable_relationship_keys=True)
+        unknown_slots = []
     return writing_reference_context(
         chapter.book, chapter, packed.memories, packed.previous_ending,
-        dynamic_fields_by_character=projected_fields_before_chapter(db, chapter),
+        dynamic_fields_by_character=prior_state,
+        unknown_state_slots=unknown_slots,
     )
 
 
 def checker_user_message(
-    chapter: Chapter, draft_text: str, bible: str, *, reference_context: str,
+    chapter: Chapter,
+    draft_text: str,
+    bible: str,
+    *,
+    reference_context: str,
+    source_catalog: list[dict[str, Any]] | None = None,
+    name_hits: list[dict[str, Any]] | None = None,
+    name_groups: list[dict[str, Any]] | None = None,
+    name_candidate_groups: list[dict[str, Any]] | None = None,
 ) -> str:
+    catalog_lines = []
+    for source in source_catalog or []:
+        if not isinstance(source, dict):
+            continue
+        kind, source_id, text = source.get("kind"), source.get("id"), source.get("text")
+        if isinstance(kind, str) and isinstance(source_id, str) and isinstance(text, str):
+            if (kind, source_id) == ("draft", "draft"):
+                catalog_lines.append("[draft:draft]\n见下方“待检查正文（原样）”。")
+            elif (kind, source_id) == ("bible", "bible"):
+                catalog_lines.append("[bible:bible]\n见上方“本章剧情 Bible（原文快照）”。")
+            else:
+                catalog_lines.append(f"[{kind}:{source_id}]\n{text}")
+    source_directory = "\n\n".join(catalog_lines) or "（来源目录由程序冻结；没有额外条目）"
+    fallback_groups: list[dict[str, Any]] = []
+    fallback_candidates: dict[tuple[tuple[str, ...], tuple[str, ...]], str] = {}
+    if name_groups is None:
+        for hit in name_hits or []:
+            if not isinstance(hit, dict):
+                continue
+            hit_id, source_id, text = hit.get("hit_id"), hit.get("source_id"), hit.get("text")
+            candidates = hit.get("candidate_character_ids")
+            selected = hit.get("selected_character_ids")
+            excerpt = hit.get("local_excerpt")
+            if not (
+                isinstance(hit_id, str) and isinstance(source_id, str) and isinstance(text, str)
+                and isinstance(candidates, list) and isinstance(selected, list) and isinstance(excerpt, str)
+                and all(isinstance(value, str) for value in candidates + selected)
+            ):
+                continue
+            candidate_key = fallback_candidates.setdefault(
+                (tuple(candidates), tuple(selected)), f"c{len(fallback_candidates) + 1}",
+            )
+            fallback_groups.append({
+                "hit_ids": [hit_id], "source_id": source_id, "name": text,
+                "candidate_key": candidate_key, "local_context": excerpt,
+            })
+        name_groups = fallback_groups
+        name_candidate_groups = [
+            {"candidate_key": key, "character_ids": list(ids), "selected_character_ids": list(selected_ids)}
+            for (ids, selected_ids), key in fallback_candidates.items()
+        ]
+    candidate_lines = []
+    for group in name_candidate_groups or []:
+        if not isinstance(group, dict):
+            continue
+        key, ids, selected_ids = group.get("candidate_key"), group.get("character_ids"), group.get("selected_character_ids")
+        if isinstance(key, str) and isinstance(ids, list) and isinstance(selected_ids, list) and all(isinstance(value, str) for value in ids + selected_ids):
+            candidate_lines.append(f"{key}：候选ID={','.join(ids)}；已选ID={','.join(selected_ids) or '（无）'}")
+    group_lines = []
+    for group in name_groups or []:
+        if not isinstance(group, dict):
+            continue
+        hit_ids = group.get("hit_ids")
+        source_id, name, candidate_key, context = (
+            group.get("source_id"), group.get("name"), group.get("candidate_key"), group.get("local_context"),
+        )
+        if (
+            isinstance(hit_ids, list) and hit_ids and all(isinstance(value, str) for value in hit_ids)
+            and all(isinstance(value, str) for value in (source_id, name, candidate_key, context))
+        ):
+            group_lines.append(
+                f"[{','.join(hit_ids)}] 来源={source_id}，词={name}，候选组={candidate_key}，局部原文={context}"
+            )
+    name_directory = "\n".join(group_lines) or "（没有待辨别姓名命中；name_uses 返回空数组）"
+    candidate_directory = "\n".join(candidate_lines) or "（无待辨别姓名候选组）"
+    evidence_contract = (
+        "# 程序提供的检查来源目录\n" + source_directory + "\n\n"
+        "# 待辨别姓名候选组\n" + candidate_directory + "\n\n"
+        "# 待辨别姓名局部片段\n" + name_directory + "\n\n"
+        "# 证据与姓名输出协议\n"
+        "每个 issue 返回 kind、reason、draft_evidence、bible_evidence、source_kind、source_id、source_evidence。"
+        "source_kind/source_id 必须原样指向上方目录，source_evidence 必须是该来源中的连续原文；"
+        "不得用省略号拼接不连续片段。只有 source_kind=bible 时 bible_evidence 才可非空，且必须是同一 Bible 原文。"
+        "kind=missing_requirement 表示核心要求遗漏：draft_evidence 留空、必须引用非空 Bible；其余问题通常必须引用正文。"
+        "但未选择人物、重名或身份未明且该姓名只出现在 Bible 时，身份问题可把 source_kind/source_id 指向 Bible，"
+        "draft_evidence 留空并用 Bible 原文举证，绝不可伪造正文引文。"
+        "来源 prior_state:unknown 只表示资料范围，绝不可单独作为正文矛盾、必需事件或 issue 的依据；"
+        "只有其他冻结来源存在确切证据时才可报告问题。"
+        "逐组返回 name_uses：每项含 hit_ids、classification、reason 和可选 character_id。"
+        "hit_ids 必须恰好等于下方一个程序分组，不得把不同局部片段或候选组混在一项；"
+        "classification 只能为 character、ordinary_word、uncertain。程序会按 hit_ids 重建每次命中的精确引文与位置。"
+        "ordinary_word 不是人物；character/uncertain 必须另有对应身份问题。"
+    )
     if not bible.strip():
         return "\n\n".join([
             reference_context,
@@ -615,6 +847,7 @@ def checker_user_message(
                 "bible_evidence 留为空字符串，不得编造 Bible 引文。"
                 "没有其他有证据的问题时返回 passed，issues 为空数组。"
             ),
+            evidence_contract,
         ])
     return "\n\n".join(
         [
@@ -628,8 +861,9 @@ def checker_user_message(
                 "为完成本章意图，可自然补充互动、场景衔接、局部波折、情绪与态度变化，以及已有关系中的渐进发展。"
                 "只报告有证据的实质矛盾、核心要求遗漏、违背明确禁止事项或指定顺序与结局，以及未经授权的重大转折。"
                 "没有上述具体证据时，不得仅因发挥较多而判为 suspect 或 violation；没有其他问题应返回 passed。"
-                "每个 issue 必须同时引用正文和 Bible 证据，在 reason 中说明具体问题及对应依据；不得将参考资料冒充 Bible 引文。"
+                "每个 issue 必须引用正文和对应冻结来源；只有 Bible 问题才引用 Bible 证据，不得将参考资料冒充 Bible 引文。"
             ),
+            evidence_contract,
         ]
     )
 
@@ -679,25 +913,14 @@ def scan_known_character_names(
 
 
 def validate_character_preflight(db: Session, chapter: Chapter) -> None:
-    if not chapter.user_prompt.strip():
-        raise CharacterPreflightError("bible_empty", "本章剧情 Bible 不能为空")
-    known = list(db.scalars(select(Character).where(Character.book_id == chapter.book_id).order_by(Character.id)).all())
-    matched, ambiguous = scan_known_character_names(chapter.user_prompt, known)
-    if ambiguous:
-        raise CharacterPreflightError(
-            "ambiguous_character_name",
-            "同书存在无法区分的重名人物",
-            {"names": ambiguous},
-        )
-    selected = {link.character_id for link in chapter.character_links}
-    exempted = set(chapter.exempted_character_names or [])
-    unselected = sorted({item.name for item in matched if item.id not in selected} - exempted)
-    if unselected:
-        raise CharacterPreflightError(
-            "unselected_characters_in_bible",
-            "本章剧情 Bible 出现了未选择人物",
-            {"names": unselected},
-        )
+    """Compatibility hook for callers that used to preflight raw name substrings.
+
+    Names such as ``夏天`` and ``白雪`` need the Checker call's semantic
+    ``name_uses`` classification.  Treating a substring as a definitive
+    character here was both a false-positive source and an unreviewable hard
+    gate, so the function deliberately performs no character decision.
+    """
+    del db, chapter
 
 
 class CharacterPreflightError(ValueError):
@@ -723,17 +946,9 @@ def draft_violations(db: Session, chapter: Chapter, text: str, finish_reason: st
         violations.append(
             {"code": "minimum_length", "message": f"正文 {chars} 字，少于最低要求 {MIN_DRAFT_NONSPACE_CHARS} 字", "current_chars": chars}
         )
-    known = list(db.scalars(select(Character).where(Character.book_id == chapter.book_id).order_by(Character.id)).all())
-    matched, ambiguous = scan_known_character_names(text, known)
-    selected = {link.character_id for link in chapter.character_links}
-    exempted = set(chapter.exempted_character_names or [])
-    unselected = sorted({item.name for item in matched if item.id not in selected} - exempted)
-    if ambiguous:
-        violations.append({"code": "ambiguous_character", "message": f"正文含重名人物：{'、'.join(ambiguous)}"})
-    if unselected:
-        violations.append(
-            {"code": "unselected_character", "message": f"正文含未获准人物：{'、'.join(unselected)}", "names": unselected}
-        )
+    # Character mention decisions move to Checker ``name_uses``.  A raw name
+    # substring only creates a candidate for word-sense classification; it is
+    # not enough evidence to reject a draft or make a generic override unsafe.
     return violations
 
 
@@ -755,7 +970,11 @@ def _character_cards(
                 "固定设定：",
                 character.fixed_profile or "（暂无）",
                 "动态状态：",
-                _format_dynamic_fields((dynamic_fields_by_character or {}).get(character.id, character.dynamic_fields)),
+                _format_dynamic_fields(
+                    character.dynamic_fields
+                    if dynamic_fields_by_character is None
+                    else dynamic_fields_by_character.get(character.id, {})
+                ),
             ]
         )
         blocks.append("\n".join(lines))
@@ -766,6 +985,20 @@ def _format_dynamic_fields(fields: dict[str, Any]) -> str:
     if not fields:
         return "（暂无）"
     return "\n".join(f"- {key}：{value}" for key, value in sorted(fields.items()))
+
+
+def _format_unknown_state_slots(unknown_slots: list[dict[str, Any]]) -> str:
+    if not unknown_slots:
+        return "（无）"
+    lines: list[str] = []
+    for item in unknown_slots:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("character_name") or item.get("character_id") or "人物"
+        slot = item.get("slot") or "状态"
+        reason = item.get("message") or "该状态尚无法确定"
+        lines.append(f"- {name} 的 {slot}：待定（{reason}）")
+    return "\n".join(lines) or "（无）"
 
 
 def _keywords(text: str) -> set[str]:
