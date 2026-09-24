@@ -56,3 +56,15 @@
 - 精确源码SHA256、真实模型验证的安全摘要、设备审计及资源清理摘要见[验证证据](2026-09-24-build61-validation.json)。后续源码变化不能沿用本次结论。
 - 本轮主会话临时构建、测试数据库、日志和诊断脚本按精确清单校验未占用及内容未变后移除；含首轮构建/默认pytest临时目录与末轮Backend目录，共清理526089261个逻辑字节→0。Store/HTTP自清理，reviewer临时产物亦已核验清理；旧的其他任务pytest目录保留，未清共享临时目录。远端未写任务文件，相关路径核验不存在。
 - 保留回归源码、本报告与紧凑验证JSON；本地工作区未提交，线上和已安装App仍Build60。下一步如用户要求发布，按现行一条龙流程审查Build60→Build61累计改动后部署/换装。
+
+## 一条龙发布完成（2026-09-24，用户另行授权）
+
+- 累计范围：实际部署Build60 `b62055854d0e2f198db059a1e8ca271e8ecd0630` → Build61 `a8a38dd6b9f5f3098ddeebf26c6a94cd303d21a1`，共23个路径；19个源码/测试文件与本地最终验证SHA256完全一致，无依赖/迁移变化。main已推送，不可变标签`v2.2.0-build61`指向该实现commit；后续文档提交不移动标签。
+- [公开Release](https://github.com/linocai/Ictw/releases/tag/v2.2.0-build61)已发布。Mac ZIP SHA256为`2a0d866f81cab4651fbbd8dc6cbc87f5c700770a668bb1d0c247f6edfce763e3`，GitHub asset digest一致。
+- Backend：先核验线上68文件与Build60一致且无在途任务，再停服备份；真实库恢复副本运行Alembic head，证明迁移为空操作且数据相同。生产更新后内外鉴权health200、未鉴权401、docs/openapi/redoc404、完整性/外键、单实例MainPID与8787监听PID一致；发布后warning0、在途任务0、68文件与目标哈希一致。密钥未变，除书籍打开时间外所有业务表内容与发布前一致。
+- 远端恢复集：`/opt/linoi/backups/20260924-build61-a8a38dd`，保留旧代码、环境、旧marker与前后数据库；数据库经完整性与恢复核验、字节相同后硬链接去重，保留前后两个恢复入口，节约21835776字节。旧香港服务未操作。
+- 双端OS27 Release均构建成功并严格验签。Mac导出使用命令行manual Developer ID签名，hardened runtime开启、无get-task-allow；受保护scheme哈希未变。iOS签名Release产物留在Xcode DerivedData供用户安装，无IPA。
+- `/Applications/ICTW.app`已换装且运行Build61，使用ditto复制；交付app、ZIP解包、已安装app逐文件一致并通过签名验证。旧Build60完整且已验签备份位于`/Users/linotsai/Lino/app_backups/ICTW-v2.2.0-build60-before-build61-20260924.app`。
+- Mac实际验收：已接受第8章页面可打开；重新编辑确认可取消；现有第9章TextEditor可打开；历史失败原因弹窗和重试入口可见。历史日志仍显示原“18来源超过16”错误，不篡改旧结果；未点击生成/重试、接受、重提或修改正文。iOS最终真机页面未验收。设备支持审计pending为空。
+- 交付及完整发布证据：`/Users/linotsai/Lino/app_builds/ICTW-v2.2.0-build61-macOS.app`、同名前缀ZIP/dSYM、`ICTW-v2.2.0-build61-validation.json`、设备审计与local/remote-cleanup清单。
+- 资源收尾：本地临时包、归档、导出、日志及已备份旧安装目录核验未占用、内容哈希未变后清理，28263794逻辑字节/27908KiB磁盘占用→0；系统与用户临时目录的本轮命名路径无残留。远端stage、上传包及恢复演练库23612532逻辑字节→0；保留现役交付和恢复集，`/opt/linoi`收尾占用459736KiB。未扫共享目录、未删除真实业务数据。
