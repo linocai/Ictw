@@ -80,6 +80,9 @@ def job(chapter, phase=None, kind=None):
         else:
             result.update(error_code="llm_timeout", error_message="整理记忆请求超时",
                           error_context=dict(agent_role="extractor", model_name="test-extractor"))
+        if role := STATE["options"].get("job_failure_role"):
+            result.update(error_code="llm_timeout", error_message="虚构任务超时",
+                          error_context=dict(agent_role=role, model_name="test-role"))
     return result
 
 

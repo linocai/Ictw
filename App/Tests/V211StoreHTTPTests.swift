@@ -139,6 +139,7 @@ private struct V211StoreHTTPTests {
             ("v2.2 generated-candidate retry never starts Writer or checks visible draft", generatedCandidateRetry),
             ("v2.2 manual Checker Job survives finalized cold loads", manualCheckerJobColdLoad),
             ("v2.2 Extractor Job keeps visible Checker evidence after cold load", extractorJobKeepsVisibleChecker),
+            ("Build62 visible recheck supersedes generation failures only", recheckAfterGenerationFailure),
             ("F6 permanent polling and manual request identities", pollingIdentity),
             ("F6 retrying observer records one error and recovers", pollingRecovery),
             ("F6 transient polling stops after a finite retry budget", boundedPolling),
@@ -630,6 +631,36 @@ private struct V211StoreHTTPTests {
             guard case .current(let verdict, _) = h.snapshot().evidence, verdict == .passed else {
                 throw HTTPTestFailure(description: "Extractor \(expectedPhase) must not turn an unchanged accepted draft into stale Checker evidence")
             }
+        }
+    }
+
+    @MainActor static func recheckAfterGenerationFailure() async throws {
+        for role in ["memory_selector", "writer", "checker"] {
+            let h = try await Harness("recheck-old-prose", [
+                "job_phase": "failed", "job_kind": "write", "job_failure_role": role,
+                "can_retry_checker": role == "checker",
+            ])
+            try check(h.editor.writingPhase.isFailed, "fixture must restore the original failed task")
+            let prose = h.editor.currentChapter!.draftText
+            _ = await h.editor.rerunChecker()
+            try check(h.editor.writingPhase == .idle, "fresh visible check must supersede old \(role) failure")
+            try check(h.snapshot().primaryAction == .accept, "passed visible prose must be acceptable without rewriting")
+            try check(h.snapshot().taskBanner?.kind != .generationFailed, "old failure must not mask the successful check")
+            try check(h.editor.currentChapter?.draftText == prose, "recovery must not change the preserved manuscript")
+            try check(h.editor.candidateCheckerRetrySourceJobID == nil, "new visible check must clear stale generated retry handle")
+            try check(ChapterTaskOutcomeStore.load(chapter: h.editor.currentChapter!) == nil, "obsolete failure must not survive cold loads")
+            let requests = try await fixture().requests
+            try check(!requests.contains { $0.path.hasSuffix("/write") }, "manual recovery must never start Writer")
+        }
+        let failedCheck = try await Harness("failed-recheck", [
+            "job_phase": "failed", "job_failure_role": "writer", "check_mode": "unavailable",
+        ])
+        _ = await failedCheck.editor.rerunChecker()
+        try check(failedCheck.editor.writingPhase.isFailed, "unavailable check cannot erase the original failure")
+        let archive = try await Harness("archive-independent", ["archive_failure": true])
+        _ = await archive.editor.rerunChecker()
+        guard case .failed(_, _, .extraction) = archive.editor.writingPhase else {
+            throw HTTPTestFailure(description: "checking accepted prose cannot repair failed archive")
         }
     }
 

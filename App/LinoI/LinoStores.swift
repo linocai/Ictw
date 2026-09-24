@@ -1229,14 +1229,14 @@ final class ChapterEditorStore: ObservableObject {
             if let result, let checked = currentChapter, result.hasConcreteVerdict {
                 let snapshot = CheckedDraftSnapshot(chapter: checked, checkerResult: result)
                 if cache.saveCheckedSnapshot(snapshot) { staleCheckedSnapshot = snapshot }
-                // A successful recheck resolves only an earlier local accept
-                // refusal. Without clearing that terminal phase, the old
-                // "接受正文未完成" banner keeps masking the fresh verdict and
-                // the author cannot issue the next accept request.
-                if case .failed(_, _, .acceptance) = writingPhase {
+                // A concrete check of the current visible prose supersedes
+                // earlier generation/check/accept failures, but never repairs
+                // an independently failed archive.
+                if case .failed(_, _, let stage) = writingPhase, stage != .extraction {
                     ChapterTaskOutcomeStore.clear(chapterID: checked.id)
                     writingPhase = .idle
                     currentValidationReason = nil
+                    candidateCheckerRetrySourceJobID = nil
                     if result.identityIssues.isEmpty {
                         pendingExemptionNames = []
                     }

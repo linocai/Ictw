@@ -36,6 +36,7 @@ from app.services.character_state_projection import (
     uncertainty_changes_for_revision,
 )
 from app.services.context import normalize_text
+from app.services.content_revisions import begin_sqlite_write_cas
 
 
 ARCHIVE_SCHEMA_VERSION = 2
@@ -875,6 +876,10 @@ def activate_archive_revision(
     model_name: str | None,
     job_id: str | None = None,
 ) -> tuple[list[str], list[str]]:
+    # Model work has finished. SQLite SELECTs alone do not reserve a
+    # transaction: a reopen could otherwise land between proof and activation.
+    begin_sqlite_write_cas(db)
+    db.expire_all()
     db.refresh(chapter)
     db.refresh(revision)
     run = db.get(JobRun, job_id) if job_id else None
@@ -1202,6 +1207,7 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
             and latest is not None
             and (
                 latest.status in {"partial", "failed", "stale"}
+                or (not active_valid and latest.status == "complete")
                 # A v2.1 revision remains DB-complete and active while a
                 # verified unknown slot is outstanding.  It is still an
                 # author-actionable recovery state, not a terminal success.
@@ -1217,7 +1223,8 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
         elif chapter.status == "finalized" and chapter.legacy_archive_eligible:
             schema, status = "legacy", "complete"
         else:
-            schema, status = "none", chapter.archive_status
+            schema = "none"
+            status = _unusable_archive_status(chapter, latest)
         result[chapter.id] = {
             "archive_status": status,
             "archive_schema": schema,
@@ -1230,12 +1237,11 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
                 "complete" if active_valid or schema == "legacy" else "none"
             ),
         }
-        # Match _changes_for_projection exactly: its status-only active test is
-        # deliberate to avoid fingerprint recursion, and legacy is a fallback
-        # only when no active v2 source exists.
+        # Advance only the verified prefix, exactly as _changes_for_projection
+        # does; a stale complete pointer must not leak into later prior state.
         if chapter.status != "finalized":
             continue
-        if active is not None and active.is_active and active.status == "complete":
+        if active_valid:
             for delta in deltas_by_revision.get(active.id, []):
                 cursor.apply(delta)
             for uncertainty in uncertainty_changes_for_revision(active):
@@ -1366,6 +1372,12 @@ def _latest_attempt_read(revision: ChapterArchiveRevision | None) -> dict[str, A
     }
 
 
+def _unusable_archive_status(chapter: Chapter, latest: ChapterArchiveRevision | None) -> str:
+    if chapter.archive_status == "complete" or (latest is not None and latest.status == "complete"):
+        return latest.status if latest is not None and latest.status != "complete" else "stale"
+    return chapter.archive_status
+
+
 def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
     active = active_archive_revision(db, chapter)
     latest = db.scalars(
@@ -1378,6 +1390,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
         and latest is not None
         and (
             latest.status in {"partial", "failed", "stale"}
+            or (active is None and latest.status == "complete")
             or (
                 latest.is_active
                 and latest.status == "complete"
@@ -1463,7 +1476,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "latest_attempt": _latest_attempt_read(latest),
         }
     return {
-        "status": chapter.archive_status,
+        "status": _unusable_archive_status(chapter, latest),
         "schema": "none",
         "revision_id": None,
         "revision": None,

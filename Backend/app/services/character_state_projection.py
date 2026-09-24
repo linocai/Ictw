@@ -196,48 +196,56 @@ def uncertainty_changes_for_revision(revision: ChapterArchiveRevision) -> list[S
 
 
 def _changes_for_projection(db: Session, book_id: str, *, before_index: int | None = None) -> list:
+    # Validate each chapter against the already validated prefix. Calling the
+    # full fingerprint helper here would recurse back into this projection.
+    from app.services.archive_v2 import archive_input_fingerprint_for_projection
+
     chapter_query = select(Chapter).where(Chapter.book_id == book_id, Chapter.status == "finalized")
     if before_index is not None:
         chapter_query = chapter_query.where(Chapter.index < before_index)
     chapters = list(db.scalars(chapter_query.order_by(Chapter.index, Chapter.id)).all())
+    characters = db.scalars(select(Character).where(Character.book_id == book_id)).all()
+    cursor = StateProjectionCursor.for_characters(characters, stable_relationship_keys=True)
     changes: list = []
     for chapter in chapters:
         active = None
         if chapter.active_archive_revision_id:
             active = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id)
-        # Deliberately fingerprint-free, unlike archive_v2.active_archive_revision:
-        # archive_input_fingerprint() calls back into this projection, so adding
-        # the check here would recurse through every preceding chapter. The
-        # equivalence rests on an invariant the invalidation paths maintain —
-        # a chapter keeps its pointer with is_active/complete only while its
-        # fingerprint is current, because invalidate_archive_if_input_changed
-        # and invalidate_downstream_archives clear both together. Any new path
-        # that stales a revision must clear the pointer in the same transaction.
-        if active is not None and active.is_active and active.status == "complete":
-            changes.extend(
-                db.scalars(
+        active_valid = (
+            active is not None and active.is_active and active.status == "complete"
+            and active.input_fingerprint == archive_input_fingerprint_for_projection(
+                chapter, cursor.materialize_fields(),
+                character_ids=[link.character_id for link in chapter.character_links],
+                contract_version=active.contract_version,
+                state_uncertainties=cursor.materialize_uncertainties(),
+            )
+        )
+        chapter_changes: list = []
+        if active_valid:
+            chapter_changes.extend(db.scalars(
                     select(ChapterArchiveStateDelta)
                     .where(ChapterArchiveStateDelta.revision_id == active.id)
                     .order_by(ChapterArchiveStateDelta.position, ChapterArchiveStateDelta.id)
-                ).all()
-            )
+                ).all())
             # A v2.1 uncertainty is a first-class projection event.  It comes
             # after the chapter's reliable deltas so it masks all disputed
             # variants independent of the model's array ordering.
-            changes.extend(uncertainty_changes_for_revision(active))
-            continue
+            chapter_changes.extend(uncertainty_changes_for_revision(active))
         # Existing databases receive legacy_archive_eligible=true.  The second
         # condition keeps direct v1 apply helpers useful in local compatibility
         # tests, while any attempted v2 revision has a non-null fingerprint and
         # therefore cannot silently fall back after becoming stale/failed.
-        if chapter.legacy_archive_eligible or chapter.archive_input_fingerprint is None:
-            changes.extend(
+        elif chapter.legacy_archive_eligible or chapter.archive_input_fingerprint is None:
+            chapter_changes.extend(
                 db.scalars(
                     select(CharacterStateChange)
                     .where(CharacterStateChange.chapter_id == chapter.id)
                     .order_by(CharacterStateChange.created_at, CharacterStateChange.id)
                 ).all()
             )
+        for change in chapter_changes:
+            cursor.apply(change)
+        changes.extend(chapter_changes)
     return changes
 
 

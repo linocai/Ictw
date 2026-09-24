@@ -165,12 +165,20 @@ struct V2IOSEvidenceFace: View {
     let snapshot: V2DeskSnapshot
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var sync: ClientSyncStore
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 V2IOSSectionLabel(title: "证据")
                 evidence
+                if !(editor.currentChapter?.draftText.v2IOSTrimmed.isEmpty ?? true) {
+                    Button(editor.checkerRefreshing ? "正在复查…" : "重新复查当前正文") {
+                        Task { _ = await editor.rerunChecker() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(editor.writingPhase.isActive || editor.checkerRefreshing || !sync.networkActionsAvailable)
+                }
                 nameClarification
                 archive
             }

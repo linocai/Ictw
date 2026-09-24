@@ -161,11 +161,19 @@ class WriteJobRegistry:
         with self._lock:
             self._jobs.clear()
 
-    def reserve(self, job: WriteJob) -> None:
+    def reserve(self, job: WriteJob, *, replace: WriteJob | None = None) -> None:
         with self._lock:
             existing = self._jobs.get(job.chapter_id)
             if existing is not None and not existing.is_terminal:
-                raise WriteJobConflict()
+                if existing is not replace or existing.kind not in {"write", "check"}:
+                    raise WriteJobConflict()
+                with existing._lock:
+                    if existing._finalizing:
+                        raise WriteJobConflict()
+                    existing.discard_on_cancel = True
+                    existing.cancel_event.set()
+                    existing.phase = "cancelled"
+                    existing._terminal = True
             self._jobs[job.chapter_id] = job
 
     def get(self, chapter_id: str) -> WriteJob | None:
@@ -565,97 +573,108 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     # leaking the frozen internal chapter_index/kind representation.
     result["context_limitations"] = _public_context_limitations(snapshot.get("context_limitations"))
 
-    db = sf()
-    try:
-        # SQLite does not begin a transaction for SELECTs under the legacy
-        # driver mode.  Reserve the short final window before *any* proof
-        # read, otherwise a dependency PATCH can land between the proof and
-        # the promotion UPDATE below.
-        _begin_final_checker_cas(db)
-        run = db.get(JobRun, job.job_id)
-        candidate = db.get(ChapterDraftCandidate, job.checker_candidate_id)
-        chapter = db.get(Chapter, job.chapter_id)
-        if run is None or candidate is None or chapter is None:
-            if run is not None:
-                _apply_job_phase(db, job.job_id, "failed", error_code="checker_source_missing", error_message="原写作候选已不存在")
-                db.commit()
-            job.mark_terminal("failed")
-            return
+    def persist_result() -> bool | None:
+        db = sf()
+        try:
+            # SQLite does not begin a transaction for SELECTs under the legacy
+            # driver mode.  Reserve the short final window before *any* proof
+            # read, otherwise a dependency PATCH can land between the proof and
+            # the promotion UPDATE below.
+            _begin_final_checker_cas(db)
+            run = db.get(JobRun, job.job_id)
+            candidate = db.get(ChapterDraftCandidate, job.checker_candidate_id)
+            chapter = db.get(Chapter, job.chapter_id)
+            if run is None or candidate is None or chapter is None:
+                if run is not None:
+                    _apply_job_phase(db, job.job_id, "failed", error_code="checker_source_missing", error_message="原写作候选已不存在")
+                    db.commit()
+                job.mark_terminal("failed")
+                return False
 
-        current = (
-            run.phase == "checking"
-            and candidate.latest_checker_attempt_id == job.job_id
-            and candidate.checker_input_fingerprint == snapshot.get("input_fingerprint")
-            and candidate.checker_input_snapshot == snapshot
-            and hashlib.sha256(candidate.draft_text.encode()).hexdigest() == snapshot.get("draft", {}).get("sha256")
-            and is_frozen_input_current(db, chapter, snapshot)
-        )
-        if not current:
-            _apply_job_phase(
-                db, job.job_id, "cancelled", error_code="checker_input_changed",
-                error_message="检查期间输入已变更，旧结论未应用",
+            current = (
+                run.phase == "checking"
+                and candidate.latest_checker_attempt_id == job.job_id
+                and candidate.checker_input_fingerprint == snapshot.get("input_fingerprint")
+                and candidate.checker_input_snapshot == snapshot
+                and hashlib.sha256(candidate.draft_text.encode()).hexdigest() == snapshot.get("draft", {}).get("sha256")
+                and is_frozen_input_current(db, chapter, snapshot)
             )
-            db.commit()
-            job.mark_terminal("cancelled")
-            return
-
-        candidate.checker_result = result
-        if result.get("verdict") == "passed":
-            promoted = db.execute(
-                update(Chapter)
-                .where(Chapter.id == chapter.id, Chapter.write_generation == run.chapter_write_generation)
-                .values(
-                    draft_text=candidate.draft_text, status="draft_ready", updated_at=utc_now(),
-                    content_revision=Chapter.content_revision + 1,
+            if not current:
+                _apply_job_phase(
+                    db, job.job_id, "cancelled", error_code="checker_input_changed",
+                    error_message="检查期间输入已变更，旧结论未应用",
                 )
-            )
-            if promoted.rowcount != 1:
-                db.rollback()
-                _mark_chapter_changed(sf, job)
+                db.commit()
                 job.mark_terminal("cancelled")
+                return False
+
+            candidate.checker_result = result
+            if result.get("verdict") == "passed":
+                promoted = db.execute(
+                    update(Chapter)
+                    .where(Chapter.id == chapter.id, Chapter.write_generation == run.chapter_write_generation)
+                    .values(
+                        draft_text=candidate.draft_text, status="draft_ready", updated_at=utc_now(),
+                        content_revision=Chapter.content_revision + 1,
+                    )
+                )
+                if promoted.rowcount != 1:
+                    db.rollback()
+                    _mark_chapter_changed(sf, job)
+                    job.mark_terminal("cancelled")
+                    return False
+                db.execute(
+                    update(ChapterDraftCandidate)
+                    .where(ChapterDraftCandidate.chapter_id == chapter.id)
+                    .values(is_current=False)
+                )
+                candidate.is_current = True
+                rebuild_book_search_index(db, chapter.book_id)
+                _apply_job_phase(
+                    db, job.job_id, "done", checker_result=result,
+                    draft_fingerprint=fingerprint, input_snapshot=snapshot,
+                    input_fingerprint=snapshot.get("input_fingerprint"),
+                    context_limitations=snapshot.get("context_limitations"),
+                )
+                db.commit()
+                job.mark_terminal("done")
                 return
-            db.execute(
-                update(ChapterDraftCandidate)
-                .where(ChapterDraftCandidate.chapter_id == chapter.id)
-                .values(is_current=False)
+
+            reasons = [
+                item.get("reason", "").strip() for item in result.get("issues", [])
+                if isinstance(item, dict) and isinstance(item.get("reason"), str) and item.get("reason", "").strip()
+            ]
+            message = result.get("error_message") or (
+                f"Checker 未通过：{'；'.join(reasons)}；失败稿已后台留档，未替换当前正文"
+                if reasons else "Checker 未通过；失败稿已后台留档，未替换当前正文"
             )
-            candidate.is_current = True
-            rebuild_book_search_index(db, chapter.book_id)
             _apply_job_phase(
-                db, job.job_id, "done", checker_result=result,
+                db, job.job_id, "failed", checker_result=result,
                 draft_fingerprint=fingerprint, input_snapshot=snapshot,
                 input_fingerprint=snapshot.get("input_fingerprint"),
                 context_limitations=snapshot.get("context_limitations"),
+                error_code=result.get("error_code") or "checker_rejected",
+                error_message=message,
+                error_context=result.get("error_context") or {"agent_role": "checker"},
             )
             db.commit()
-            job.mark_terminal("done")
-            return
+            job.mark_terminal("failed")
+        except Exception:
+            db.rollback()
+            record_job_phase(sf, job.job_id, "failed", error_code="checker_retry_failed", error_message="Checker 重试执行失败")
+            job.mark_terminal("failed")
+            return False
+        finally:
+            db.close()
 
-        reasons = [
-            item.get("reason", "").strip() for item in result.get("issues", [])
-            if isinstance(item, dict) and isinstance(item.get("reason"), str) and item.get("reason", "").strip()
-        ]
-        message = result.get("error_message") or (
-            f"Checker 未通过：{'；'.join(reasons)}；失败稿已后台留档，未替换当前正文"
-            if reasons else "Checker 未通过；失败稿已后台留档，未替换当前正文"
-        )
-        _apply_job_phase(
-            db, job.job_id, "failed", checker_result=result,
-            draft_fingerprint=fingerprint, input_snapshot=snapshot,
-            input_fingerprint=snapshot.get("input_fingerprint"),
-            context_limitations=snapshot.get("context_limitations"),
-            error_code=result.get("error_code") or "checker_rejected",
-            error_message=message,
-            error_context=result.get("error_context") or {"agent_role": "checker"},
-        )
-        db.commit()
-        job.mark_terminal("failed")
-    except Exception:
-        db.rollback()
-        record_job_phase(sf, job.job_id, "failed", error_code="checker_retry_failed", error_message="Checker 重试执行失败")
-        job.mark_terminal("failed")
-    finally:
-        db.close()
+    # Retry results have the same ownership requirement as first-pass Writer
+    # results. A cancelled/replaced check cannot publish after its replacement
+    # transaction rolls back; finalizing also excludes a late local cancel.
+    if not write_registry.finish_if_current(
+        job, persist_result, phase="done" if result.get("verdict") == "passed" else "failed",
+    ):
+        record_job_phase(sf, job.job_id, "cancelled", error_code="checker_input_changed",
+                         error_message="检查任务已被替换或取消，旧结论未应用")
 
 
 def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:

@@ -97,6 +97,8 @@ require "macOS banner actions must dispatch themselves" \
   -F 'Button(action.title) { perform(action) }' "$app_dir/LinoIMac/V2/V2MacDeskEditor.swift"
 require "iOS chapter transitions must clear chapter-scoped inspiration state" \
   -F 'inspiration.clearIfChapterChanged(to: summary.id)' "$app_dir/LinoI/V2IOS/V2IOSChapterDeskView.swift"
+require "iOS must expose manual checking independently of a failed generation's primary action" \
+  -F 'Task { _ = await editor.rerunChecker() }' "$app_dir/LinoI/V2IOS/V2IOSChapterFaces.swift"
 
 chapter_edit_guard_count=$(grep -cF 'guard ChapterEditingPolicy.canEdit(chapter) else { return }' "$app_dir/LinoI/LinoStores.swift")
 if (( chapter_edit_guard_count < 2 )); then

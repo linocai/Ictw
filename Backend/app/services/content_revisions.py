@@ -18,6 +18,17 @@ class Revisioned(Protocol):
     content_revision: int
 
 
+def begin_sqlite_write_cas(db: Session) -> None:
+    """Serialize proof reads with their writes, including legacy requests."""
+    if db.bind is None or db.bind.dialect.name != "sqlite":
+        return
+    connection = db.connection()
+    raw = connection.connection
+    driver = getattr(raw, "driver_connection", raw)
+    if not getattr(driver, "in_transaction", False):
+        db.execute(text("BEGIN IMMEDIATE"))
+
+
 def _parse_if_match(value: str | None, *, allow_zero: bool = False) -> int | None:
     # Router unit tests call endpoint functions directly, where FastAPI's
     # Header(None) descriptor is passed instead of a resolved header value.
@@ -106,11 +117,7 @@ def require_matching_revision(
         # best-effort timestamp check.  A caller that already reserved its
         # own short SQLite CAS (for example accept after registry admission)
         # must retain that transaction instead of issuing a nested BEGIN.
-        connection = db.connection()
-        raw = connection.connection
-        driver = getattr(raw, "driver_connection", raw)
-        if not getattr(driver, "in_transaction", False):
-            db.execute(text("BEGIN IMMEDIATE"))
+        begin_sqlite_write_cas(db)
         db.refresh(resource)
     current = int(resource.content_revision)
     if submitted != current:

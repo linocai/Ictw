@@ -65,7 +65,7 @@ from app.services.character_state_projection import (
 )
 from app.services.inspiration_context import InspirationContextError, build_inspiration_context
 from app.services.write_jobs import (
-    WriteJob, WriteJobConflict, _error_context, _valid_checker_result, fail_unlaunched_job,
+    WriteJob, WriteJobConflict, _apply_job_phase, _error_context, _valid_checker_result, fail_unlaunched_job,
     record_job_phase, write_registry,
 )
 from app.services.write_ownership import cancel_local_writer_jobs, invalidate_writer_inputs
@@ -911,7 +911,12 @@ def write_chapter(
     writer_client=Depends(get_writer_client),
     checker_client=Depends(get_checker_client),
 ) -> WriteJobStatus:
+    # Legacy clients omit If-Match. They still must serialize the finalized
+    # check with Writer admission; version compatibility cannot reopen prose.
+    _begin_short_write_cas(db)
     chapter = db.get(Chapter, chapter_id)
+    if chapter is not None:
+        db.refresh(chapter)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     if chapter.status == "finalized":
@@ -931,13 +936,8 @@ def write_chapter(
 
     live_job = write_registry.get_live(chapter_id)
     if live_job is not None:
-        if not payload.replace_draft:
+        if not payload.replace_draft or live_job.kind not in {"write", "check"}:
             raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行"})
-        write_registry.cancel(live_job, discard=True)
-        if live_job.thread is not None:
-            live_job.thread.join(timeout=8)
-        record_job_phase(SessionLocal, live_job.job_id, "cancelled")
-        invalidate_writer_inputs(db, [chapter])
     candidates = memory_candidates(db, chapter)
     selected_ids = {link.character_id for link in chapter.character_links}
     candidates = prefilter_memory_candidates(candidates, chapter=chapter, selected_character_ids=selected_ids)
@@ -974,7 +974,6 @@ def write_chapter(
             "checker": _model_snapshot(checker_client),
         },
     )
-    db.add(run)
     job = WriteJob(
         chapter_id=chapter.id,
         job_id=job_id,
@@ -995,11 +994,25 @@ def write_chapter(
         chapter_write_generation=chapter.write_generation,
     )
     try:
-        write_registry.reserve(job)
+        # Complete fallible input/configuration preparation before replacing
+        # a live owner. Transfer the slot atomically, never through an empty
+        # interval in which an accept could acquire it.
+        if live_job is not None:
+            write_registry.reserve(job, replace=live_job)
+        else:
+            write_registry.reserve(job)
     except WriteJobConflict:
         db.rollback()
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行"})
     try:
+        if live_job is not None and live_job.cancel_event.is_set():
+            # No worker join or second writer Session while this request owns
+            # SQLite's lock. Both jobs' durable states change together.
+            _apply_job_phase(db, live_job.job_id, "cancelled")
+            invalidate_writer_inputs(db, [chapter])
+            run.chapter_write_generation = chapter.write_generation
+            job.chapter_write_generation = chapter.write_generation
+        db.add(run)
         chapter.status = "writing"
         bump_content_revision(chapter)
         db.commit()
@@ -1009,15 +1022,23 @@ def write_chapter(
         # commits.  A failed commit or thread launch has no worker to release
         # it, so repair any durable row and end this exact in-memory owner.
         db.rollback()
-        if write_registry.is_current(job):
-            try:
+        try:
+            if live_job is not None and live_job.cancel_event.is_set():
+                # A rolled-back replacement left the cancelled worker's old
+                # durable row alive. Repair its exact generation as well.
+                fail_unlaunched_job(
+                    SessionLocal, live_job, error_code="write_start_failed",
+                    error_message="替换写作任务未能启动，原正文已保留，请重试",
+                )
+            if write_registry.is_current(job):
                 fail_unlaunched_job(
                     SessionLocal,
                     job,
                     error_code="write_start_failed",
                     error_message="写作任务未能启动，请重试",
                 )
-            finally:
+        finally:
+            if write_registry.is_current(job):
                 # A persistent disk/SQLite failure can also make the recovery
                 # Session fail.  Its durable row is then handled at startup,
                 # but this exact in-memory reservation must never strand the
