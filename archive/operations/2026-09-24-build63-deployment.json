@@ -1,0 +1,54 @@
+{
+  "build": 63,
+  "commit": "465138aa92b0ae49e3bfcef91d5fb1cef5efb63c",
+  "scope": "backend Writer prompt only; installed clients remain Build62",
+  "backup": "/opt/linoi/backups/20260924-build63-465138a",
+  "source_files_verified": 68,
+  "active_jobs": 0,
+  "internal_health": 200,
+  "public_health": 200,
+  "unauthenticated_health": 401,
+  "docs": {
+    "/docs": 404,
+    "/openapi.json": 404,
+    "/redoc": 404
+  },
+  "database_integrity": "ok",
+  "foreign_keys": "ok",
+  "head": "20260923_0014",
+  "migration": "no changes; not run",
+  "backup_restore_verified": true,
+  "business_data_unchanged": true,
+  "env_unchanged": true,
+  "single_instance": true,
+  "postcheck": {
+    "live_writer_protocol_verified": true,
+    "warning_count": 0,
+    "upload_cleanup": {
+      "path": "/tmp/ictw-build63-personas.py",
+      "sha256": "2ca3ab2c0a512824f19a3e05916f33607941e22680ed90fad73e94c3d83098dc",
+      "bytes_before": 15484,
+      "bytes_after": 0,
+      "open_files": 0
+    },
+    "restore_test_cleanup": {
+      "path": "/opt/linoi/backups/20260924-build63-465138a/restore-test.db",
+      "bytes_before": 22827008,
+      "bytes_after": 0,
+      "restoration_verified": true
+    },
+    "opt_linoi_disk_kib": 506324
+  },
+  "baseline": "6c8d2099cdb06001bf5c11973aa67ee9951355c5",
+  "tests_passed": 19,
+  "real_model_requests": false,
+  "source_sha256": "2ca3ab2c0a512824f19a3e05916f33607941e22680ed90fad73e94c3d83098dc",
+  "local_cleanup": {
+    "files": 5,
+    "logical_bytes_before": 411287,
+    "logical_bytes_after": 0,
+    "manifest_sha256": "54c31d69f0468ace31175690fb23ec3af575766f7042302b12bc910f6efd28a1",
+    "open_files": 0,
+    "retained": "this compact evidence and verified remote rollback set"
+  }
+}

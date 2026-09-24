@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-**v2.2.0（Build 63，本地待发布）**：加强Writer前置写作指导，在作者Bible的核心剧情与明确边界内充分展开过程。
+**v2.2.0（Build 63，后端已部署）**：加强Writer前置写作指导，在作者Bible的核心剧情与明确边界内充分展开过程。
 
 ## 关键决定
 
@@ -17,7 +17,8 @@
 
 ## 当前状态
 
-- **v2.2.0（Build62）已于2026-09-24完成一条龙发布**：源码标签、生产Backend、公开Release和已安装Mac均为 `6c8d209`，生产Alembic head仍为 `20260923_0014`；[修复与发布记录](archive/operations/2026-09-24-build61-sop-flow-review.md#build62快修)。
+- **Build63后端提示词更新已部署**：`465138a`，线上Writer固定规则核验一致；19项相关测试、备份恢复与生产健康门禁通过。客户端和公开安装包仍Build62，无需换装即可使用新提示词；[部署证据](archive/operations/2026-09-24-build63-deployment.json)。
+- **v2.2.0（Build62）于2026-09-24完成一条龙发布**：客户端源码标签、公开Release和已安装Mac为 `6c8d209`，生产Alembic head仍为 `20260923_0014`；[修复与发布记录](archive/operations/2026-09-24-build61-sop-flow-review.md#build62快修)。
 - 生产独立Review原3项及关联并发、失效记忆恢复问题全部闭环，独立复查通过；归档状态可信、恢复入口保留，已取消任务不能发布旧候选，当前正文可独立复查。
 - 发布覆盖实际Build61至Build62全部改动；68个线上文件校验一致，停服备份、恢复演练、无变更迁移及内外网门禁通过，正文、业务数据与密钥保持不变。
 - Backend 333 passed、12项旧协议skip；Store/HTTP 39项及状态测试通过。双端OS27 Release签名构建与严格验签通过。
@@ -32,7 +33,7 @@
 
 ## 里程碑索引
 
-- v2.2.0（Build63，本地未发布）：Writer固定前置提示词补充过程展开、有效细节与防凑字指导，明确Bible优先；保留4000字校验及既有重试机制，相关验证通过，线上仍Build62。
+- v2.2.0（Build63，后端已部署）：Writer提示词加强Bible内过程展开与防凑字指导；保留4000字校验及既有重试，客户端仍Build62；[部署证据](archive/operations/2026-09-24-build63-deployment.json)。
 - v2.2.0（Build62）：生产Review快修及关联问题已发布，Backend更新及Mac换装完成；[修复与验证记录](archive/operations/2026-09-24-build61-sop-flow-review.md#build62快修)。
 - v2.2.0（Build61）：生成协议与SOP恢复11项修复已发布，Backend更新及Mac换装完成；[Review与发布记录](archive/operations/2026-09-24-build61-sop-flow-review.md)、[Release](https://github.com/linocai/Ictw/releases/tag/v2.2.0-build61)。
 - v2.2.0（Build60）：Checker与生产SOP修复已发布，Backend迁移及Mac换装完成；[执行记录](archive/plans/v2.2.0-production-sop-plan.md)、[Release](https://github.com/linocai/Ictw/releases/tag/v2.2.0-build60)。
