@@ -305,8 +305,6 @@ def validate_checker_result(
         )})
     if verdict == "passed" and checked_issues:
         raise CheckerValidationError("passed 不能携带 issue")
-    if verdict != "passed" and not checked_issues:
-        raise CheckerValidationError("suspect 或 violation 必须携带有效 issue")
 
     raw_hits = snapshot.get("name_hits", [])
     if not isinstance(raw_hits, list):
@@ -321,9 +319,31 @@ def validate_checker_result(
         hit = hits[item["hit_id"]]
         expected_kind = _identity_issue_required(hit, item["classification"])
         if not any(_identity_issue_covers(issue, hit, expected_kind) for issue in checked_issues):
-            raise CheckerValidationError("人物姓名分类缺少对应的明确身份问题")
-    if any(item["classification"] != "ordinary_word" for item in checked_uses) and verdict == "passed":
-        raise CheckerValidationError("存在未解决姓名身份时不得返回 passed")
+            # Classification is the only semantic decision needed from the model.
+            # Authorization and its evidence are already frozen program facts;
+            # do not fail the whole check because the model omitted a duplicate issue.
+            source_id = hit["source_id"]
+            source = sources.get(source_id)
+            if source is None or not _contains_exact(source["text"], hit["text"]):
+                raise CheckerValidationError("姓名命中缺少有效冻结来源")
+            checked_issues.append({
+                "kind": expected_kind,
+                "reason": {
+                    "unselected_character": f"“{hit['text']}”被识别为人物，但未加入本章人物；请补选人物或设置姓名豁免。",
+                    "ambiguous_character": f"“{hit['text']}”对应多个同名人物；请明确本章使用的人物。",
+                    "uncertain_character": f"“{hit['text']}”的身份尚不明确；请确认人物选择或设置姓名豁免。",
+                }[expected_kind],
+                "draft_evidence": hit["text"] if source_id == "draft" else "",
+                "bible_evidence": hit["text"] if source_id == "bible" else "",
+                "source_kind": source["kind"], "source_id": source_id,
+                "source_evidence": hit["text"],
+            })
+        if item["classification"] == "character":
+            verdict = "violation"
+        elif verdict == "passed":
+            verdict = "suspect"
+    if verdict != "passed" and not checked_issues:
+        raise CheckerValidationError("suspect 或 violation 必须携带有效 issue")
 
     result: dict[str, Any] = {
         "verdict": verdict,
@@ -335,3 +355,10 @@ def validate_checker_result(
     if check_attempt_id:
         result["check_attempt_id"] = check_attempt_id
     return result
+
+
+def checker_failure_message(exc: Exception) -> str:
+    """Only our fixed validation diagnostics may cross the public boundary."""
+    if isinstance(exc, CheckerValidationError):
+        return "检查结果未通过校验：" + str(exc)
+    return "检查模型未返回有效检查结论"

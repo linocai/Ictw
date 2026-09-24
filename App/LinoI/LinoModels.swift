@@ -1509,6 +1509,10 @@ struct WriteJobStatus: Decodable, Sendable {
     /// backend's safe deterministic Extractor rule after automatic correction
     /// is exhausted. Other failures continue through the localized table.
     var specificFailureReason: String? {
+        if ["memory_selection_invalid", "checker_invalid_response"].contains(errorCode ?? ""),
+           let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
+            return message
+        }
         if ["extract_failed", "archive_validation_failed", "archive_input_changed"].contains(errorCode) {
             let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !message.isEmpty else { return nil }

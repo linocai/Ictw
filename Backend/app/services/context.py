@@ -287,6 +287,14 @@ def prefilter_memory_candidates(
     return ending + chosen
 
 
+def selector_source_aliases(blocks: list[MemoryBlock]) -> dict[str, str]:
+    """Request-local short handles; canonical IDs never depend on model copying UUIDs."""
+    ordinary = [block for block in blocks if block.memory_type != "previous_ending"]
+    ending = [block for block in blocks if block.memory_type == "previous_ending"]
+    return {**{f"M{i}": block.id for i, block in enumerate(ordinary, 1)},
+            **{f"E{i}": block.id for i, block in enumerate(ending, 1)}}
+
+
 def memory_selector_user_message(
     chapter: Chapter, blocks: list[MemoryBlock], budget: int, *, bible: str | None = None,
     dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
@@ -297,8 +305,9 @@ def memory_selector_user_message(
     unknown_state_text = _format_unknown_state_slots(unknown_state_slots or [])
     ending_blocks = [block for block in blocks if block.memory_type == "previous_ending"]
     ordinary_blocks = [block for block in blocks if block.memory_type != "previous_ending"]
-    candidates = "\n\n".join(f"[{block.id}]\n{block.text}" for block in ordinary_blocks) or "（没有可用历史记忆）"
-    ending = "\n\n".join(f"[{block.id}]\n{block.text}" for block in ending_blocks) or "（没有可用的紧邻上一章结尾）"
+    aliases = {value: key for key, value in selector_source_aliases(blocks).items()}
+    candidates = "\n\n".join(f"[{aliases[block.id]}]\n{block.text}" for block in ordinary_blocks) or "（没有可用历史记忆）"
+    ending = "\n\n".join(f"[{aliases[block.id]}]\n{block.text}" for block in ending_blocks) or "（没有可用的紧邻上一章结尾）"
     return "\n\n".join(
         [
             "# 本章剧情 Bible（原文快照）\n" + (bible if bible is not None else chapter.user_prompt).strip(),
@@ -307,7 +316,7 @@ def memory_selector_user_message(
             "待定只表示资料尚不足，不能推定相反状态、人物冲突或本章必须补写的事件。",
             f"# 历史记忆简报预算\n最终记忆简报最多 {budget} 个去空白字符；上一章结尾独立，最多 {PREVIOUS_ENDING_MAX_CHARS} 字。"
             "只压缩有来源且会直接约束本章写作的历史事实，不得改写 Bible 或补足历史。"
-            f"最多 {MAX_MEMORY_BRIEFS} 条简报、{MAX_MEMORY_CONFLICTS} 条冲突、合计 {MAX_MEMORY_SOURCES} 个不同来源；"
+            f"最多 {MAX_MEMORY_BRIEFS} 条简报、{MAX_MEMORY_CONFLICTS} 条冲突、建议合计不超过 {MAX_MEMORY_SOURCES} 个不同来源；"
             "候选已按相关性排列。禁止逐章回顾，禁止因为某章发生在前面就自动选入；"
             "同一事实的多个来源必须合并成一条简报。若没有会影响本章动作、认知、人物状态或连续性的历史事实，briefs 返回空数组。",
             (
@@ -320,7 +329,7 @@ def memory_selector_user_message(
                 '# 输出\n只返回 JSON object：{"briefs":[{"text":"精炼历史事实","source_ids":["候选ID"]}],'
                 '"conflicts":[{"text":"冲突说明","source_ids":["候选ID"]}],'
                 '"previous_ending_start_id":"上一章结尾起点ID或null"}。briefs/conflicts 允许空数组。'
-                "每条事实和冲突均须包含非空 source_ids；ID 必须从候选块的方括号中原样完整复制，不得自造。"
+                "每条事实和冲突均须包含非空 source_ids；记忆来源只用 M 开头的短编号，结尾起点只用 E 开头的短编号；从方括号原样复制，不得使用人物 ID 或自造编号。"
                 "briefs 按对本章的重要性从高到低排列；不要输出候选清单、章节流水账或一章一条的复述。"
             ),
         ]
@@ -420,7 +429,6 @@ def memory_selection_problem(
             return "上一章结尾起点不是本次候选中的有效 ID"
 
     by_id = {block.id: block for block in blocks if block.memory_type != "previous_ending"}
-    source_ids: set[str] = set()
     used = 0
     seen: set[tuple[str, tuple[str, ...], str]] = set()
     for category, items in (("简报", briefs), ("冲突", conflicts)):
@@ -450,7 +458,7 @@ def memory_selection_problem(
                 return f"{category}第 {position} 条重复引用来源"
             unknown = [value for value in ids if value not in by_id]
             if unknown:
-                return f"{category}第 {position} 条引用了本次候选外的来源：{unknown[0]}"
+                return f"{category}第 {position} 条引用了本次候选外的来源"
             key = (normalize_text(text).strip(), ids, category)
             if key in seen:
                 return f"{category}中有重复条目"
@@ -458,9 +466,6 @@ def memory_selection_problem(
             used += nonspace_len(text)
             if used > budget:
                 return f"简报与冲突合计 {used} 字，超过 {budget} 字"
-            source_ids.update(ids)
-            if len(source_ids) > MAX_MEMORY_SOURCES:
-                return f"合计引用 {len(source_ids)} 个来源，超过 {MAX_MEMORY_SOURCES} 个"
     return None
 
 
@@ -828,7 +833,7 @@ def checker_user_message(
         "逐组返回 name_uses：每项含 hit_ids、classification、reason 和可选 character_id。"
         "hit_ids 必须恰好等于下方一个程序分组，不得把不同局部片段或候选组混在一项；"
         "classification 只能为 character、ordinary_word、uncertain。程序会按 hit_ids 重建每次命中的精确引文与位置。"
-        "ordinary_word 不是人物；character/uncertain 必须另有对应身份问题。"
+        "ordinary_word 不是人物；character/uncertain 的人物授权问题由程序根据冻结目录生成，不必重复写身份 issue。"
     )
     if not bible.strip():
         return "\n\n".join([

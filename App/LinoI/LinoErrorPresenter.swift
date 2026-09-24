@@ -309,7 +309,7 @@ enum LinoErrorPresenter {
         case "llm_invalid_response":
             return Entry(reason: "上游返回的数据无法解析", suggestion: "请稍后重试；若持续出现，请联系模型服务商")
         case "llm_output_truncated":
-            return Entry(reason: "Extractor 输出达到长度上限，归档数据被截断", suggestion: "系统会自动压缩重试；若仍失败，请再次提取归档")
+            return Entry(reason: "模型输出被截断，本次任务未完成", suggestion: "请重试失败的环节；若正文已接受，只需重新整理记忆")
         case "llm_transport":
             return Entry(reason: "连接模型服务失败", suggestion: "请检查网络后重试")
         case "llm_upstream_error":
@@ -328,8 +328,10 @@ enum LinoErrorPresenter {
                 reason: "Memory Selector 两次都没有给出合格的精炼记忆",
                 suggestion: "请重试；若持续出现，请调整 Memory Selector 人格或模型配置"
             )
+        case "checker_invalid_response":
+            return Entry(reason: "检查结果未通过校验", suggestion: "请重试检查；若持续失败，请检查模型配置")
         case "checker_failed":
-            return Entry(reason: "正文已生成，但 Bible 检查未完成", suggestion: "可稍后重新检查，或明确忽略后接受")
+            return Entry(reason: "检查未完成", suggestion: "请重试检查")
         case "checker_rejected":
             return Entry(
                 reason: "Checker 未通过这份新正文",

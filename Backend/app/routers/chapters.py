@@ -248,6 +248,7 @@ def _redacted_checker_result(result: dict | None) -> dict | None:
     # ``name_uses`` necessarily contains candidate evidence.  A rejected
     # candidate is private, so no classification row may leave the backend.
     redacted.pop("name_uses", None)
+    redacted.pop("identity_issues", None)
     return redacted
 
 
@@ -321,6 +322,26 @@ def _retry_source_and_latest_attempt(
     ):
         return source, candidate, None
     return source, candidate, latest
+
+
+def _candidate_checker_input_current(
+    db: Session, chapter: Chapter, candidate: ChapterDraftCandidate, latest: JobRun,
+) -> bool:
+    """One eligibility proof for both the retry button and the retry endpoint."""
+    from app.services.production_context import is_frozen_input_current
+    snapshot = latest.input_snapshot
+    if (candidate.chapter_id != chapter.id or latest.chapter_id != chapter.id
+            or latest.chapter_write_generation != chapter.write_generation
+            or candidate.deterministic_violations or not isinstance(snapshot, dict)):
+        return False
+    draft = snapshot.get("draft")
+    return bool(
+        isinstance(draft, dict)
+        and candidate.checker_input_snapshot == snapshot
+        and candidate.checker_input_fingerprint == snapshot.get("input_fingerprint")
+        and hashlib.sha256(candidate.draft_text.encode()).hexdigest() == draft.get("sha256")
+        and is_frozen_input_current(db, chapter, snapshot)
+    )
 
 
 def _check_outcome_is_current(db: Session, chapter: Chapter, run: JobRun) -> bool:
@@ -440,6 +461,7 @@ def _job_status_from_run(
             and not candidate.deterministic_violations
             and latest is not None
             and _is_retryable_checker_attempt(latest)
+            and _candidate_checker_input_current(db, chapter, candidate, latest)
         )
         status_out.checker_source_job_id = source.id if source is not None and status_out.can_retry_checker else None
     if run.phase == "done":
@@ -1373,7 +1395,8 @@ def _manual_checker_failure(
         code = exc.code if exc.code in messages else "llm_upstream_error"
         message = messages[code]
     else:
-        code, message = "checker_invalid_response", "检查模型未返回有效检查结论"
+        from app.services.checker_validation import checker_failure_message
+        code, message = "checker_invalid_response", checker_failure_message(exc)
     return {
         "status": "unavailable", "draft_fingerprint": fingerprint,
         "input_fingerprint": snapshot.get("input_fingerprint", ""),
@@ -1391,7 +1414,6 @@ def retry_failed_writer_checker(
     checker_client=Depends(get_checker_client),
 ) -> WriteJobStatus:
     """Retry only a failed Checker against the retained Writer candidate."""
-    from app.services.production_context import is_frozen_input_current
     from app.services.context import checker_user_message
 
     chapter = db.get(Chapter, chapter_id)
@@ -1404,14 +1426,7 @@ def retry_failed_writer_checker(
     if resolved_source is None or candidate is None or latest is None or not _is_retryable_checker_attempt(latest):
         raise HTTPException(status_code=409, detail={"code": "checker_retry_not_available", "message": "当前候选的最新 Checker 结论不可单独重试"})
     snapshot = latest.input_snapshot
-    if (
-        candidate.deterministic_violations
-        or not isinstance(snapshot, dict)
-        or candidate.checker_input_snapshot != snapshot
-        or candidate.checker_input_fingerprint != snapshot.get("input_fingerprint")
-        or hashlib.sha256(candidate.draft_text.encode()).hexdigest() != snapshot.get("draft", {}).get("sha256")
-        or not is_frozen_input_current(db, chapter, snapshot)
-    ):
+    if not _candidate_checker_input_current(db, chapter, candidate, latest):
         raise HTTPException(status_code=409, detail={"code": "checker_retry_input_changed", "message": "原写作候选或其冻结输入已变化，不能只重试检查"})
     if write_registry.get_live(chapter.id) is not None:
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})

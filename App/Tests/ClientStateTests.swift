@@ -55,6 +55,13 @@ private func makeChapterSummary(
     return try JSONDecoder().decode(ChapterSummary.self, from: data)
 }
 
+private func testProtocolErrorReasonsRemainVisible() throws {
+    for code in ["checker_invalid_response", "memory_selection_invalid"] {
+        let status = WriteJobStatus(chapterId: "chapter-1", kind: "write", phase: "failed", errorCode: code, errorMessage: "具体失败原因：引用了候选外的来源")
+        try expect(LinoErrorPresenter.present(jobFailure: status).message.contains("引用了候选外的来源"), "controlled protocol errors must retain their specific reason")
+    }
+}
+
 private func testLegacySynopsisDecodesAsCanonicalSummary() throws {
     let object: [String: Any] = [
         "id": "chapter-legacy",
@@ -1942,6 +1949,7 @@ private struct ClientStateTestRunner {
     @MainActor
     static func main() throws {
         try testBookModelSettingsDraftCapabilitiesAndPayload()
+        try testProtocolErrorReasonsRemainVisible()
         try testLegacySynopsisDecodesAsCanonicalSummary()
         try testConnectionDefaultMigrationPreservesCustomEndpoint()
         try testAPIEndpointBearerAndStructuredConfigurationError()

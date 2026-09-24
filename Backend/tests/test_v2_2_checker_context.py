@@ -143,8 +143,9 @@ def test_character_and_uncertain_name_uses_need_explicit_identity_issue(client) 
             }],
         }]
         raw["issues"][0]["kind"] = "world_conflict"
-        with pytest.raises(CheckerValidationError, match="身份问题"):
-            validate_checker_result(raw, snapshot)
+        recovered = validate_checker_result(raw, snapshot)
+        assert recovered["verdict"] == "violation"
+        assert any(issue["kind"] == "unselected_character" for issue in recovered["issues"])
 
 
 def test_same_name_occurrences_are_classified_at_their_own_frozen_offsets(client) -> None:

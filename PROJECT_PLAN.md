@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-**v2.2.0（Build 60）**：修复 Checker 与小说生产 SOP Review 的21项缺口，使误判可解释、检查可恢复、历史依据可信、归档局部问题不拖垮有效记忆。
+**v2.2.0（Build 61）**：修复实际生成故障并完成SOP畅通性复审，使记忆选择、人物检查与连续失败恢复能够正确衔接。
 
 ## 关键决定
 
@@ -17,6 +17,7 @@
 
 ## 当前状态
 
+- **v2.2.0（Build61）本地快修及独立复查完成，未发布**：修复昨晚生成故障与SOP重复阻碍，覆盖人物检查、记忆选择、连续检查重试及错误可见性；[本轮Review与证据](archive/operations/2026-09-24-build61-sop-flow-review.md)。线上仍Build60。
 - **v2.2.0（Build60）已于2026-09-23完成一条龙发布**：Backend、公开Release和本机Mac均为 `b620558`，生产Alembic head为 `20260923_0014`。
 - [21项Review发现](archive/operations/2026-09-23-build59-checker-sop-review.md)及复审新增问题已闭环；[完整执行与发布记录](archive/plans/v2.2.0-production-sop-plan.md)。
 - 发布覆盖实际Build59 `e7b14b0` 至Build60全部改动；停服备份、真实库副本迁移、恢复验证及上线门禁通过，原有业务数据与密钥保持不变。未自动重提旧失败章节。

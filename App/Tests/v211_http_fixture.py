@@ -227,7 +227,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {"checker_result": result})
             if action == "checker/retry":
                 if options.get("checker_retry_reject"):
-                    return self.send(409, {"detail": {"code": "checker_retry_unavailable", "message": "生成稿已不能安全复查"}})
+                    return self.send(409, {"detail": {"code": options.get("checker_retry_reject_code", "checker_retry_unavailable"), "message": "生成稿已不能安全复查"}})
+                if options.get("checker_retry_failure"):
+                    response = job(chapter, "failed", "check")
+                    options["checker_retry_count"] = options.get("checker_retry_count", 0) + 1
+                    response["job_id"] = chapter["id"] + "-retry-" + str(options["checker_retry_count"])
+                    response.update(error_code="checker_invalid_response", error_message="检查结果未通过校验：Checker 未逐项处理程序提供的姓名分组",
+                                    checker_result={"status": "unavailable", "error_code": "checker_invalid_response"})
+                    return self.send(200, response)
                 return self.send(200, job(chapter, "done", "write"))
             if action == "accept":
                 preflight = options.get("accept_preflight")

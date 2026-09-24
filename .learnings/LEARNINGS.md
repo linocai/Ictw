@@ -92,3 +92,23 @@ macOS 26 下用 `-AppleInterfaceStyle Light` 启动参数不能可靠覆盖 Swif
 
 - **Resolved**: 2026-08-30T20:50:00+08:00
 - **Notes**: 本轮只把当前系统深色外观计入已验证范围，未改系统偏好。
+
+
+## [LRN-20260924-001] best_practice
+
+**Logged**: 2026-09-24T13:41:11+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+SOP验收必须覆盖“再次失败后还能否恢复”，模型已作出的语义判断不要求再重复输出程序能确定的结论。
+
+### Details
+
+Build60的生成卡在重复身份issue和来源格式；具体诊断被统一错误覆盖，单独重试失败后前端还丢失恢复入口。仅验证首次成功/失败的测试未覆盖这些真实链路。
+
+### Resolution
+
+Build61增加请求内短来源ID、程序补齐身份授权问题、安全校验原因、连续失败/永久过期恢复回归；真实模型只读复现与修复验证，详见`archive/operations/2026-09-24-build61-sop-flow-review.md`。

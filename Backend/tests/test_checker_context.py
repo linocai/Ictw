@@ -52,7 +52,7 @@ class RecordingWriter:
 
 class SourcedSelector:
     def complete_json(self, *, user, **kwargs):
-        start = user.index("[chapter:") + 1
+        start = user.index("[M") + 1
         source = user[start:user.index("]", start)]
         return {"briefs": [{"text": "林夕已经归还钥匙。", "source_ids": [source]}],
                 "conflicts": [], "previous_ending_start_id": None}

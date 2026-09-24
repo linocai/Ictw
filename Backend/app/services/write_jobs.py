@@ -45,7 +45,7 @@ from app.services.archive_v2 import (
     validate_archive_output,
 )
 from app.services.content_revisions import bump_content_revision
-from app.services.checker_validation import CheckerValidationError, validate_checker_result
+from app.services.checker_validation import CheckerValidationError, checker_failure_message, validate_checker_result
 from app.services.production_context import (
     bind_selected_candidate_draft,
     is_frozen_input_current,
@@ -433,12 +433,25 @@ def _call(
     client = getattr(agent, "llm", None)
     try:
         result = method(*args, **kwargs)
+    except CheckerValidationError:
+        _record_llm(session_factory, role, client, start, "checker_invalid_response", job)
+        raise
     except LLMError as exc:
         _record_llm(session_factory, role, client, start, exc.code, job, upstream_reason=exc.upstream_reason)
         exc.agent_role, exc.model_name = role, getattr(client, "model_name", None)
         raise
     _record_llm(session_factory, role, client, start, None, job)
     return result
+
+
+def _checked_call(job: WriteJob, sf: sessionmaker[Session], message: str, snapshot: dict) -> dict:
+    def check_and_validate():
+        try:
+            return validate_checker_result(job.checker.check(message), snapshot, check_attempt_id=job.job_id)
+        except CheckerValidationError as exc:
+            logger.warning("checker_validation_failed job_id=%s reason=%s", job.job_id, checker_failure_message(exc))
+            raise
+    return _call(job, sf, "checker", check_and_validate)
 
 
 def _run_memory_selector(job: WriteJob, sf: sessionmaker[Session]) -> MemorySelection:
@@ -449,6 +462,7 @@ def _run_memory_selector(job: WriteJob, sf: sessionmaker[Session]) -> MemorySele
         "memory_selector",
         job.memory_selector.select,
         job.selector_user_message,
+        candidates=job.memory_candidates,
         validator=lambda selection: memory_selection_problem(
             job.memory_candidates,
             selection.briefs,
@@ -528,8 +542,7 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     fingerprint = job.checker_draft_fingerprint
     try:
         assert job.checker is not None
-        raw = _call(job, sf, "checker", job.checker.check, job.checker_user_message)
-        result = validate_checker_result(raw, snapshot, check_attempt_id=job.job_id)
+        result = _checked_call(job, sf, job.checker_user_message, snapshot)
         result["draft_fingerprint"] = fingerprint
     except LLMError as exc:
         result = {
@@ -538,12 +551,13 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             "check_attempt_id": job.job_id, "error_code": exc.code,
             "error_context": _error_context(exc),
         }
-    except (CheckerValidationError, ValueError, TypeError):
+    except (CheckerValidationError, ValueError, TypeError) as exc:
         result = {
             "status": "unavailable", "draft_fingerprint": fingerprint,
             "input_fingerprint": snapshot.get("input_fingerprint", ""),
             "check_attempt_id": job.job_id, "error_code": "checker_invalid_response",
-            "error_message": "检查模型未返回有效检查结论",
+            "error_message": checker_failure_message(exc),
+            "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or "")},
         }
 
     # Result payloads are also consumed directly by the job read-model.  Use
@@ -707,6 +721,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 "previous_ending_start_id": selection.previous_ending_start_id,
                 "previous_ending": previous_ending,
                 "selection_mode": "selector",
+                "selection_diagnostics": list(selection.diagnostics),
             }
             manifest["memory_non_whitespace_count"] = sum(nonspace_len(item.text) for item in memories)
             manifest["sources"] = [
@@ -827,14 +842,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         )
         try:
             assert job.checker is not None
-            raw = _call(
-                job,
-                sf,
-                "checker",
-                job.checker.check,
-                checker_message,
-            )
-            checker_result = validate_checker_result(raw, checker_snapshot, check_attempt_id=job.job_id)
+            checker_result = _checked_call(job, sf, checker_message, checker_snapshot)
             checker_result["draft_fingerprint"] = fingerprint
         except LLMError as exc:
             checker_result = {
@@ -843,14 +851,15 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 "check_attempt_id": job.job_id,
                 "error_code": exc.code, "error_context": _error_context(exc),
             }
-        except (CheckerValidationError, ValueError, TypeError):
+        except (CheckerValidationError, ValueError, TypeError) as exc:
             checker_result = {
                 "status": "unavailable",
                 "draft_fingerprint": fingerprint,
                 "input_fingerprint": checker_snapshot["input_fingerprint"],
                 "check_attempt_id": job.job_id,
                 "error_code": "checker_invalid_response",
-                "error_message": "检查模型未返回有效检查结论",
+                "error_message": checker_failure_message(exc),
+                "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or "")},
             }
         checker_result["context_limitations"] = _public_context_limitations(
             checker_snapshot.get("context_limitations")

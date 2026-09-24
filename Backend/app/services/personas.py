@@ -100,7 +100,7 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
         "其余基于已提供资料及正文的事实一致性、人物授权检查照常；此时 bible_evidence 留空，"
         "其他问题在 reason 中说明对应资料证据，不得补造 Bible。"
         "每次还必须按程序局部片段分组返回 name_uses：每项含 hit_ids、classification、reason 和可选 character_id；"
-        "classification 只能是 character、ordinary_word 或 uncertain。不要把不同局部片段或候选组一概归类。ordinary_word 不视为人物；character 或 uncertain 必须同时给出对应身份问题，"
+        "classification 只能是 character、ordinary_word 或 uncertain。不要把不同局部片段或候选组一概归类。ordinary_word 不视为人物；人物授权问题由程序按分类和已选人物确定，可省略重复的身份 issue，"
         "不得凭此授权人物。"
     ),
     "extractor": (

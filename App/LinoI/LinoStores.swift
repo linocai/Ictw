@@ -1292,6 +1292,12 @@ final class ChapterEditorStore: ObservableObject {
             if !Self.isTerminalPhase(status.phase) { pollJob(chapterId: chapter.id) }
             return currentChapter
         } catch {
+            let permanentRetryErrors = ["checker_retry_input_changed", "checker_retry_not_available", "checker_source_not_found", "checker_retry_unavailable"]
+            if actionIsCurrent(operationID, chapterID: chapter.id, revision: revision),
+               permanentRetryErrors.contains(LinoErrorPresenter.code(for: error) ?? "") {
+                candidateCheckerRetrySourceJobID = nil
+                failedCandidateCheckerResult = nil
+            }
             applyStartFailure(
                 error, chapter: chapter, intendedStage: .bibleChecking,
                 operationID: operationID, revision: revision,
@@ -1875,7 +1881,6 @@ final class ChapterEditorStore: ObservableObject {
             pendingExemptionNames = []
             if status.kind == "write" || status.kind == "check" || status.kind == "extract" {
                 let visibleResult = status.visibleCheckerResult
-                    ?? (status.kind == "check" ? status.checkerResult : nil)
                 checkerResult = visibleResult
                 checkerAppliesToVisibleDraft = visibleResult != nil
                 updatePendingIdentityNames(from: visibleResult)
@@ -1919,9 +1924,9 @@ final class ChapterEditorStore: ObservableObject {
             updatePendingIdentityNames(from: status.visibleCheckerResult)
             saveCheckedSnapshotIfCurrent(status.visibleCheckerResult, chapter: currentChapter)
         } else if status.kind == "check" {
-            let visibleResult = status.visibleCheckerResult ?? status.checkerResult
-            failedCandidateCheckerResult = nil
-            candidateCheckerRetrySourceJobID = nil
+            let visibleResult = status.visibleCheckerResult
+            failedCandidateCheckerResult = status.failedCandidateCheckerResult
+            candidateCheckerRetrySourceJobID = status.canRetryChecker ? status.checkerSourceJobId : nil
             checkerResult = visibleResult
             checkerAppliesToVisibleDraft = visibleResult != nil
             updatePendingIdentityNames(from: visibleResult)
@@ -1955,7 +1960,7 @@ final class ChapterEditorStore: ObservableObject {
             .flatMap { $0.names ?? [] } ?? []
         updatePendingIdentityNames(
             from: ["write", "check", "extract"].contains(status.kind)
-                ? (status.visibleCheckerResult ?? (status.kind == "check" ? status.checkerResult : nil))
+                ? status.visibleCheckerResult
                 : nil,
             additionalNames: violationNames
         )

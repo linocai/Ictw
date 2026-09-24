@@ -208,7 +208,7 @@ def test_previous_ending_uses_only_adjacent_finalized_chapter_and_preserves_sour
     assert packed.previous_ending == "第二段原文\n\n最后一段原文"
     assert "previous_ending_start_id" in selector_prompt
     assert "满足开场衔接所需的最短片段起点" in selector_prompt
-    assert "[" + ending[0].id + "]\n第一段原文" in selector_prompt
+    assert "[E1]\n第一段原文" in selector_prompt
 
 
 def test_previous_ending_is_capped_and_invalid_start_falls_back_deterministically(client, auth_headers):

@@ -650,6 +650,35 @@ private struct V211StoreHTTPTests {
         let body = try JSONSerialization.jsonObject(with: Data(retry.bodyText.utf8)) as? [String: Any]
         try check(body?["source_job_id"] as? String == h.chapters[0].id + "-source", "retry must contain only the opaque source job identity")
 
+        let repeated = try await Harness("candidate-repeat-failure", [
+            "writing": true, "job_checker_rejected": true, "can_retry_checker": true,
+            "checker_retry_failure": true,
+        ])
+        try await eventually("first retry source available") { repeated.editor.candidateCheckerRetrySourceJobID != nil }
+        for _ in 0..<2 {
+            _ = await repeated.editor.retryGeneratedCandidateChecker()
+            try check(repeated.editor.candidateCheckerRetrySourceJobID == repeated.chapters[0].id + "-source", "failed check retry must retain Writer source for another retry")
+            try check(!repeated.editor.checkerAppliesToVisibleDraft && repeated.editor.checkerResult == nil, "hidden check result must never become visible manuscript evidence")
+            try check(repeated.notices.history.contains { $0.message.contains("姓名分组") }, "precise checker validation reason must reach notifications")
+        }
+        let repeatRequests = try await fixture().requests
+        try check(repeatRequests.filter { $0.path.hasSuffix("/checker/retry") }.count == 2, "both retries must reach only the candidate checker endpoint")
+
+        for code in ["checker_retry_input_changed", "checker_retry_not_available", "checker_source_not_found", "checker_retry_unavailable", "write_running"] {
+            let expired = try await Harness("candidate-expired-" + code, [
+                "writing": true, "job_checker_rejected": true, "can_retry_checker": true,
+                "checker_retry_reject": true, "checker_retry_reject_code": code,
+            ])
+            try await eventually("retry source before refusal") { expired.editor.candidateCheckerRetrySourceJobID != nil }
+            _ = await expired.editor.retryGeneratedCandidateChecker()
+            if code == "write_running" {
+                try check(expired.editor.candidateCheckerRetrySourceJobID != nil, "temporary refusal must retain the candidate retry source")
+            } else {
+                try check(expired.editor.candidateCheckerRetrySourceJobID == nil, "permanently expired source must not leave an endless retry action")
+                try check(expired.snapshot().primaryAction == .retryGeneration, "expired source must recover through a fresh generation action")
+            }
+        }
+
         let dirty = try await Harness("candidate-dirty", [
             "writing": true, "job_checker_rejected": true, "can_retry_checker": true,
         ])

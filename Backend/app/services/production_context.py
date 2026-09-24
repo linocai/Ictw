@@ -417,11 +417,34 @@ def _limitations(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
             Chapter.status == "finalized",
         ).order_by(Chapter.index, Chapter.id)
     ).all())
+    # Readiness follows the inputs actually supplied to this chapter. A usable
+    # legacy source is supported history, not a reason to demand re-extraction.
+    available_indices = {block.chapter_index for block in memory_candidates(db, chapter)
+                         if block.memory_type != "previous_ending"}
+    _, effective_unknowns = _projection_before(db, chapter)
+    _, relevant_unknowns = _referenced_prior_state({}, effective_unknowns, _selected(chapter))
+    from app.services.character_state_projection import StateProjectionCursor
+
+    def unknown_key(row: dict) -> tuple:
+        return StateProjectionCursor._key_for(row.get("character_id"), row.get("scope"),
+                                              row.get("slot"), row.get("other_character_id"))
+
+    effective_keys = {unknown_key(row) for row in relevant_unknowns}
+    revisions = {item.id: active_archive_revision(db, item) for item in prior}
+    # Attribute an unresolved slot only to its latest active producer.
+    owners = {}
+    for item in prior:
+        revision = revisions[item.id]
+        if revision is not None:
+            for row in revision.state_uncertainties or []:
+                if isinstance(row, dict) and unknown_key(row) in effective_keys:
+                    owners[unknown_key(row)] = item.id
     result: list[dict[str, Any]] = []
     for item in prior:
-        revision = active_archive_revision(db, item)
+        revision = revisions[item.id]
         if revision is not None:
-            uncertainties = list(getattr(revision, "state_uncertainties", []) or [])
+            uncertainties = [row for row in revision.state_uncertainties or []
+                             if isinstance(row, dict) and owners.get(unknown_key(row)) == item.id]
             if uncertainties:
                 result.append({
                     "chapter_id": item.id, "chapter_index": item.index, "title": item.title,
@@ -429,11 +452,7 @@ def _limitations(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
                     "uncertainties": uncertainties,
                 })
             continue
-        if item.legacy_archive_eligible or item.archive_input_fingerprint is None:
-            result.append({
-                "chapter_id": item.id, "chapter_index": item.index, "title": item.title,
-                "kind": "legacy_memory", "reason": "该章仍沿用旧版记忆",
-            })
+        if (item.legacy_archive_eligible or item.archive_input_fingerprint is None) and item.index in available_indices:
             continue
         reason = {
             "pending": "该章记忆整理尚未完成",
@@ -703,9 +722,9 @@ def is_frozen_input_current(db: Session, chapter: Chapter, snapshot: dict[str, A
     candidates = _history_blocks(db, chapter)
     if snapshot.get("selector_candidate_range") != _candidate_range(candidates):
         return False
-    readiness = production_readiness(db, chapter)
-    if snapshot.get("context_limitations") != readiness["context_limitations"]:
-        return False
+    # Readiness warnings are presentation/acknowledgement metadata. All real
+    # model dependencies were compared above; changing warning classification
+    # must not strand an otherwise identical retained candidate after upgrade.
     known = _all_characters(db, chapter)
     draft_for_hits = chapter.draft_text
     if draft_source == "candidate":

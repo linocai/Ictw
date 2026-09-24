@@ -59,7 +59,7 @@ def test_memory_manifest_reports_actual_packed_brief_count(client, auth_headers,
     class OneBriefSelector:
         def complete_json(self, **kwargs):
             user = kwargs["user"]
-            start = user.index("[chapter:") + 1
+            start = user.index("[M") + 1
             source_id = user[start : user.index("]", start)]
             return {
                 "briefs": [{"text": "旧事实仍然成立", "source_ids": [source_id]}],

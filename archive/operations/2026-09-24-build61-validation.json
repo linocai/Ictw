@@ -1,0 +1,85 @@
+{
+  "version": "2.2.0",
+  "build": 61,
+  "state": "local_verified_not_deployed",
+  "baseline": "0256014b4bcc29437eb232be450e515bec012500",
+  "production": "b62055854d0e2f198db059a1e8ca271e8ecd0630",
+  "time": "2026-09-24T13:41:09.374411+08:00",
+  "sources_sha256": {
+    "App/LinoI.xcodeproj/project.pbxproj": "525ad6451872b5961e8d50f460cd34ec14b82d523fc4e423d6e9a61580827aa9",
+    "App/LinoI/LinoErrorPresenter.swift": "695c9f36253151649d36cadeb1b3cfdacb9bb61dd5a579dbcaf7c90e06c395ca",
+    "App/LinoI/LinoModels.swift": "53e0c8b87982a08b7c3801548192a7d79bb7fa982954845f782002214ca4fac0",
+    "App/LinoI/LinoStores.swift": "54241525d50d3871cf834522b9b65cba2d5d38b57231d2d624106277c56013f0",
+    "App/Tests/ClientStateTests.swift": "a7b2a6bab27724a11ec3608ba840d1c5727d2195d23a6260665c8ab9d0bf7f21",
+    "App/Tests/V211StoreHTTPTests.swift": "d16de8c4241959a82bdd9714fe869014b4aa40a495a4723d7a7080ac0a58cb89",
+    "App/Tests/v211_http_fixture.py": "a425f87423dc2ff90e8932f572f84e2e14401a2871aa46885e5847b3a21e0a57",
+    "Backend/app/agents/memory_selector.py": "b162c9bd8e14bb93e7b971e0ca46e8e02786d87349cb74ae3781742aa702fb5a",
+    "Backend/app/routers/chapters.py": "59920f181ffae7262611eb60d3ff0a0023e1e2e5ce48b7fec96e08d2214d3a27",
+    "Backend/app/services/checker_validation.py": "f5b28012f0c997bbe56667862d248d38154e8e06aac0a6cd2790a1c607297fa8",
+    "Backend/app/services/context.py": "03a9dfc5d1a87192532895146588bedffacfd706343b8b7beb3503bcb0af52c9",
+    "Backend/app/services/personas.py": "4ec728d8cd3ba9dd4bdd40ebd8e5ccf062951553e4608e953801386105aad509",
+    "Backend/app/services/production_context.py": "0f01ec32fd7a6747e633565a186911421163e8d0418ae66c9897361ae977b746",
+    "Backend/app/services/write_jobs.py": "c3663aeae5bd4ca08eb0770cc5e260ca27db8f75ade9f41aae12989bbb967ddf",
+    "Backend/tests/test_api.py": "2dfc30dad63eac828053ba751c362d8b7577715389ffca615de2cebfa015c471",
+    "Backend/tests/test_checker_context.py": "31b343e4a9055e53ad66170fbd995a6ce8ad775d0773f330b0bae37859c3d08d",
+    "Backend/tests/test_prompt.py": "c8676a505fa42efe2108e01faf89e8933e1a9f613308b5be9f84fc560aded62f",
+    "Backend/tests/test_v2_2_checker_context.py": "d90900fa4b1a9ede03cee690b0bf9f09f7971a1742b96b7e007a7720239c520e",
+    "Backend/tests/test_build61_sop_flow.py": "2f323d70954b0d131ce8e42366abb12b0e8ad12e4251093670e34462a087574f"
+  },
+  "backend": "322 passed, 12 skipped",
+  "store_http": "38 passed, 0 failed",
+  "client_state": "passed",
+  "macOS_Debug_App": "build succeeded",
+  "iOS_Simulator_Debug_App": "build succeeded",
+  "toolchain": "Xcode 27.0 / OS 27.0 / SDK 27.0",
+  "device_audit_summary": "{\"status\": \"audited\", \"deleted\": [], \"pending_devices\": []}",
+  "controlled_real_model_checks": [
+    {
+      "checker": "valid_conclusion",
+      "verdict": "violation",
+      "identity_issue_kinds": [
+        "unselected_character"
+      ]
+    },
+    {
+      "selector": "valid_selection",
+      "brief_count": 6,
+      "conflict_count": 1,
+      "source_count": 16,
+      "diagnostics": []
+    }
+  ],
+  "cleanup": [
+    {
+      "root": "/tmp/ictw-build61-20260924",
+      "entries": 4562,
+      "logical_bytes_before": 510888337,
+      "logical_bytes_after": 0,
+      "verified_manifest_sha256": "18a4603ca9e212d19ca583ca682ee9985cbe33c1db3dff2247a9de3231d06401",
+      "retained": "Regression source and compact validation evidence only; logs, test databases, unsigned validation builds and read-only diagnostic script removed."
+    },
+    {
+      "root": "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T/pytest-of-linotsai/pytest-25",
+      "entries": 4,
+      "logical_bytes_before": 794624,
+      "logical_bytes_after": 0,
+      "verified_manifest_sha256": "e686640b9d4a5c79335e43bb84873a7ed997a1094fa5bc6e03eeb8a08a2f5ff3",
+      "retained": "Regression source and compact validation evidence only; logs, test databases, unsigned validation builds and read-only diagnostic script removed."
+    },
+    {
+      "root": "/tmp/ictw-build61-20260924-final",
+      "entries": 72,
+      "logical_bytes_before": 14406300,
+      "logical_bytes_after": 0,
+      "verified_manifest_sha256": "8381b654b82e7fd8b167f106a1f8b84c010e783b64545be5d805f5c9e28b7386"
+    }
+  ],
+  "independent_review": {
+    "result": "no remaining reportable findings",
+    "targeted_backend": "3 passed",
+    "store_http": "38 passed",
+    "scope": "Build60 b620558 through current Build61 source hashes, including untracked regression test"
+  },
+  "cleanup_remote": "Read-only stdin diagnostics; no remote task files; task paths verified absent",
+  "final_time": "2026-09-24T13:45:00.220302+08:00"
+}
