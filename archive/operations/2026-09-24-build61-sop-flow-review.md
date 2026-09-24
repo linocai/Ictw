@@ -86,3 +86,14 @@
 - 最终验证：Backend 333 passed / 12旧协议skip；Store/HTTP 39通过、状态测试通过、双端OS27 Debug构建通过；Xcode27、最低OS27、受保护scheme哈希未变。精确源码与验证摘要见[Build62验证证据](2026-09-24-build62-validation.json)。未覆盖真实模型、Build62签名发布、真机页面操作。
 - 资源收尾：本轮独立目录按4776项精确清单复核内容未变、无占用后移除，553803744逻辑字节／552596KiB磁盘占用→0；Store/HTTP另自清理469项、8566669字节→0。reviewer复现文件及SQLite fixture已清理；系统与用户临时目录的本轮命名路径无残留。本轮未创建远端产物，未触碰共享发布物、真实数据或回退备份。
 - 保留回归源码、现有记录与紧凑验证JSON；工作区未提交、未部署、未换装，生产和已安装App仍为Build61。后续发布需按实际Build61至Build62累计改动审查并完成一条龙验证。
+
+### Build62一条龙发布完成（2026-09-24，用户另行授权）
+
+- 累计范围：实际部署Build61 `a8a38dd6b9f5f3098ddeebf26c6a94cd303d21a1` → Build62 `6c8d2099cdb06001bf5c11973aa67ee9951355c5`。12个运行/测试文件与独立复查、最终本地验证SHA256一致；Build61标签至修复基线仅文档差异，无遗漏运行代码。依赖和迁移无变化。
+- main及不可变标签`v2.2.0-build62`已推送，[公开Release](https://github.com/linocai/Ictw/releases/tag/v2.2.0-build62)已发布。Mac ZIP SHA256为`2ac95ce74378405603257023caaeeafb6d4651827b6c7af1eef13ecfaa492767`，与GitHub asset digest一致；后续文档提交不移动标签。
+- Backend：部署前68文件与Build61 Git源码一致、无在途任务；停服备份并对恢复副本运行Alembic，证明无变更迁移与数据一致。更新后68文件与Build62一致，鉴权内外网health200、未鉴权401、docs/openapi/redoc404；完整性、外键、单实例MainPID与8787监听PID一致。上线后warning0、在途任务0；除Mac验收打开书籍产生的last_opened_at/updated_at外所有业务表内容保持不变，密钥未变。
+- 远端恢复集：`/opt/linoi/backups/20260924-build62-6c8d209`，保留Build61代码、环境、原marker与前后数据库；经恢复、完整性及字节一致验证后将前后库硬链接去重。未操作香港旧服务。
+- 双端OS27 Release构建与严格验签通过；Mac为manual Developer ID签名、hardened runtime开启、无get-task-allow，受保护scheme未变。iOS签名Release产物保留在Xcode DerivedData供用户安装，无IPA，最终真机页面未验收。设备支持审计pending为空。
+- `/Applications/ICTW.app`已通过ditto换装并运行Build62，交付、ZIP解包和安装文件逐一一致。Build61完整验签回退副本为`/Users/linotsai/Lino/app_backups/ICTW-v2.2.0-build61-before-build62-20260924.app`。实际成稿页、现有草稿TextEditor及历史失败弹窗均可用，未触发生成、接受或重提，也未改写历史错误记录。
+- 交付及发布证据保留于`/Users/linotsai/Lino/app_builds/ICTW-v2.2.0-build62-`前缀：macOS.app、ZIP、dSYM、validation.json、device-support.json和local/remote-cleanup.json。
+- 资源收尾：本地临时归档、导出、包、日志及已备份旧安装目录按精确清单复核未占用、内容未变后移除，28273006逻辑字节／27924KiB→0；系统及用户临时目录本轮命名路径无残留。远端stage、上传包和恢复演练库23655637逻辑字节→0，`/opt/linoi`收尾482060KiB。保留现役交付、Xcode安装产物及恢复集，未清共享目录或真实业务数据。

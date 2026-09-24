@@ -48,8 +48,8 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 
 ## 当前生产门禁
 
-- 当前源码发布标签、生产Backend、公开Release及已安装Mac为 **`v2.2.0(61)` / `a8a38dd`（2026-09-24）**，生产Alembic head为 `20260923_0014`。Build61生成协议与SOP恢复11项问题及独立复查均闭环；旧失败记录不自动重试，不自动补选人物。
-- Backend 322 passed/12项旧协议skip、Store/HTTP38及状态测试通过，独立复审完成。双端OS27 Release签名构建、Mac真实成稿/错误/现有草稿编辑页面及生产备份恢复、无变更迁移、健康、数据完整性/外键、单实例均通过。iOS保持Build61 Xcode安装状态，无IPA、最终真机页面未验收；设备支持审计pending为空。本地/远端临时产物已清理，证据见 `archive/operations/2026-09-24-build61-sop-flow-review.md`。
+- 当前源码发布标签、生产Backend、公开Release及已安装Mac为 **`v2.2.0(62)` / `6c8d209`（2026-09-24）**，生产Alembic head为 `20260923_0014`。Build62生产Review及关联并发、失效记忆恢复问题已闭环，独立复查通过；旧失败记录不自动重试，不自动补选人物。
+- Backend 333 passed/12项旧协议skip、Store/HTTP39及状态测试通过。双端OS27 Release签名构建、Mac成稿/错误/草稿编辑页面及生产备份恢复、无变更迁移、健康、数据完整性/外键、单实例通过。iOS保持Build62 Xcode安装状态，无IPA、最终真机页面未验收；设备支持审计pending为空。本地/远端临时产物已清理，证据见 `archive/operations/2026-09-24-build61-sop-flow-review.md`。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
 - 生产入口为 `https://ictw.linotsai.top`，鉴权健康实际路径为 `/api/v1/health`；Backend位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787`。宁波使用 `deploy@114.66.2.205` 的当前SSH身份，仓库旧香港私钥不适用；需sudo的工作目录由sudo后的进程进入。
