@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-**v2.2.0（Build 62）**：快修生产独立Review发现的归档并发、失效记忆恢复与失败后的正文操作入口。
+**v2.2.0（Build 63，本地待发布）**：加强Writer前置写作指导，在作者Bible的核心剧情与明确边界内充分展开过程。
 
 ## 关键决定
 
@@ -32,6 +32,7 @@
 
 ## 里程碑索引
 
+- v2.2.0（Build63，本地未发布）：Writer固定前置提示词补充过程展开、有效细节与防凑字指导，明确Bible优先；保留4000字校验及既有重试机制，相关验证通过，线上仍Build62。
 - v2.2.0（Build62）：生产Review快修及关联问题已发布，Backend更新及Mac换装完成；[修复与验证记录](archive/operations/2026-09-24-build61-sop-flow-review.md#build62快修)。
 - v2.2.0（Build61）：生成协议与SOP恢复11项修复已发布，Backend更新及Mac换装完成；[Review与发布记录](archive/operations/2026-09-24-build61-sop-flow-review.md)、[Release](https://github.com/linocai/Ictw/releases/tag/v2.2.0-build61)。
 - v2.2.0（Build60）：Checker与生产SOP修复已发布，Backend迁移及Mac换装完成；[执行记录](archive/plans/v2.2.0-production-sop-plan.md)、[Release](https://github.com/linocai/Ictw/releases/tag/v2.2.0-build60)。
