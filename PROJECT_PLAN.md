@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-**v2.3.0（Build 64，已授权一条龙发布、发布中）**：iOS、macOS与Backend统一版本，修复本轮生产SOP Review的8项问题，让检查协议、错误说明、原文复查和历史记忆传递可靠衔接；[本轮施工与验收记录](archive/plans/v2.3.0-sop-reliability-plan.md)。
+**v2.3.0（Build 64，已发布）**：iOS、macOS与Backend统一版本，修复本轮生产SOP Review的8项问题，让检查协议、错误说明、原文复查和历史记忆传递可靠衔接；[本轮施工与验收记录](archive/plans/v2.3.0-sop-reliability-plan.md)。
 
 ## 关键决定
 
@@ -19,23 +19,22 @@
 
 ## 当前状态
 
-- **v2.3.0（Build64）本地验收完成、发布中**：检查协议、后台复查、恢复边界与记忆传递均已完成独立复查；Backend365 passed/12 skipped、客户端状态与HTTP门禁、双端OS27 Debug构建和Mac隔离恢复页通过。生产仍为下述Build63/Build62；发布前未部署、换装或调用真实模型；用户已授权本轮一条龙发布。
-- **Build63后端提示词更新已部署**：`465138a`，线上Writer固定规则核验一致；19项相关测试、备份恢复与生产健康门禁通过。客户端和公开安装包仍Build62，无需换装即可使用新提示词；[部署证据](archive/operations/2026-09-24-build63-deployment.json)。
-- **v2.2.0（Build62）于2026-09-24完成一条龙发布**：客户端源码标签、公开Release和已安装Mac为 `6c8d209`，生产Alembic head仍为 `20260923_0014`；[修复与发布记录](archive/operations/2026-09-24-build61-sop-flow-review.md#build62快修)。
-- Build62当轮Review原3项及关联并发、失效记忆恢复问题已闭环；2026-09-25新确认的8项SOP问题由Build64继续修复，不沿用旧版本复查结论。
-- 发布覆盖实际Build61至Build62全部改动；68个线上文件校验一致，停服备份、恢复演练、无变更迁移及内外网门禁通过，正文、业务数据与密钥保持不变。
-- Build62当轮Backend 333 passed、12项旧协议skip；Store/HTTP 39项及状态测试通过。双端OS27 Release签名构建与严格验签通过。
-- Mac已换装运行Build62，成稿、草稿编辑及失败原因页面可用；未触发生成、接受或重新归档，历史失败记录保持原样。
-- iOS保持Build62的Xcode安装状态，无IPA；最终真机页面验收仍未完成。Build64设备支持审计中iPhone Air当前不可用，待现场核验。
-- 上线后完整性、外键、单实例与鉴权健康通过，无在途任务、无新增warning。交付与回退备份保留，本地及远端临时资源已按精确清单清理。
+- **v2.3.0（Build64）于2026-09-25完成一条龙发布**：Backend与已安装Mac均为`59ba659`；main和不可变标签`v2.3.0-build64`已推送，[Release](https://github.com/linocai/Ictw/releases/tag/v2.3.0-build64)已发布；[发布证据](archive/operations/2026-09-25-build64-deployment.json)。
+- 本轮8项SOP问题及独立复查追加项均已闭环；Backend365 passed/12 skipped、客户端状态与44项HTTP测试通过，双端OS27 Debug及签名Release构建通过。
+- 后端停服备份、恢复演练、无变更迁移及内外网健康通过；正文、任务、归档与密钥保持不变，只有Mac页面验收产生书籍打开时间更新。
+- Mac已换装并正常运行Build64，成稿、已有草稿编辑及失败原因/恢复入口可用；保留Build62回退副本，未触发生成、接受或重新归档。
+- iOS Build64签名产物与Xcode配置就绪，不生成IPA，最终安装由用户操作；真机页面尚未验收，iPhone Air当前不可用，待现场核验。
+- 本地/远端发布暂存与恢复演练库均已核验清理；保留当前交付、符号、iOS安装产物及已验证回退集。
 
 ## 后续升级方向
 
-- Build64已达到[本轮验收标准](archive/plans/v2.3.0-sop-reliability-plan.md#验收与交接)，执行本轮已授权的一条龙发布。
+- Build64已发布；后续问题按实际使用情况继续处理。
 - 补做iOS最终页面验收；用户通过Xcode完成真机安装。
 - 旧失败归档由作者在对应章节主动重试；不自动批量重提。
 
 ## 里程碑索引
+
+- v2.3.0（Build64）：Checker、复查恢复、章节所有权与历史记忆衔接修复已发布，双端统一版本；[施工记录](archive/plans/v2.3.0-sop-reliability-plan.md)、[发布证据](archive/operations/2026-09-25-build64-deployment.json)。
 
 - v2.2.0（Build63，后端已部署）：Writer提示词加强Bible内过程展开与防凑字指导；保留4000字校验及既有重试，客户端仍Build62；[部署证据](archive/operations/2026-09-24-build63-deployment.json)。
 - v2.2.0（Build62）：生产Review快修及关联问题已发布，Backend更新及Mac换装完成；[修复与验证记录](archive/operations/2026-09-24-build61-sop-flow-review.md#build62快修)。

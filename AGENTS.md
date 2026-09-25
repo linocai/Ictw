@@ -48,8 +48,8 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 
 ## 当前生产门禁
 
-- 当前生产Backend为 **`v2.2.0(63)` / `465138a`（2026-09-24）**，本次仅Writer固定提示词更新，19项相关测试、线上协议与健康核验通过；Alembic head仍为 `20260923_0014`。公开Release及已安装Mac仍为 **Build62 / `6c8d209`**，无须换装即可使用新提示词。部署证据见 `archive/operations/2026-09-24-build63-deployment.json`；旧失败记录不自动重试。
-- Backend 333 passed/12项旧协议skip、Store/HTTP39及状态测试通过。双端OS27 Release签名构建、Mac成稿/错误/草稿编辑页面及生产备份恢复、无变更迁移、健康、数据完整性/外键、单实例通过。iOS保持Build62 Xcode安装状态，无IPA、最终真机页面未验收；设备支持审计pending为空。本地/远端临时产物已清理，证据见 `archive/operations/2026-09-24-build61-sop-flow-review.md`。
+- 当前生产Backend、公开Release及已安装Mac为 **`v2.3.0(64)` / `59ba659`（2026-09-25）**，不可变标签`v2.3.0-build64`；Alembic head为`20260923_0014`，本次无结构或依赖变化。证据见`archive/operations/2026-09-25-build64-deployment.json`；旧失败记录不自动重试。
+- Backend365 passed/12项旧协议skip、Store/HTTP44及状态测试通过，前后端独立复验无剩余问题。双端OS27签名Release、Mac成稿/草稿编辑/失败入口、停服备份恢复、无变更迁移、内外网健康、完整性/外键及单实例通过。iOS Build64供用户Xcode安装，无IPA，真机页面未验收；设备审计iPhone Air暂不可用，未清其支持缓存。本地/远端发布暂存已清理，交付与回退集保留。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
 - 生产入口为 `https://ictw.linotsai.top`，鉴权健康实际路径为 `/api/v1/health`；Backend位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787`。宁波使用 `deploy@114.66.2.205` 的当前SSH身份，仓库旧香港私钥不适用；需sudo的工作目录由sudo后的进程进入。
