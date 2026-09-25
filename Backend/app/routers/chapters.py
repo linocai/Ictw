@@ -249,7 +249,17 @@ def _redacted_checker_result(result: dict | None) -> dict | None:
     # candidate is private, so no classification row may leave the backend.
     redacted.pop("name_uses", None)
     redacted.pop("identity_issues", None)
+    redacted.pop("_validation_diagnostics", None)
     return redacted
+
+
+def _public_visible_checker_result(result: dict | None) -> dict | None:
+    """Keep private protocol diagnostics out of a visible-draft response."""
+    if not isinstance(result, dict):
+        return result
+    public = dict(result)
+    public.pop("_validation_diagnostics", None)
+    return public
 
 
 def _public_context_limitations(limitations: object) -> list[dict]:
@@ -280,7 +290,7 @@ _CHECKER_RETRYABLE_CODES = frozenset({
     "checker_invalid_response", "llm_timeout", "llm_transport", "llm_rate_limited",
     "llm_upstream_unavailable", "llm_upstream_rejected", "llm_upstream_error",
     "llm_content_blocked", "llm_output_truncated", "llm_empty_candidate", "llm_invalid_response",
-    "checker_retry_start_failed",
+    "checker_retry_start_failed", "checker_retry_failed",
 })
 
 
@@ -330,7 +340,8 @@ def _candidate_checker_input_current(
     """One eligibility proof for both the retry button and the retry endpoint."""
     from app.services.production_context import is_frozen_input_current
     snapshot = latest.input_snapshot
-    if (candidate.chapter_id != chapter.id or latest.chapter_id != chapter.id
+    if (chapter.status == "finalized"
+            or candidate.chapter_id != chapter.id or latest.chapter_id != chapter.id
             or latest.chapter_write_generation != chapter.write_generation
             or candidate.deterministic_violations or not isinstance(snapshot, dict)):
         return False
@@ -342,6 +353,32 @@ def _candidate_checker_input_current(
         and hashlib.sha256(candidate.draft_text.encode()).hexdigest() == draft.get("sha256")
         and is_frozen_input_current(db, chapter, snapshot)
     )
+
+
+def _claim_chapter_operation(db: Session, chapter: Chapter) -> None:
+    """Give a new Writer or Checker operation the durable ownership token.
+
+    Every new write or check makes a later decision about this chapter.
+    Advancing the existing ownership generation makes it invalidate an older
+    hidden candidate without adding a second, migration-only marker. It does
+    not change prose or its public content revision.
+    """
+    previous_generation = chapter.write_generation
+    claimed = db.execute(
+        update(Chapter)
+        .where(
+            Chapter.id == chapter.id,
+            Chapter.write_generation == previous_generation,
+        )
+        .values(write_generation=previous_generation + 1, updated_at=utc_now())
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "checker_input_changed", "message": "检查开始前章节输入已变化，请重新检查"},
+        )
+    db.refresh(chapter)
 
 
 def _check_outcome_is_current(db: Session, chapter: Chapter, run: JobRun) -> bool:
@@ -443,6 +480,7 @@ def _job_status_from_run(
         memory_context=run.memory_context,
         checker_result=_redacted_checker_result(run.checker_result),
         visible_checker_result=visible_checker_result,
+        checker_target=_checker_target(run),
     )
     if isinstance(status_out.checker_result, dict):
         checker = dict(status_out.checker_result)
@@ -469,6 +507,18 @@ def _job_status_from_run(
         status_out.updated_character_ids = run.updated_character_ids
         status_out.added_event_ids = run.added_event_ids
     return status_out
+
+
+def _checker_target(run: JobRun) -> str | None:
+    if run.kind != "check":
+        return None
+    snapshot = run.input_snapshot if isinstance(run.input_snapshot, dict) else {}
+    draft = snapshot.get("draft") if isinstance(snapshot.get("draft"), dict) else {}
+    if draft.get("source") == "chapter":
+        return "visible_draft"
+    if draft.get("source") == "candidate":
+        return "generated_candidate"
+    return None
 
 
 def _replace_links(db: Session, chapter: Chapter, links: list) -> None:
@@ -949,14 +999,15 @@ def write_chapter(
     needs_selector = any(block.memory_type != "previous_ending" for block in candidates)
     memory_selector_client = memory_selector_resolver(db, chapter.id) if needs_selector else None
     selector_message = ""
+    selector_input_snapshot: dict[str, object] | None = None
     if memory_selector_client is not None:
-        prior_state, unknown_state_slots = projected_state_before_chapter(
-            db, chapter, stable_relationship_keys=True
-        )
+        from app.services.production_context import freeze_selector_input
+
+        selector_input_snapshot = freeze_selector_input(db, chapter, candidates)
         selector_message = memory_selector_user_message(
             chapter, candidates, budget, bible=bible_snapshot,
-            dynamic_fields_by_character=prior_state,
-            unknown_state_slots=unknown_state_slots,
+            dynamic_fields_by_character=selector_input_snapshot["prior_state"],
+            unknown_state_slots=selector_input_snapshot["unknown_state_slots"],
         )
     baseline_text = chapter.draft_text
     baseline_status = "draft_ready" if baseline_text.strip() else "draft"
@@ -992,6 +1043,7 @@ def write_chapter(
         bible_snapshot=bible_snapshot,
         bible_sha256=bible_sha256,
         chapter_write_generation=chapter.write_generation,
+        selector_input_snapshot=selector_input_snapshot,
     )
     try:
         # Complete fallible input/configuration preparation before replacing
@@ -1010,6 +1062,13 @@ def write_chapter(
             # SQLite's lock. Both jobs' durable states change together.
             _apply_job_phase(db, live_job.job_id, "cancelled")
             invalidate_writer_inputs(db, [chapter])
+            run.chapter_write_generation = chapter.write_generation
+            job.chapter_write_generation = chapter.write_generation
+        elif live_job is None:
+            # A fresh Writer job is also a newer chapter decision. Without
+            # this claim, an older failed hidden candidate can remain eligible
+            # and later replace the prose this Writer just produced.
+            _claim_chapter_operation(db, chapter)
             run.chapter_write_generation = chapter.write_generation
             job.chapter_write_generation = chapter.write_generation
         db.add(run)
@@ -1074,11 +1133,18 @@ def chapter_job(chapter_id: str, db: Session = Depends(get_db)) -> WriteJobStatu
         # exposes the previous terminal row. Return a stable non-terminal
         # snapshot so that client can adopt and poll the real job instead of
         # treating the stale row as its outcome.
+        draft = live_job.checker_snapshot.get("draft", {}) if isinstance(live_job.checker_snapshot, dict) else {}
+        checker_target = (
+            "visible_draft" if live_job.kind == "check" and draft.get("source") == "chapter"
+            else "generated_candidate" if live_job.kind == "check" and draft.get("source") == "candidate"
+            else None
+        )
         return WriteJobStatus(
             chapter_id=chapter_id,
             job_id=live_job.job_id or None,
             kind=live_job.kind,
             phase=live_job.phase,
+            checker_target=checker_target,
         )
     if run is None:
         return WriteJobStatus(chapter_id=chapter_id, kind="write", phase="idle")
@@ -1113,6 +1179,8 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
             bump_content_revision(chapter)
             db.commit()
             db.refresh(chapter)
+    # A `check` job observes visible prose only.  In particular, cancelling a
+    # check on finalized prose must not reopen it or disturb its archive.
     if chapter.status in ("writing", "extracting"):
         chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
         bump_content_revision(chapter)
@@ -1128,6 +1196,20 @@ def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
 
 def _candidate_fingerprint(chapter: Chapter, candidate: ChapterDraftCandidate) -> str:
     return draft_fingerprint(chapter, candidate.draft_text)
+
+
+def _candidate_matches_visible_draft(
+    chapter: Chapter,
+    candidate: ChapterDraftCandidate | None,
+    draft_text: str,
+) -> bool:
+    """Whether this holder still represents the exact visible-check input."""
+    return bool(
+        candidate is not None
+        and candidate.draft_text == draft_text
+        and candidate.bible_sha256 == hashlib.sha256(chapter.user_prompt.encode()).hexdigest()
+        and candidate.draft_fingerprint == draft_fingerprint(chapter, draft_text)
+    )
 
 
 def _current_candidate(db: Session, chapter: Chapter) -> ChapterDraftCandidate | None:
@@ -1161,7 +1243,7 @@ def _visible_checker_result(db: Session, chapter: Chapter) -> dict | None:
 
     if not is_frozen_input_current(db, chapter, snapshot):
         return None
-    return result
+    return _public_visible_checker_result(result)
 
 
 def _next_candidate_attempt(db: Session, chapter_id: str) -> int:
@@ -1226,6 +1308,8 @@ def rerun_checker(
             status_code=409,
             detail={"code": "checker_preflight_failed", "message": "正文为空，不能进行内容检查"},
         )
+    if write_registry.get_live(chapter.id) is not None:
+        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
     from app.services.checker_validation import CheckerValidationError, validate_checker_result
     from app.services.production_context import freeze_manual_checker_input, is_frozen_input_current, production_readiness
     from app.services.context import checker_user_message
@@ -1233,10 +1317,11 @@ def rerun_checker(
     readiness = production_readiness(db, chapter)
     if not readiness["is_complete"] and payload.acknowledged_context_token != readiness["context_token"]:
         raise _memory_context_incomplete(readiness)
+    _claim_chapter_operation(db, chapter)
     draft_text = chapter.draft_text
     snapshot = freeze_manual_checker_input(db, chapter, draft_text)
     candidate = _current_candidate(db, chapter)
-    if candidate is None or candidate.draft_text != draft_text:
+    if not _candidate_matches_visible_draft(chapter, candidate, draft_text):
         db.execute(
             update(ChapterDraftCandidate)
             .where(ChapterDraftCandidate.chapter_id == chapter.id)
@@ -1269,6 +1354,7 @@ def rerun_checker(
         context_limitations=snapshot["context_limitations"],
         bible_sha256=hashlib.sha256(chapter.user_prompt.encode()).hexdigest(),
         draft_fingerprint=candidate.draft_fingerprint,
+        chapter_write_generation=chapter.write_generation,
         model_binding_snapshot={"checker": _model_snapshot(checker_client)},
     )
     candidate.checker_input_snapshot = snapshot
@@ -1292,13 +1378,38 @@ def rerun_checker(
         name_groups=snapshot.get("name_groups"),
         name_candidate_groups=snapshot.get("name_candidate_groups"),
     )
-    db.commit()  # release the candidate write before waiting for the model
+    # Build62 still calls this synchronous endpoint.  It must nevertheless
+    # reserve the same chapter ownership slot as `/check/start`; otherwise a
+    # second synchronous request could overlap its model call.
+    legacy_job = WriteJob(
+        chapter_id=chapter.id,
+        job_id=check_job_id,
+        kind="check",
+        checker=CheckerAgent(checker_client, checker_persona),
+        checker_snapshot=snapshot,
+        checker_candidate_id=candidate_id,
+        checker_draft_text=draft_text,
+        checker_draft_fingerprint=candidate_fingerprint,
+        checker_user_message=checker_message,
+        chapter_write_generation=chapter.write_generation,
+    )
+    try:
+        write_registry.reserve(legacy_job)
+    except WriteJobConflict:
+        db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
+    try:
+        db.commit()  # release the candidate write before waiting for the model
+    except Exception:
+        legacy_job.mark_terminal("failed")
+        raise
 
     started_at = time.monotonic()
     error_code: str | None = None
     upstream_reason: str | None = None
     try:
-        agent = CheckerAgent(checker_client, checker_persona)
+        agent = legacy_job.checker
+        assert agent is not None
         raw = agent.check(checker_message)
         checker_result = validate_checker_result(raw, snapshot, check_attempt_id=check_job_id)
         checker_result["draft_fingerprint"] = candidate_fingerprint
@@ -1323,51 +1434,65 @@ def rerun_checker(
 
     # Reopen a short independent transaction.  An old response is retained as
     # an expired attempt but cannot replace a newer candidate/result.
-    result_session = SessionLocal()
     expired = False
     response: CheckerRunRead | None = None
-    try:
-        _begin_short_write_cas(result_session)
-        stored_run = result_session.get(JobRun, check_job_id)
-        stored_candidate = result_session.get(ChapterDraftCandidate, candidate_id)
-        current_chapter = result_session.get(Chapter, chapter_id)
-        is_current = bool(
-            stored_run is not None
-            and stored_candidate is not None
-            and current_chapter is not None
-            and stored_candidate.latest_checker_attempt_id == check_job_id
-            and stored_candidate.draft_text == draft_text
-            and stored_candidate.checker_input_fingerprint == snapshot["input_fingerprint"]
-            and stored_candidate.checker_input_snapshot == snapshot
-            and is_frozen_input_current(result_session, current_chapter, snapshot)
-        )
-        if stored_run is None or stored_candidate is None or current_chapter is None:
-            raise RuntimeError("checker attempt data disappeared")
-        if is_current:
-            stored_candidate.checker_result = checker_result
-            stored_run.checker_result = checker_result
-            stored_run.phase = "done" if checker_result.get("verdict") else "failed"
-            stored_run.error_code = checker_result.get("error_code")
-            stored_run.error_message = checker_result.get("error_message")
-            stored_run.error_context = checker_result.get("error_context")
-        else:
-            stored_run.phase = "cancelled"
-            stored_run.error_code = "checker_input_changed"
-            stored_run.error_message = "检查期间输入已变更，旧结论未应用"
-            expired = True
-        stored_run.finished_at = utc_now()
-        result_session.commit()
-        if not expired:
-            response = CheckerRunRead.model_validate(stored_candidate).model_copy(
-                update={
-                    "draft_text": "",
-                    "check_attempt_id": check_job_id,
-                    "input_fingerprint": snapshot["input_fingerprint"],
-                    "is_current": True,
-                }
+    def persist_sync_result() -> bool:
+        nonlocal expired, response
+        result_session = SessionLocal()
+        try:
+            _begin_short_write_cas(result_session)
+            stored_run = result_session.get(JobRun, check_job_id)
+            stored_candidate = result_session.get(ChapterDraftCandidate, candidate_id)
+            current_chapter = result_session.get(Chapter, chapter_id)
+            is_current = bool(
+                stored_run is not None
+                and stored_candidate is not None
+                and current_chapter is not None
+                and stored_run.phase == "checking"
+                and current_chapter.write_generation == legacy_job.chapter_write_generation
+                and stored_candidate.latest_checker_attempt_id == check_job_id
+                and stored_candidate.draft_text == draft_text
+                and stored_candidate.checker_input_fingerprint == snapshot["input_fingerprint"]
+                and stored_candidate.checker_input_snapshot == snapshot
+                and is_frozen_input_current(result_session, current_chapter, snapshot)
             )
-    finally:
-        result_session.close()
+            if stored_run is None or stored_candidate is None or current_chapter is None:
+                raise RuntimeError("checker attempt data disappeared")
+            if is_current:
+                stored_candidate.checker_result = checker_result
+                stored_run.checker_result = checker_result
+                stored_run.phase = "done" if checker_result.get("verdict") else "failed"
+                stored_run.error_code = checker_result.get("error_code")
+                stored_run.error_message = checker_result.get("error_message")
+                stored_run.error_context = checker_result.get("error_context")
+            else:
+                stored_run.phase = "cancelled"
+                stored_run.error_code = "checker_input_changed"
+                stored_run.error_message = "检查期间输入已变更，旧结论未应用"
+                expired = True
+            stored_run.finished_at = utc_now()
+            result_session.commit()
+            if not expired:
+                response = CheckerRunRead.model_validate(stored_candidate).model_copy(
+                    update={
+                        "draft_text": "",
+                        "checker_result": _public_visible_checker_result(stored_candidate.checker_result),
+                        "check_attempt_id": check_job_id,
+                        "input_fingerprint": snapshot["input_fingerprint"],
+                        "is_current": True,
+                    }
+                )
+            return True
+        finally:
+            result_session.close()
+
+    if not write_registry.finish_if_current(
+        legacy_job, persist_sync_result,
+        phase="done" if checker_result.get("verdict") else "failed",
+    ):
+        # A replacement/cancel won the registry ownership race. Its durable
+        # terminal state is authoritative; this old response must not revive it.
+        expired = True
     record_llm_call(
         SessionLocal,
         agent_role="checker",
@@ -1416,14 +1541,153 @@ def _manual_checker_failure(
         code = exc.code if exc.code in messages else "llm_upstream_error"
         message = messages[code]
     else:
-        from app.services.checker_validation import checker_failure_message
+        from app.services.checker_validation import checker_failure_diagnostics, checker_failure_message
         code, message = "checker_invalid_response", checker_failure_message(exc)
+        checker_diagnostics = checker_failure_diagnostics(exc)
+    if not isinstance(exc, LLMError):
+        # Stored only in the internal Checker record; every public projection
+        # removes it before leaving the backend.
+        diagnostics = checker_diagnostics
+    else:
+        diagnostics = None
     return {
         "status": "unavailable", "draft_fingerprint": fingerprint,
         "input_fingerprint": snapshot.get("input_fingerprint", ""),
         "check_attempt_id": check_attempt_id,
         "error_code": code, "error_message": message, "error_context": context,
+        **({"_validation_diagnostics": diagnostics} if diagnostics else {}),
     }
+
+
+@router.post("/chapters/{chapter_id}/check/start", response_model=WriteJobStatus)
+def start_checker(
+    chapter_id: str,
+    payload: CheckerRunRequest = CheckerRunRequest(),
+    db: Session = Depends(get_db),
+    _revision_checked: None = Depends(_require_task_revision),
+    checker_client=Depends(get_checker_client),
+) -> WriteJobStatus:
+    """Start an informational current-prose check and return immediately.
+
+    The worker uses the existing JobRun / registry lifecycle.  Its frozen
+    ``draft.source=chapter`` is the durable discriminator from an opaque
+    Writer-candidate retry, even when the visible prose originally came from
+    a prior generated candidate.
+    """
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    if not chapter.draft_text.strip():
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "checker_preflight_failed", "message": "正文为空，不能进行内容检查"},
+        )
+    if write_registry.get_live(chapter.id) is not None:
+        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
+
+    from app.services.context import checker_user_message
+    from app.services.production_context import freeze_manual_checker_input, production_readiness
+
+    readiness = production_readiness(db, chapter)
+    if not readiness["is_complete"] and payload.acknowledged_context_token != readiness["context_token"]:
+        raise _memory_context_incomplete(readiness)
+    _claim_chapter_operation(db, chapter)
+    draft_text = chapter.draft_text
+    snapshot = freeze_manual_checker_input(db, chapter, draft_text)
+    candidate = _current_candidate(db, chapter)
+    if not _candidate_matches_visible_draft(chapter, candidate, draft_text):
+        db.execute(
+            update(ChapterDraftCandidate)
+            .where(ChapterDraftCandidate.chapter_id == chapter.id)
+            .values(is_current=False)
+        )
+        candidate = ChapterDraftCandidate(
+            chapter_id=chapter.id,
+            attempt=_next_candidate_attempt(db, chapter.id),
+            draft_text=draft_text,
+            non_whitespace_count=nonspace_len(draft_text),
+            finish_reason="manual_edit",
+            deterministic_violations=[],
+            bible_sha256=hashlib.sha256(chapter.user_prompt.encode()).hexdigest(),
+            draft_fingerprint=draft_fingerprint(chapter, draft_text),
+            is_current=True,
+        )
+        db.add(candidate)
+        db.flush()
+    check_job_id = uuid_str()
+    persona = get_persona(db, "checker", book_id=chapter.book_id)
+    checker_message = checker_user_message(
+        chapter, draft_text, snapshot["bible"],
+        reference_context=snapshot["reference_context"],
+        source_catalog=snapshot["source_catalog"],
+        name_hits=snapshot["name_hits"],
+        name_groups=snapshot.get("name_groups"),
+        name_candidate_groups=snapshot.get("name_candidate_groups"),
+    )
+    run = JobRun(
+        id=check_job_id,
+        chapter_id=chapter.id,
+        kind="check",
+        phase="checking",
+        attempt=_next_checker_attempt(db, candidate.id),
+        candidate_id=candidate.id,
+        parent_job_id=None,
+        input_snapshot=snapshot,
+        input_fingerprint=snapshot["input_fingerprint"],
+        context_limitations=snapshot["context_limitations"],
+        bible_sha256=hashlib.sha256(chapter.user_prompt.encode()).hexdigest(),
+        draft_fingerprint=candidate.draft_fingerprint,
+        chapter_write_generation=chapter.write_generation,
+        model_binding_snapshot={"checker": _model_snapshot(checker_client)},
+    )
+    candidate.checker_input_snapshot = snapshot
+    candidate.checker_input_fingerprint = snapshot["input_fingerprint"]
+    candidate.latest_checker_attempt_id = check_job_id
+    candidate.checker_result = None
+    db.add(run)
+    job = WriteJob(
+        chapter_id=chapter.id,
+        job_id=check_job_id,
+        kind="check",
+        checker=CheckerAgent(checker_client, persona),
+        checker_snapshot=snapshot,
+        checker_candidate_id=candidate.id,
+        checker_draft_text=draft_text,
+        checker_draft_fingerprint=candidate.draft_fingerprint or "",
+        checker_user_message=checker_message,
+        chapter_write_generation=chapter.write_generation,
+    )
+    try:
+        write_registry.reserve(job)
+    except WriteJobConflict:
+        db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
+    try:
+        db.commit()
+        write_registry.launch(job, SessionLocal)
+    except Exception:
+        db.rollback()
+        if write_registry.is_current(job):
+            unavailable = {
+                "status": "unavailable", "input_fingerprint": snapshot.get("input_fingerprint", ""),
+                "check_attempt_id": check_job_id, "draft_fingerprint": candidate.draft_fingerprint or "",
+                "error_code": "checker_start_failed", "error_message": "复查未能启动；正文已保留，可重新复查",
+            }
+            try:
+                fail_unlaunched_job(
+                    SessionLocal, job, error_code="checker_start_failed",
+                    error_message="复查未能启动；正文已保留，可重新复查", checker_result=unavailable,
+                )
+            finally:
+                job.mark_terminal("failed")
+        raise
+    return WriteJobStatus(
+        chapter_id=chapter.id,
+        job_id=check_job_id,
+        kind="check",
+        phase="checking",
+        checker_target="visible_draft",
+    )
 
 
 @router.post("/chapters/{chapter_id}/checker/retry", response_model=WriteJobStatus)
@@ -1446,11 +1710,14 @@ def retry_failed_writer_checker(
     resolved_source, candidate, latest = _retry_source_and_latest_attempt(db, source)
     if resolved_source is None or candidate is None or latest is None or not _is_retryable_checker_attempt(latest):
         raise HTTPException(status_code=409, detail={"code": "checker_retry_not_available", "message": "当前候选的最新 Checker 结论不可单独重试"})
+    if chapter.status == "finalized":
+        raise HTTPException(status_code=409, detail={"code": "checker_retry_not_available", "message": "当前正文已经接受，旧生成稿不能再替换正文"})
     snapshot = latest.input_snapshot
     if not _candidate_checker_input_current(db, chapter, candidate, latest):
         raise HTTPException(status_code=409, detail={"code": "checker_retry_input_changed", "message": "原写作候选或其冻结输入已变化，不能只重试检查"})
     if write_registry.get_live(chapter.id) is not None:
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
+    _claim_chapter_operation(db, chapter)
 
     retry_id = uuid_str()
     persona = get_persona(db, "checker", book_id=chapter.book_id)
@@ -1461,6 +1728,10 @@ def retry_failed_writer_checker(
         name_hits=snapshot["name_hits"],
         name_groups=snapshot.get("name_groups"),
         name_candidate_groups=snapshot.get("name_candidate_groups"),
+        retry_reason_code=(
+            latest.checker_result.get("error_code")
+            if isinstance(latest.checker_result, dict) else None
+        ),
     )
     retry = JobRun(
         id=retry_id,
@@ -1475,7 +1746,7 @@ def retry_failed_writer_checker(
         context_limitations=snapshot.get("context_limitations"),
         bible_sha256=latest.bible_sha256,
         draft_fingerprint=candidate.draft_fingerprint,
-        chapter_write_generation=resolved_source.chapter_write_generation,
+        chapter_write_generation=chapter.write_generation,
         model_binding_snapshot={"checker": _model_snapshot(checker_client)},
     )
     candidate.latest_checker_attempt_id = retry_id
@@ -1491,7 +1762,7 @@ def retry_failed_writer_checker(
         checker_draft_text=candidate.draft_text,
         checker_draft_fingerprint=candidate.draft_fingerprint or "",
         checker_user_message=checker_message,
-        chapter_write_generation=resolved_source.chapter_write_generation,
+        chapter_write_generation=chapter.write_generation,
     )
     try:
         write_registry.reserve(job)
@@ -1529,6 +1800,7 @@ def retry_failed_writer_checker(
         kind="check",
         phase="checking",
         checker_source_job_id=resolved_source.id,
+        checker_target="generated_candidate",
     )
 
 

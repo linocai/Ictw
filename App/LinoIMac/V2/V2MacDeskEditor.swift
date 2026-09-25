@@ -210,7 +210,7 @@ private struct V2MacDeskTaskBanner: View {
             if let action = banner.action, action != primaryAction {
                 Button(action.title) { perform(action) }
                     .buttonStyle(V2MacDeskButton(kind: banner.tone == .danger ? .secondary : .quiet, compact: true))
-                    .disabled(!sync.networkActionsAvailable)
+                    .disabled(action.requiresNetwork && !sync.networkActionsAvailable)
             }
         }
         .padding(.horizontal, 24).padding(.vertical, 9)
@@ -293,7 +293,7 @@ private struct V2MacDeskActionBar: View {
         case .accept, .acceptWithWarning:
             Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).keyboardShortcut("a", modifiers: [.command, .shift]).disabled(!sync.networkActionsAvailable)
         default:
-            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).disabled(!sync.networkActionsAvailable)
+            Button(snapshot.primaryAction.title, action: onPrimary).buttonStyle(V2MacDeskButton(kind: .primary)).disabled(snapshot.primaryAction.requiresNetwork && !sync.networkActionsAvailable)
         }
     }
 }
@@ -465,7 +465,7 @@ private struct V2MacEvidenceFace: View {
         // chapter's position is genuinely irrelevant here. Stated explicitly
         // because the initialiser has no default -- see the note on
         // `V2DeskEditorSource.isLastChapterInBook`.
-        V2DeskPresentation.make(V2DeskEditorSource(chapter: editor.currentChapter, writingPhase: editor.writingPhase, checkerResult: editor.checkerResult, checkerAppliesToVisibleDraft: editor.checkerAppliesToVisibleDraft, checkerRefreshing: editor.checkerRefreshing, staleCheckedSnapshot: editor.staleCheckedSnapshot, saveState: editor.saveState, connectionInterrupted: editor.pollingConnectionInterrupted, taskMonitoringMessage: editor.taskMonitoringMessage, isLastChapterInBook: false))
+        V2DeskPresentation.make(V2DeskEditorSource(chapter: editor.currentChapter, writingPhase: editor.writingPhase, checkerResult: editor.checkerResult, checkerAppliesToVisibleDraft: editor.checkerAppliesToVisibleDraft, checkerRefreshing: editor.checkerRefreshing, staleCheckedSnapshot: editor.staleCheckedSnapshot, saveState: editor.saveState, connectionInterrupted: editor.pollingConnectionInterrupted, taskMonitoringMessage: editor.taskMonitoringMessage, checkerTarget: editor.checkerTarget, isLastChapterInBook: false))
     }
 
     var body: some View {

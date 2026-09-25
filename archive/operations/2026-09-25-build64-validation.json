@@ -1,0 +1,188 @@
+{
+  "version": "2.3.0",
+  "build": 64,
+  "baseline": "4f0a33a845ca4db7f9bb3de65aec557729871e93",
+  "app_source_sha256": {
+    "App/LinoI.xcodeproj/project.pbxproj": "2003b8852412d463d098ab78cc1abb32ad0139656db3392bddd004768d95aca8",
+    "App/LinoI/ChapterDraftCache.swift": "7d995adba6b4d87b8d40fce9ae9fbe7d6875a9c1f1e1c020fb8305435464ce5f",
+    "App/LinoI/ChapterEditorViews.swift": "3b418e125db2f0b404134335f88e3520b46cf7bc8746b8612c3716edb61b67cd",
+    "App/LinoI/CharactersViews.swift": "ca20b997a10131cea3053ad6f2df5cbedfc2247d507463d5060238e18a8b6614",
+    "App/LinoI/ClientSyncStore.swift": "b0d6011b241106acd0772b1c1ca579e6914a8d21dec3542a70bbcfc545c8d9b5",
+    "App/LinoI/Info.plist": "0321fe0f1f8aecf026771b17cbfdda44aa43837e6ef55e1bd26f89ebebf5bbeb",
+    "App/LinoI/InspirationCreator.swift": "ffaa02cf8ab76e45ce24eaaddcd4151d15ee89332602df5e06addb769af8d2cb",
+    "App/LinoI/LinoAPI.swift": "6f99e5843b2ce2cc4e2316a6a75f4b4a79f51a0113821e1351e4daedbfc2c327",
+    "App/LinoI/LinoComponents.swift": "c90af5e72f3def308f2d107ad7cf56de2c2dcdac82e6422bdc305fe7316471bd",
+    "App/LinoI/LinoErrorPresenter.swift": "e07982e8f9cdf4a860bbf8106f276830253cb024e6c1246713b11cda8fca4ffc",
+    "App/LinoI/LinoIApp.swift": "4532fd64e23a16087ded6b6c62f7fdcefc654f41ebfc04d1ac746370bb579acc",
+    "App/LinoI/LinoModels.swift": "432730bf6607a3480fb404680205f15da102ccc6eb52615b9c7deb215f21949c",
+    "App/LinoI/LinoStores.swift": "edc3b1bee1a2c52084b6da9183d0b3f93476348215fc2dd46d34d9d5e3e4122a",
+    "App/LinoI/LinoTheme.swift": "d44e084d3595e2d68ae00b9b3b525096f99794d2c94607002fedd111eb71b977",
+    "App/LinoI/NoticeBus.swift": "011b7b3dac2f4269dbcbd60fd0a2c9981aa1d25ced80e8f6e60a4ec1142c129f",
+    "App/LinoI/ReadingViews.swift": "4052e3362961dc336ab2631f42e6e0d5f65e972edc27de0bd3f93bdc72b2eacd",
+    "App/LinoI/SettingsViews.swift": "a56a5ea1f81262d88f0d0bebce663bcf2eaa3b05f436cc8c1b95a2ee3d4961c4",
+    "App/LinoI/ShelfViews.swift": "3e22f4024238f16bcc470a0129e78076ba65f3de484d2b206a81506d181916ed",
+    "App/LinoI/V2IOS/V2IOSBookshelfView.swift": "ac1f4a7ad24783fd6d658d7596310662eff427c5309f35ec76a6b804d546d0f0",
+    "App/LinoI/V2IOS/V2IOSChapterDeskView.swift": "efd9332c1be45cffc698ddb75747f722787981d465729d701f0ea94cb7e885c5",
+    "App/LinoI/V2IOS/V2IOSChapterFaces.swift": "af56faf1124a12100363d0122775c6cfa2269f84a25d11c4cb9eeed8dcf89ad5",
+    "App/LinoI/V2IOS/V2IOSChapterRailView.swift": "38d2894914c55eb14c51c1f56a225413ed22a7c6ac46c380e24ebdd768caf057",
+    "App/LinoI/V2IOS/V2IOSPeripheralViews.swift": "62d64842c39acf2e5557e40865748ad4c61a993ddc76fcc88eb0e47794b489d9",
+    "App/LinoI/V2IOS/V2IOSPrimitives.swift": "a158a0e0c99598e3fe4de9ba809572ceb0a1d48bd3f0c588851003b14c930944",
+    "App/LinoI/V2IOS/V2IOSRootView.swift": "cb1e2e234d5288ad17e0a8ba6ee1acd08ea4d9d08271a344a63302551d5942e9",
+    "App/LinoI/V2IOS/V2IOSSettingsAndExport.swift": "a7fcee91f0e1a01296d9daff80e90f0b86799c89de4161a5f9a9c697d187bdae",
+    "App/LinoI/V2Shared/V2DeskPresentation.swift": "62ce6fc52d579f98cc5bd4ba039f075dd02631e597cb33a666509eece5a51fcd",
+    "App/LinoI/V2Shared/V2DeskStatusViews.swift": "3b31a61143904003683212f2a32ef8403778ae710b449e711233337b58ef1c31",
+    "App/LinoI/V2Shared/V2DeskTokens.swift": "ed6767767c069e52cb0c9fd025c160c923f88ec9c833750dbd8867755628e7ba",
+    "App/LinoI/WorkspaceViews.swift": "08415eaf3efb6789feffa07baa08a3db06ec390cc734ff55203492a39f6e99d4",
+    "App/LinoIMac/Info.plist": "ea9aaf9668a519a5c4648b0d2cd75b1d5bdfedd99f0ac949e18d135627ab48e5",
+    "App/LinoIMac/LinoIMacApp.swift": "513a2bbfb8db2ffca09ccc863d3d077863940fd646fc787e84a3162870b9a682",
+    "App/LinoIMac/LinoMacControls.swift": "4fbce760231d6e76ff2dee27d46739a4e81bffb2358ce29674ff2a326eab5abd",
+    "App/LinoIMac/LinoMacTheme.swift": "0510f2b3f127d5c077d99d8e7f06776cc40ea2f63333537f440d9972390c8ef7",
+    "App/LinoIMac/MacAgentTab.swift": "06f0e34ef9543b97741fc747591406af10ba548cd595d2cd95ef045166ada2bd",
+    "App/LinoIMac/MacBookSettingsTab.swift": "8675008389c4c9b4f0d8766c6c8ff1c629b5aa2870fd95e44d03a58ddf2a458e",
+    "App/LinoIMac/MacBookshelfView.swift": "c33fb2c48856758dc825587e00d9524e9747569c230f0192ba120ca883955b01",
+    "App/LinoIMac/MacChapterEditor.swift": "8c8ac21e72012d42f69ec397474c804d88aa46d8c4a0c72fbc3dae0760a49231",
+    "App/LinoIMac/MacChapterSidebar.swift": "bc5ef20cbc87699fd20d592b4349746da046f347a0c76f2d029af4ed9918ec45",
+    "App/LinoIMac/MacCharacterTab.swift": "7a748c9feab15269753e5e25db3d9c65858e93c291d75911babb0b5f818a5723",
+    "App/LinoIMac/MacCommandBus.swift": "7f1ab896174caaa3cebcc9e7f0f29af6006b5d928aa5466be8c793387ba91817",
+    "App/LinoIMac/MacConnectionView.swift": "828b6eb0a9d064c929df9a57db39508e90100ab4dc2f65eae94484d2cd7fe62e",
+    "App/LinoIMac/MacExportSaver.swift": "8c138fea5702d0b391056ebac68dc0e46238169b79a3446fb6f5156b69d4c2a3",
+    "App/LinoIMac/MacInspirationTab.swift": "bab874d83b69fdfca6334cc9faf9d20beb23a98f51747b53324934deec912d63",
+    "App/LinoIMac/MacNewBookSheet.swift": "f546ddfb39407bc1e131d388bb0aebc45d73c384104fb3e8de6db6392b0570f1",
+    "App/LinoIMac/MacReaderView.swift": "721b5d0273ab710ba90668abaeca65c5db101dcbf81190cc2efd16a2e5186e3e",
+    "App/LinoIMac/MacRightPanel.swift": "b4785357f84d6b7215b15480cdd5a5a499a8c3ee7680439a9a20e5a297fad6a1",
+    "App/LinoIMac/MacSettingsSheet.swift": "1241005326859309fcd672274bfa0346ac94d9dd067d961f28d5d2af5d3e9da5",
+    "App/LinoIMac/MacShell.swift": "dcbd07423d2492276dea6ae0a8745870fed8a2714fbaf6437c13ad288cef7891",
+    "App/LinoIMac/MacWorkspaceView.swift": "069dd05d961c162d997e985efab6746f94e5034970e98fe20707df226c6e50f5",
+    "App/LinoIMac/V2/V2MacDeskEditor.swift": "93c674a1dce8097f1b304604489fd2176f30024562f517e5ce252c91ac48fd6e",
+    "App/LinoIMac/V2/V2MacDeskPrimitives.swift": "b8bac6e36cca61172f24b57b1fde6aec913ea95a60a301565b473512fe326482",
+    "App/LinoIMac/V2/V2MacDeskRoot.swift": "c501729f57d7929308dabaf725d6784ee1f6604e5bff0046e4bd52090c998ae7",
+    "App/LinoIMac/V2/V2MacDeskSheets.swift": "fca233b71f9edefcf89d93f70997713fa852b793528a10625f737f4015660492"
+  },
+  "mac_debug_build": "passed",
+  "ios27_simulator_debug_build": "passed",
+  "mac_synthetic_ui": [
+    "visible-check failure keeps draft and shows rerun",
+    "old name_use message translated to readable explanation",
+    "one check/start and zero write calls",
+    "checking shows cancel task",
+    "completed check shows accept chapter with 4500-char draft unchanged",
+    "generated-candidate unavailable shows check unfinished, candidate retained, current body unchanged; retry-check action"
+  ],
+  "ios_simulator": "isolated app launched; GUI unavailable; isolated app terminated and uninstalled",
+  "real_model_calls": 0,
+  "production_mutations": 0,
+  "device_support": {
+    "checked_at": "2026-09-25T07:56:26.223171+00:00",
+    "devices": [
+      {
+        "model": "iPhone17,3",
+        "os": "",
+        "build": "",
+        "validated": false,
+        "reason": "No local support cache; this connection record needs no cleanup"
+      },
+      {
+        "model": "iPhone18,4",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": false,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+        "reason": "Device unavailable; cached OS information cannot authorize deletion"
+      },
+      {
+        "model": "iPhone19,2",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "ce718b23beb9210cfeea20547ad797b8c893ebc1f2513878c3603ac6262c7327",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "448d9b4f685ea5b83c5acff545e36dbaaf7a8894dc684fcd12f6b14b025434c3",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "3b8e1bf966e44c6b01812f1f331affb81a085e82e60eaca67411426af5acedb6"
+        }
+      }
+    ],
+    "candidates": [],
+    "deleted": [],
+    "user_confirmed_unused_models": [],
+    "unused_reason": "",
+    "pending_devices": [
+      "iPhone18,4"
+    ],
+    "status": "partial"
+  },
+  "final_app_build_after_client_review_fixes": "passed",
+  "final_mac_visible_check_ui": "passed: readable failure -> rerun -> checking/cancel -> accept; one check/start, zero write, original 4500 chars unchanged",
+  "build_status_note": "Both Debug builds passed after final foreground reconciliation guard",
+  "configuration_failure_ui": "passed after consolidated fix: api_key_undecryptable -> settings; old failed job refresh, shelf return and cold restart keep settings action; button opens settings",
+  "app_diff_sha256": "1e632fdeffa32aee0861f4fe6854c0303a9691e068bff12cc65ef89f3ab2f1ad",
+  "recorded_at": "2026-09-25T08:00:26.686261+00:00",
+  "client_review": {
+    "status": "no_reportable_findings",
+    "working_diff_sha256": "1e632fdeffa32aee0861f4fe6854c0303a9691e068bff12cc65ef89f3ab2f1ad",
+    "released_to_worktree_diff_sha256": "0ad10729443fb439f8bf4679b88892be2b88ebdddf50fc36b387fc8d4c61d640",
+    "store_http": "44 passed, 0 failed",
+    "client_state": "passed",
+    "extra_foreground_repro": "45 passed, 0 failed"
+  },
+  "artifact_metadata": {
+    "iOS": "2.3.0/64; MinimumOSVersion27.0; iphonesimulator27.0",
+    "macOS": "2.3.0/64; LSMinimumSystemVersion27.0; macosx27.0"
+  },
+  "auxiliary_cleanup": {
+    "removed": [
+      {
+        "path": "/Users/linotsai/Library/Preferences/com.lino.ictw.v230-ui-check.plist",
+        "bytes": 42,
+        "sha256": "9261ecceda608ef174256e5fdc774c1e6e3dcf533409c1bc393d490d01c713f1"
+      },
+      {
+        "path": "/Users/linotsai/Library/Preferences/com.lino.ictw.v230-ui-check.defaults.plist",
+        "bytes": 42,
+        "sha256": "9261ecceda608ef174256e5fdc774c1e6e3dcf533409c1bc393d490d01c713f1"
+      }
+    ],
+    "bytes_after": 0,
+    "ui_server_stopped": true,
+    "note": "Exact test preference domains cleared through defaults first; residual plist files removed after hash verification",
+    "isolated_app_cache": {
+      "path": "/Users/linotsai/Library/Caches/com.lino.ictw.v230-ui-check",
+      "files": 10,
+      "bytes_before": 2416742,
+      "bytes_after": 0
+    }
+  },
+  "backend_final_review": {
+    "status": "no_reportable_findings",
+    "production_commit": "465138aa92b0ae49e3bfcef91d5fb1cef5efb63c",
+    "head": "4f0a33a845ca4db7f9bb3de65aec557729871e93",
+    "working_diff_sha256": "03c7ec78b898cfca465a848a512b441a8b5c07cbbda25bc4c4f0d506a204db5f",
+    "untracked_test_sha256": "18098df389d7b3ff20268c9279c3eb5bfe921e2afad672742dfa0533168f04c5",
+    "targeted_tests": "62 passed; test_api 59 passed",
+    "reviewer_temp_cleanup": "112 KB -> 0; no retained files",
+    "compatibility_limit": "Retained v1 snapshots fail closed if source equivalence cannot be proven or revision combinations exceed 256; no automatic regeneration"
+  },
+  "main_temp_cleanup": {
+    "deleted_root": "/tmp/ictw-v230-build64-main",
+    "entries": 6950,
+    "files": 4852,
+    "logical_bytes_before": 376459761,
+    "disk_kib_before": 383568,
+    "bytes_after": 0
+  },
+  "release_status": "local verification only; no commit, push, production deployment or installed client replacement",
+  "final_resource_scan": {
+    "owned_tmp_and_user_temp_paths": [],
+    "isolated_app_preferences_caches_saved_state": [],
+    "remote_artifacts": "none created"
+  },
+  "backend_final_tests": {
+    "passed": 365,
+    "skipped": 12,
+    "collected": 377,
+    "alembic_head": "20260923_0014",
+    "diff_check": "passed"
+  },
+  "builder_resource_cleanup": "Store HTTP fixture temporary files removed after every run; no retained task temporary roots or active fixture/pytest/uvicorn processes",
+  "completion_status": "implemented, independently reviewed and locally verified; unreleased"
+}

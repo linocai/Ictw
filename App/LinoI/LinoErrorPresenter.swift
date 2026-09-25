@@ -51,7 +51,14 @@ enum LinoErrorPresenter {
         let context = result.errorContext
         let entry = code.flatMap(tableEntry)
         let reported = result.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let reason = reported.isEmpty ? (entry?.reason ?? "这次检查没有得到可用结论") : reported
+        // Pre-Build64 records may contain raw protocol terms (for example
+        // `name_use`) in error_message.  That string is not a prose verdict
+        // and is never useful repair guidance, so stable Checker protocol
+        // codes deliberately take the safe presentation table instead.
+        let protocolFailure = ["checker_invalid_response", "checker_failed", "checker_start_failed", "checker_retry_start_failed", "checker_retry_failed"].contains(code)
+        let reason = protocolFailure
+            ? (entry?.reason ?? "检查未能完成，尚未得到可用结论")
+            : (reported.isEmpty ? (entry?.reason ?? "这次检查没有得到可用结论") : reported)
         let message = compose(
             agentRole: context?.agentRole ?? "checker",
             modelName: context?.modelName,
@@ -121,6 +128,33 @@ enum LinoErrorPresenter {
     /// iOS and macOS show byte-identical copy and any future wording change
     /// only happens once.
     static let connectionInterrupted = "与服务器的连接暂时中断，正在自动重试。"
+
+    /// Configuration and credentials that the author can resolve from the
+    /// model settings screen.  Kept here so all shared presentation paths use
+    /// the same classification before a JobRun exists.
+    static func requiresModelSettings(_ code: String?) -> Bool {
+        [
+            "not_configured",
+            "bad_url",
+            "unauthorized",
+            "llm_profile_not_configured",
+            "llm_profile_missing",
+            "api_key_undecryptable",
+        ].contains(code) || (code?.hasSuffix("_thinking_not_disableable") == true)
+    }
+
+    /// Checker transport/protocol execution failures are unavailable outcomes,
+    /// never a verdict on the candidate's story content.
+    static func isCheckerUnavailable(_ code: String?) -> Bool {
+        [
+            "checker_invalid_response",
+            "checker_failed",
+            "checker_start_failed",
+            "checker_retry_start_failed",
+            "checker_retry_failed",
+            "interrupted",
+        ].contains(code) || (code?.hasPrefix("llm_") == true)
+    }
 
     // MARK: - APIError specialisations
 
@@ -257,7 +291,9 @@ enum LinoErrorPresenter {
         switch ChapterJobFailureStage.resolve(status) {
         case .extraction:
             return "请重新整理记忆"
-        case .memorySelection, .drafting, .deterministicValidation, .bibleChecking:
+        case .bibleChecking:
+            return status.checkerTarget == "visible_draft" ? "请重新复查" : "请重试检查生成稿"
+        case .memorySelection, .drafting, .deterministicValidation:
             return "请重新生成"
         case .completed, .acceptance, .none:
             return "请刷新任务状态确认后再继续"
@@ -328,10 +364,8 @@ enum LinoErrorPresenter {
                 reason: "Memory Selector 两次都没有给出合格的精炼记忆",
                 suggestion: "请重试；若持续出现，请调整 Memory Selector 人格或模型配置"
             )
-        case "checker_invalid_response":
-            return Entry(reason: "检查结果未通过校验", suggestion: "请重试检查；若持续失败，请检查模型配置")
-        case "checker_failed":
-            return Entry(reason: "检查未完成", suggestion: "请重试检查")
+        case "checker_invalid_response", "checker_failed", "checker_start_failed", "checker_retry_start_failed", "checker_retry_failed":
+            return Entry(reason: "检查未能完成，尚未得到可用结论", suggestion: "请重新复查")
         case "checker_rejected":
             return Entry(
                 reason: "Checker 未通过这份新正文",

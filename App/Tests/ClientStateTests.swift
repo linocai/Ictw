@@ -56,10 +56,12 @@ private func makeChapterSummary(
 }
 
 private func testProtocolErrorReasonsRemainVisible() throws {
-    for code in ["checker_invalid_response", "memory_selection_invalid"] {
-        let status = WriteJobStatus(chapterId: "chapter-1", kind: "write", phase: "failed", errorCode: code, errorMessage: "具体失败原因：引用了候选外的来源")
-        try expect(LinoErrorPresenter.present(jobFailure: status).message.contains("引用了候选外的来源"), "controlled protocol errors must retain their specific reason")
-    }
+    let memory = WriteJobStatus(chapterId: "chapter-1", kind: "write", phase: "failed", errorCode: "memory_selection_invalid", errorMessage: "具体失败原因：引用了候选外的来源")
+    try expect(LinoErrorPresenter.present(jobFailure: memory).message.contains("引用了候选外的来源"), "Memory Selector failures retain their safe, actionable reason")
+
+    let checker = WriteJobStatus(chapterId: "chapter-1", kind: "check", phase: "failed", errorCode: "checker_invalid_response", errorMessage: "name_use 引用了候选外的来源")
+    let message = LinoErrorPresenter.present(jobFailure: checker).message
+    try expect(message.contains("尚未得到可用结论") && !message.contains("name_use"), "Checker protocol details must be mapped to safe recovery copy")
 }
 
 private func testLegacySynopsisDecodesAsCanonicalSummary() throws {
@@ -456,6 +458,52 @@ private func testCurrentServerFailureIsApplied() throws {
     try expect(decision == .currentTerminal, "current cross-device failure must be applied")
 }
 
+private func testDoneJobRequiresCurrentnessBeforeItCanRepaintTheDesk() throws {
+    let draft = try makeChapter()
+    try expect(
+        ChapterJobReconciler.decide(
+            status: makeStatus(phase: "done", outcomeCurrent: true),
+            chapter: draft,
+            hasLocalInputDivergence: false
+        ) == .currentTerminal,
+        "a current terminal completion may update the current draft"
+    )
+    try expect(
+        ChapterJobReconciler.decide(
+            status: makeStatus(phase: "done", outcomeCurrent: false),
+            chapter: draft,
+            hasLocalInputDivergence: false
+        ) == .obsoleteTerminal,
+        "a stale terminal completion must not repaint a newer cross-device draft"
+    )
+    try expect(
+        ChapterJobReconciler.decide(
+            status: makeStatus(phase: "done", outcomeCurrent: nil),
+            chapter: draft,
+            hasLocalInputDivergence: false
+        ) == .unverifiedTerminal,
+        "a legacy terminal completion without currentness proof must remain unverified"
+    )
+
+    let accepted = try makeChapter(status: "finalized")
+    try expect(
+        ChapterJobReconciler.decide(
+            status: makeStatus(phase: "done", outcomeCurrent: true, kind: "write"),
+            chapter: accepted,
+            hasLocalInputDivergence: false
+        ) == .obsoleteTerminal,
+        "a Writer completion must never reopen finalized prose"
+    )
+    try expect(
+        ChapterJobReconciler.decide(
+            status: makeStatus(phase: "done", outcomeCurrent: true, kind: "check"),
+            chapter: accepted,
+            hasLocalInputDivergence: false
+        ) == .currentTerminal,
+        "a current visible Checker completion may update finalized evidence"
+    )
+}
+
 private func testInterruptedJobUsesRecordedPhase() throws {
     var validating = makeStatus(phase: "failed", outcomeCurrent: true)
     validating.errorCode = "interrupted"
@@ -482,6 +530,20 @@ private func testInterruptedJobUsesRecordedPhase() throws {
         ChapterJobFailureStage.resolve(legacy) == nil,
         "a legacy interruption without phase must remain unknown"
     )
+
+    var visibleChecker = makeStatus(phase: "failed", outcomeCurrent: true, kind: "check")
+    visibleChecker.errorCode = "interrupted"
+    visibleChecker.errorContext = JobErrorContext(
+        agentRole: "checker", modelName: "checker-model", upstreamReason: nil,
+        finishReason: nil, blockReason: nil, httpStatus: nil,
+        completionWarning: nil, droppedStateComponents: nil, interruptedPhase: "checking"
+    )
+    visibleChecker.checkerTarget = "visible_draft"
+    try expect(LinoErrorPresenter.present(jobFailure: visibleChecker).message.contains("请重新复查"), "a visible Checker interruption must guide the author back to recheck")
+
+    var hiddenChecker = visibleChecker
+    hiddenChecker.checkerTarget = "generated_candidate"
+    try expect(LinoErrorPresenter.present(jobFailure: hiddenChecker).message.contains("请重试检查生成稿"), "a hidden candidate Checker interruption must not misdirect the author to visible-draft recheck")
 }
 
 private func testOldOrFinalizedServerFailureIsDiscarded() throws {
@@ -997,6 +1059,8 @@ private func makeV2DeskSource(
     saveState: ChapterSaveState = .synced,
     connectionInterrupted: Bool = false,
     preflightAcceptanceMessage: String? = nil,
+    canRetryGeneratedCandidateChecker: Bool = false,
+    checkerTarget: String? = nil,
     isLastChapterInBook: Bool = false
 ) -> V2DeskEditorSource {
     V2DeskEditorSource(
@@ -1009,6 +1073,8 @@ private func makeV2DeskSource(
         saveState: saveState,
         connectionInterrupted: connectionInterrupted,
         preflightAcceptanceMessage: preflightAcceptanceMessage,
+        canRetryGeneratedCandidateChecker: canRetryGeneratedCandidateChecker,
+        checkerTarget: checkerTarget,
         isLastChapterInBook: isLastChapterInBook
     )
 }
@@ -1070,6 +1136,52 @@ private func testV2DeskGenerationCancelAndFailurePreserveVisibleProse() throws {
     try expect(failed.chapterState == .failed, "a write failure must remain a failure state")
     try expect(failed.primaryAction == .retryGeneration, "a write failure must retry rather than expose a server-side alternative draft")
     try expect(failed.taskBanner?.text.contains("正文没有变化") == true, "write failure must state that visible prose was preserved")
+}
+
+private func testV2DeskCheckerRecoveryKeepsTheCorrectActionAndCopy() throws {
+    var draft = try makeChapter()
+    draft.draftText = "作者保留的正文。"
+
+    let hiddenUnavailable = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: draft,
+        writingPhase: .failed(
+            code: "checker_invalid_response",
+            message: "检查协议未能确认",
+            stage: .bibleChecking
+        ),
+        canRetryGeneratedCandidateChecker: true
+    ))
+    try expect(hiddenUnavailable.primaryAction == .retryGeneratedCandidateChecker, "hidden candidate Checker failure must only retry that candidate check")
+    try expect(hiddenUnavailable.taskBanner?.text == "检查未能完成，生成稿已保留，当前正文未变", "hidden unavailable Checker failure must not claim a rejected candidate")
+
+    let visibleCancelled = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: draft,
+        writingPhase: .cancelled(message: "已取消", stage: .bibleChecking),
+        checkerTarget: "visible_draft"
+    ))
+    try expect(visibleCancelled.primaryAction == .rerunChecker && visibleCancelled.taskBanner?.action == .rerunChecker, "a cancelled visible Checker must return to recheck rather than generating")
+
+    var accepted = draft
+    accepted.status = "finalized"
+    let finalizedVisibleCancelled = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: accepted,
+        writingPhase: .cancelled(message: "已取消", stage: .bibleChecking),
+        checkerTarget: "visible_draft"
+    ))
+    try expect(finalizedVisibleCancelled.primaryAction == .rerunChecker && finalizedVisibleCancelled.taskBanner?.action == .rerunChecker, "a cancelled finalized-text check must stay a recheck, not start a new chapter")
+
+    for chapter in [draft, accepted] {
+        let modelConfiguration = V2DeskPresentation.make(makeV2DeskSource(
+            chapter: chapter,
+            writingPhase: .failed(
+                code: "llm_profile_not_configured",
+                message: "尚未配置检查模型",
+                stage: .bibleChecking
+            ),
+            checkerTarget: "visible_draft"
+        ))
+        try expect(modelConfiguration.primaryAction == .openSettings && modelConfiguration.taskBanner?.action == .openSettings, "visible Checker configuration failure must reach settings before offering recheck")
+    }
 }
 
 private func testV2DeskCheckerCurrentStaleAndUnavailableStates() throws {
@@ -1944,10 +2056,17 @@ private func testBookModelSettingsDraftCapabilitiesAndPayload() throws {
     try expect(missing.payload == nil, "deleted profile must never remain saveable")
 }
 
+private func testV2ActionNetworkPolicyKeepsSettingsLocal() throws {
+    try expect(!V2DeskPrimaryAction.openSettings.requiresNetwork, "model settings is local navigation and must stay available offline")
+    try expect(V2DeskPrimaryAction.rerunChecker.requiresNetwork, "Checker recovery still requires a server request")
+    try expect(V2DeskPrimaryAction.refreshTaskStatus.requiresNetwork, "task refresh requires a server request")
+}
+
 @main
 private struct ClientStateTestRunner {
     @MainActor
     static func main() throws {
+        try testV2ActionNetworkPolicyKeepsSettingsLocal()
         try testBookModelSettingsDraftCapabilitiesAndPayload()
         try testProtocolErrorReasonsRemainVisible()
         try testLegacySynopsisDecodesAsCanonicalSummary()
@@ -1967,6 +2086,7 @@ private struct ClientStateTestRunner {
         try testReasonOnlyCheckerIssuesRemainDecodable()
         try testTaskMonitoringNoticeIdentityAndBackoff()
         try testCurrentServerFailureIsApplied()
+        try testDoneJobRequiresCurrentnessBeforeItCanRepaintTheDesk()
         try testInterruptedJobUsesRecordedPhase()
         try testOldOrFinalizedServerFailureIsDiscarded()
         try testOldServerFailureRemainsLocalOnly()
@@ -1989,6 +2109,7 @@ private struct ClientStateTestRunner {
         try testBookPersonaResponseCannotCrossBook()
         try testV2DeskUsesFixedThreeFacesAndOnePrimaryAction()
         try testV2DeskGenerationCancelAndFailurePreserveVisibleProse()
+        try testV2DeskCheckerRecoveryKeepsTheCorrectActionAndCopy()
         try testV2DeskCheckerCurrentStaleAndUnavailableStates()
         try testAcceptanceFailureNeverRetriesGeneration()
         try testAcceptanceAndExtractionPendingPresentation()

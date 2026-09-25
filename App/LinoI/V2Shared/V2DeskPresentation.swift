@@ -62,7 +62,7 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
     var title: String {
         switch self {
         case .generate: "生成这一章"
-        case .cancelGeneration: "取消生成"
+        case .cancelGeneration: "取消任务"
         case .rerunChecker: "重新复查"
         case .retryGeneratedCandidateChecker: "重试检查生成稿"
         case .accept: "接受这一章"
@@ -78,6 +78,15 @@ enum V2DeskPrimaryAction: Equatable, Sendable {
 
     var requiresConfirmation: Bool {
         self == .acceptWithWarning
+    }
+
+    /// Settings is local navigation. Every other action reaches the server,
+    /// so offline state disables it consistently across both platforms.
+    var requiresNetwork: Bool {
+        switch self {
+        case .openSettings, .none: false
+        default: true
+        }
     }
 }
 
@@ -402,6 +411,10 @@ struct V2DeskEditorSource {
     /// bypass or a character-attribution override.
     let preflightAcceptanceMessage: String?
     let canRetryGeneratedCandidateChecker: Bool
+    /// The structured Checker result says whether a hidden check was
+    /// unavailable. Codes remain a compatibility fallback for older records.
+    let generatedCandidateCheckerUnavailable: Bool
+    let checkerTarget: String?
     /// Computed by each platform from its own `workspace.chapters` via
     /// `V2DeskChapterPosition.isLastChapter` — never derived in here.
     ///
@@ -424,6 +437,8 @@ struct V2DeskEditorSource {
         taskMonitoringMessage: String? = nil,
         preflightAcceptanceMessage: String? = nil,
         canRetryGeneratedCandidateChecker: Bool = false,
+        generatedCandidateCheckerUnavailable: Bool = false,
+        checkerTarget: String? = nil,
         isLastChapterInBook: Bool
     ) {
         self.chapter = chapter
@@ -437,6 +452,8 @@ struct V2DeskEditorSource {
         self.taskMonitoringMessage = taskMonitoringMessage
         self.preflightAcceptanceMessage = preflightAcceptanceMessage
         self.canRetryGeneratedCandidateChecker = canRetryGeneratedCandidateChecker
+        self.generatedCandidateCheckerUnavailable = generatedCandidateCheckerUnavailable
+        self.checkerTarget = checkerTarget
         self.isLastChapterInBook = isLastChapterInBook
     }
 }
@@ -613,18 +630,29 @@ enum V2DeskPresentation {
         // Keeping their primary action empty prevents a duplicate accept or a
         // premature “start next chapter” while the server state is pending.
         if source.writingPhase.isActive { return .none }
-        if isAccepted { return .startNewChapter }
         if case .failed(let code, _, let stage) = source.writingPhase {
+            if stage == .bibleChecking && needsSettings(code) { return .openSettings }
+            if stage == .bibleChecking && source.checkerTarget == ChapterCheckerTarget.generatedCandidate {
+                if code == "write_running" { return .refreshTaskStatus }
+                if generatedCandidateNeedsFreshWrite(code) { return .retryGeneration }
+            }
             if source.canRetryGeneratedCandidateChecker { return .retryGeneratedCandidateChecker }
+            if stage == .bibleChecking && source.checkerTarget == "visible_draft" {
+                return .rerunChecker
+            }
             if stage == nil { return .refreshTaskStatus }
-            if stage == .extraction { return .retryArchive }
+            if stage == .extraction { return isAccepted ? .startNewChapter : .retryArchive }
             if stage == .acceptance {
                 if needsSettings(code) { return .openSettings }
                 return code == "checker_override_required" ? .rerunChecker : .none
             }
             return needsSettings(code) ? .openSettings : .retryGeneration
         }
-        if case .cancelled = source.writingPhase { return .generate }
+        if case .cancelled = source.writingPhase {
+            return source.writingPhase.currentStage == .bibleChecking && source.checkerTarget == "visible_draft"
+                ? .rerunChecker : .generate
+        }
+        if isAccepted { return .startNewChapter }
         if source.checkerRefreshing { return .none }
         guard hasDraft else { return .generate }
         if source.preflightAcceptanceMessage != nil { return .acceptWithWarning }
@@ -681,6 +709,9 @@ enum V2DeskPresentation {
         if case .extracting = source.writingPhase {
             return V2DeskTaskBanner(kind: .archiving, tone: .accent, text: "正在整理这一章的记忆", action: nil)
         }
+        if case .checking = source.writingPhase {
+            return V2DeskTaskBanner(kind: .checking, tone: .accent, text: "正在复查这一章", action: nil)
+        }
         if source.writingPhase.isGenerating {
             return V2DeskTaskBanner(kind: .writing, tone: .accent, text: "正在写这一章", action: .cancelGeneration)
         }
@@ -697,7 +728,14 @@ enum V2DeskPresentation {
             )
         }
         if case .cancelled = source.writingPhase {
-            return V2DeskTaskBanner(kind: .cancelled, tone: .neutral, text: "已取消，正文没有变化", action: .generate)
+            let visibleCheck = source.writingPhase.currentStage == .bibleChecking
+                && source.checkerTarget == "visible_draft"
+            return V2DeskTaskBanner(
+                kind: .cancelled,
+                tone: .neutral,
+                text: visibleCheck ? "已取消复查，正文没有变化" : "已取消，正文没有变化",
+                action: visibleCheck ? .rerunChecker : .generate
+            )
         }
         if case .failed(let code, let message, let stage) = source.writingPhase {
             if stage == nil {
@@ -708,9 +746,6 @@ enum V2DeskPresentation {
                     action: .refreshTaskStatus,
                     detail: message
                 )
-            }
-            if stage == .extraction || isAccepted {
-                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆没能整理，这一章仍然是完成的", action: .retryArchive, detail: message)
             }
             if stage == .acceptance {
                 let action: V2DeskPrimaryAction?
@@ -729,15 +764,51 @@ enum V2DeskPresentation {
                     detail: message
                 )
             }
-            if needsSettings(code) {
+            if stage == .bibleChecking && needsSettings(code) {
                 return V2DeskTaskBanner(kind: .generationFailed, tone: .danger, text: "模型配置需要处理", action: .openSettings, detail: message)
             }
+            if stage == .bibleChecking && source.checkerTarget == ChapterCheckerTarget.generatedCandidate {
+                if code == "write_running" {
+                    return V2DeskTaskBanner(
+                        kind: .connectionInterrupted, tone: .warning,
+                        text: "已有任务正在进行，尚未重新检查生成稿",
+                        action: .refreshTaskStatus, detail: message
+                    )
+                }
+                if generatedCandidateNeedsFreshWrite(code) {
+                    return V2DeskTaskBanner(
+                        kind: .generationFailed, tone: .warning,
+                        text: "生成稿已不可用，请重新生成",
+                        action: .retryGeneration, detail: message
+                    )
+                }
+            }
             if source.canRetryGeneratedCandidateChecker {
+                let isUnavailable = source.generatedCandidateCheckerUnavailable
+                    || LinoErrorPresenter.isCheckerUnavailable(code)
                 return V2DeskTaskBanner(
                     kind: .generationFailed, tone: .warning,
-                    text: "生成稿没有通过检查，正文没有变化",
+                    text: isUnavailable
+                        ? "检查未能完成，生成稿已保留，当前正文未变"
+                        : "生成稿没有通过检查，正文没有变化",
                     action: .retryGeneratedCandidateChecker, detail: message
                 )
+            }
+            if stage == .bibleChecking && source.checkerTarget == "visible_draft" {
+                let isUnavailable = LinoErrorPresenter.isCheckerUnavailable(code)
+                return V2DeskTaskBanner(
+                    kind: isUnavailable ? .checkerUnavailable : .generationFailed,
+                    tone: .warning,
+                    text: isUnavailable ? "检查未能完成，正文已保留" : "复查发现需要处理的问题，正文已保留",
+                    action: .rerunChecker,
+                    detail: message
+                )
+            }
+            if stage == .extraction || isAccepted {
+                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆没能整理，这一章仍然是完成的", action: .retryArchive, detail: message)
+            }
+            if needsSettings(code) {
+                return V2DeskTaskBanner(kind: .generationFailed, tone: .danger, text: "模型配置需要处理", action: .openSettings, detail: message)
             }
             return V2DeskTaskBanner(
                 kind: .generationFailed,
@@ -801,13 +872,16 @@ enum V2DeskPresentation {
     }
 
     private static func needsSettings(_ code: String?) -> Bool {
+        LinoErrorPresenter.requiresModelSettings(code)
+    }
+
+    private static func generatedCandidateNeedsFreshWrite(_ code: String?) -> Bool {
         [
-            "not_configured",
-            "bad_url",
-            "unauthorized",
-            "llm_profile_not_configured",
-            "llm_profile_missing",
-        ].contains(code) || (code?.hasSuffix("_thinking_not_disableable") == true)
+            "checker_retry_input_changed",
+            "checker_retry_not_available",
+            "checker_source_not_found",
+            "checker_retry_unavailable",
+        ].contains(code)
     }
 
     private static func isUnsaved(_ state: ChapterSaveState) -> Bool {

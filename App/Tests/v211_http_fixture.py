@@ -68,11 +68,13 @@ def job(chapter, phase=None, kind=None):
     if phase == "done" and kind == "write" and chapter["status"] == "writing":
         chapter["status"] = "draft_ready"
     result = dict(chapter_id=chapter["id"], job_id=chapter["id"] + "-job",
-        outcome_current=True, phase=phase, kind=kind,
+        outcome_current=STATE["options"].get("job_outcome_current", True), phase=phase, kind=kind,
         chapter=copy.deepcopy(chapter) if phase == "done" else None,
-        visible_checker_result=STATE["checker"].get(chapter["id"]),
+        visible_checker_result=None if STATE["options"].get("job_without_visible_checker") else STATE["checker"].get(chapter["id"]),
         can_retry_checker=bool(STATE["options"].get("can_retry_checker")),
         checker_source_job_id=chapter["id"] + "-source" if STATE["options"].get("can_retry_checker") else None)
+    if kind == "check":
+        result["checker_target"] = STATE["options"].get("checker_target", "visible_draft")
     if phase == "failed":
         if kind == "check":
             result.update(error_code="checker_failed", error_message="手动检查暂时不可用",
@@ -116,6 +118,10 @@ class Handler(BaseHTTPRequestHandler):
                         if "archive" in item:
                             item["archive"]["error_message"] = payload["archive_message"]
                             item["archive"]["revision_id"] = "new-server-revision"
+                if "remote_draft_text" in payload:
+                    chapter = STATE["chapters"][next(iter(STATE["chapters"]))]
+                    chapter["draft_text"] = payload["remote_draft_text"]
+                    chapter["content_revision"] += 1
                 return self.send(200, STATE)
             if path == "/_test/state":
                 return self.send(200, STATE)
@@ -183,6 +189,8 @@ class Handler(BaseHTTPRequestHandler):
         # Delay outside the lock so tests can navigate or change conditions
         # while the real URLSession request is in flight.
         delay = options.get(action.replace("/", "_") + "_delay", 0)
+        if action == "check/start":
+            delay = options.get("check_delay", delay)
         time.sleep(delay)
         with LOCK:
             if action == "job":
@@ -199,6 +207,50 @@ class Handler(BaseHTTPRequestHandler):
                     "limitations": limitations,
                     "recommended_recovery": recovery,
                 })
+            if action == "check/start":
+                if options.get("check_start_lost"):
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    return
+                if options.get("check_start_reject"):
+                    return self.send(409, {"detail": {
+                        "code": options.get("check_start_reject_code", "not_configured"),
+                        "message": "Checker 模型配置不可用",
+                    }})
+                mode = options.get("check_mode", "passed")
+                if mode in ("minimum_length", "unselected_character", "ambiguous_character"):
+                    return self.send(409, {"detail": {"code": "checker_preflight_failed",
+                        "message": "当前正文未通过确定性校验", "violations": [{"code": mode,
+                        "message": "正文3字，少于最低要求4000字" if mode == "minimum_length" else "人物选择需要修正",
+                        "current_chars": 3, "names": [] if mode == "minimum_length" else ["虚构人物"]}]}})
+                result = dict(verdict="passed", issues=[], draft_fingerprint="test-fingerprint")
+                if options.get("check_context_limitations"):
+                    result["context_limitations"] = options["check_context_limitations"]
+                if options.get("check_identity_issues"):
+                    result["identity_issues"] = options["check_identity_issues"]
+                if mode in ("unavailable", "timeout", "invalid", "legacy"):
+                    code, message = {
+                        "unavailable": ("llm_content_blocked", "上游模型拦截了本次检查请求"),
+                        "timeout": ("llm_timeout", "检查请求超时"),
+                        "invalid": ("checker_failed", "检查模型返回格式无效"),
+                        "legacy": ("checker_failed", "")}[mode]
+                    result = dict(status="unavailable", error_code=code,
+                        error_message=message,
+                        error_context=dict(agent_role="checker", model_name="test-checker",
+                                           block_reason="PROHIBITED_CONTENT", http_status=403))
+                    if mode == "legacy":
+                        result = {"status": "unavailable", "error_code": "checker_failed"}
+                    elif mode != "unavailable":
+                        result["error_context"].pop("block_reason")
+                        result["error_context"].pop("http_status")
+                STATE["checker"][cid] = result
+                if mode in ("unavailable", "timeout", "invalid", "legacy"):
+                    failed = job(chapter, "failed", "check")
+                    failed.update(error_code=result.get("error_code"),
+                                  error_message=result.get("error_message"),
+                                  visible_checker_result=result)
+                    return self.send(200, failed)
+                return self.send(200, job(chapter, "done", "check"))
             if action == "check":
                 mode = options.get("check_mode", "passed")
                 if mode in ("minimum_length", "unselected_character", "ambiguous_character"):
@@ -235,8 +287,8 @@ class Handler(BaseHTTPRequestHandler):
                     response = job(chapter, "failed", "check")
                     options["checker_retry_count"] = options.get("checker_retry_count", 0) + 1
                     response["job_id"] = chapter["id"] + "-retry-" + str(options["checker_retry_count"])
-                    response.update(error_code="checker_invalid_response", error_message="检查结果未通过校验：Checker 未逐项处理程序提供的姓名分组",
-                                    checker_result={"status": "unavailable", "error_code": "checker_invalid_response"})
+                    response.update(error_code=options.get("checker_retry_error_code", "checker_invalid_response"), error_message="检查结果未通过校验：Checker 未逐项处理程序提供的姓名分组",
+                                    checker_result={"status": "unavailable", "error_code": options.get("checker_retry_error_code", "checker_invalid_response")})
                     return self.send(200, response)
                 return self.send(200, job(chapter, "done", "write"))
             if action == "accept":

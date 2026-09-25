@@ -32,13 +32,13 @@ CHECKER_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "hit_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                    "group_id": {"type": "string"},
                     "classification": {"type": "string", "enum": ["character", "ordinary_word", "uncertain"]},
                     "reason": {"type": "string"},
                     "character_id": {"type": "string"},
                 },
                 "required": [
-                    "hit_ids", "classification", "reason",
+                    "group_id", "classification", "reason",
                 ],
                 "additionalProperties": False,
             },

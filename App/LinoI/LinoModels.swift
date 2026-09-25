@@ -47,6 +47,14 @@ enum ConnectionEndpoint {
     }
 }
 
+/// Backend checker-target values are protocol identifiers. Keeping them
+/// outside author-facing V2 presentation code prevents wire terminology from
+/// becoming UI copy while still letting both platforms classify a task.
+enum ChapterCheckerTarget {
+    static let visibleDraft = "visible_draft"
+    static let generatedCandidate = "generated_candidate"
+}
+
 /// Turns the backend's wire timestamp into quiet, author-facing shelf copy.
 /// Only the calendar date is used: older backends return a timezone-less
 /// value, so interpreting the clock portion would create false day changes.
@@ -1432,6 +1440,9 @@ struct WriteJobStatus: Decodable, Sendable {
     /// its evidence remain server-only.
     var canRetryChecker: Bool = false
     var checkerSourceJobId: String? = nil
+    /// Whether a Checker JobRun examines the visible manuscript or a hidden
+    /// generated candidate. Missing is intentionally undecided for old rows.
+    var checkerTarget: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case chapterId = "chapter_id"
@@ -1449,6 +1460,7 @@ struct WriteJobStatus: Decodable, Sendable {
         case visibleCheckerResult = "visible_checker_result"
         case canRetryChecker = "can_retry_checker"
         case checkerSourceJobId = "checker_source_job_id"
+        case checkerTarget = "checker_target"
     }
 
     init(
@@ -1459,7 +1471,7 @@ struct WriteJobStatus: Decodable, Sendable {
         updatedCharacterIds: [String]? = nil, addedEventIds: [String]? = nil,
         memoryContext: MemoryContext? = nil, checkerResult: CheckerResult? = nil,
         visibleCheckerResult: CheckerResult? = nil, canRetryChecker: Bool = false,
-        checkerSourceJobId: String? = nil
+        checkerSourceJobId: String? = nil, checkerTarget: String? = nil
     ) {
         self.chapterId = chapterId; self.jobId = jobId; self.outcomeCurrent = outcomeCurrent
         self.kind = kind; self.phase = phase; self.attempt = attempt; self.errorCode = errorCode
@@ -1467,7 +1479,7 @@ struct WriteJobStatus: Decodable, Sendable {
         self.chapter = chapter; self.updatedCharacterIds = updatedCharacterIds; self.addedEventIds = addedEventIds
         self.memoryContext = memoryContext; self.checkerResult = checkerResult
         self.visibleCheckerResult = visibleCheckerResult; self.canRetryChecker = canRetryChecker
-        self.checkerSourceJobId = checkerSourceJobId
+        self.checkerSourceJobId = checkerSourceJobId; self.checkerTarget = checkerTarget
     }
 
     init(from decoder: Decoder) throws {
@@ -1490,6 +1502,7 @@ struct WriteJobStatus: Decodable, Sendable {
         visibleCheckerResult = try c.decodeIfPresent(CheckerResult.self, forKey: .visibleCheckerResult)
         canRetryChecker = try c.decodeIfPresent(Bool.self, forKey: .canRetryChecker) ?? false
         checkerSourceJobId = try c.decodeIfPresent(String.self, forKey: .checkerSourceJobId)
+        checkerTarget = try c.decodeIfPresent(String.self, forKey: .checkerTarget)
     }
 
     /// Failure details for the backend-only candidate that Checker rejected.
@@ -1509,7 +1522,7 @@ struct WriteJobStatus: Decodable, Sendable {
     /// backend's safe deterministic Extractor rule after automatic correction
     /// is exhausted. Other failures continue through the localized table.
     var specificFailureReason: String? {
-        if ["memory_selection_invalid", "checker_invalid_response"].contains(errorCode ?? ""),
+        if ["memory_selection_invalid"].contains(errorCode ?? ""),
            let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
             return message
         }
@@ -1854,7 +1867,21 @@ enum ChapterJobReconciler {
         case "selecting_memory", "writing", "validating", "checking", "extracting", "revising":
             return .active
         case "done":
-            return hasLocalInputDivergence ? .obsoleteTerminal : .currentTerminal
+            if hasLocalInputDivergence {
+                return .obsoleteTerminal
+            }
+            // A terminal success without the server's currentness proof can
+            // be a prior cross-device result.  Never let it repaint a newer
+            // manuscript or re-authorize it after inputs changed elsewhere.
+            if chapter.status == "finalized",
+               !(["extract", "check"].contains(status.kind) && status.outcomeCurrent == true) {
+                return .obsoleteTerminal
+            }
+            switch status.outcomeCurrent {
+            case true: return .currentTerminal
+            case false: return .obsoleteTerminal
+            case nil: return .unverifiedTerminal
+            }
         case "failed":
             if hasLocalInputDivergence {
                 return .obsoleteTerminal
@@ -2359,6 +2386,17 @@ private struct CachedChapterTaskOutcome: Codable {
     let validationReason: String?
     let pendingExemptionNames: [String]?
     let jobID: String?
+    /// The target is persisted only for an explicit visible-prose Checker
+    /// task.  Cache recovery must never infer it from the job kind.
+    let checkerTarget: String?
+    /// A configuration refusal can happen before the server creates a JobRun.
+    /// This marker prevents an older terminal JobRun from overwriting the
+    /// newer local recovery instruction after refresh or cold load.
+    let isPreJobCheckerFailure: Bool?
+    let supersededJobID: String?
+    /// Retry may fail while resolving configuration before it creates a new
+    /// JobRun, so this opaque server handle must survive the local recovery.
+    let candidateCheckerRetrySourceJobID: String?
 }
 
 struct ChapterTaskOutcome: Equatable, Sendable {
@@ -2366,6 +2404,10 @@ struct ChapterTaskOutcome: Equatable, Sendable {
     let validationReason: String?
     let pendingExemptionNames: [String]
     let jobID: String?
+    let checkerTarget: String?
+    let isPreJobCheckerFailure: Bool
+    let supersededJobID: String?
+    let candidateCheckerRetrySourceJobID: String?
 }
 
 /// Keeps an unsuccessful task explanation available after a client restart.
@@ -2375,7 +2417,7 @@ struct ChapterTaskOutcome: Equatable, Sendable {
 /// plus already-safe presentation details.
 enum ChapterTaskOutcomeStore {
     private static let keyPrefix = "linoi.chapter-task-outcome"
-    private static let currentFormatVersion = 2
+    private static let currentFormatVersion = 3
 
     static func load(
         chapter: Chapter,
@@ -2392,12 +2434,13 @@ enum ChapterTaskOutcomeStore {
             return nil
         }
         let stage = record.stageRawValue.flatMap(ChapterGenerationStage.init(rawValue:))
-        // A finalized chapter already carries the current archive attention
-        // returned by the server. The local record has no authoritative job
-        // identity to compare with a retry started on another device, so even
-        // an Extractor failure could replace a newer server reason. Discard
-        // every finalized cache record and present `chapter.archive` instead.
-        if chapter.status == "finalized" {
+        // Finalized chapters normally present server archive state.  The one
+        // exception is a failed visible-prose Checker task: it neither alters
+        // the archive nor the accepted prose, and losing its explicit target
+        // would turn its recovery action into “start next chapter”.
+        let isVisibleCheckerFailure = record.checkerTarget == "visible_draft"
+            && stage == .bibleChecking
+        if chapter.status == "finalized" && !isVisibleCheckerFailure {
             clear(chapterID: chapter.id, defaults: defaults)
             return nil
         }
@@ -2412,7 +2455,11 @@ enum ChapterTaskOutcomeStore {
             phase: phase,
             validationReason: record.validationReason,
             pendingExemptionNames: record.pendingExemptionNames ?? [],
-            jobID: record.jobID
+            jobID: record.jobID,
+            checkerTarget: record.checkerTarget,
+            isPreJobCheckerFailure: record.isPreJobCheckerFailure ?? false,
+            supersededJobID: record.supersededJobID,
+            candidateCheckerRetrySourceJobID: record.candidateCheckerRetrySourceJobID
         )
     }
 
@@ -2422,6 +2469,10 @@ enum ChapterTaskOutcomeStore {
         validationReason: String? = nil,
         pendingExemptionNames: [String] = [],
         jobID: String? = nil,
+        checkerTarget: String? = nil,
+        isPreJobCheckerFailure: Bool = false,
+        supersededJobID: String? = nil,
+        candidateCheckerRetrySourceJobID: String? = nil,
         defaults: UserDefaults? = nil
     ) {
         let defaults = defaults ?? DebugRuntimeConfiguration.defaults ?? .standard
@@ -2438,7 +2489,11 @@ enum ChapterTaskOutcomeStore {
                 stageRawValue: stage?.rawValue,
                 validationReason: validationReason,
                 pendingExemptionNames: pendingExemptionNames,
-                jobID: jobID
+                jobID: jobID,
+                checkerTarget: checkerTarget,
+                isPreJobCheckerFailure: isPreJobCheckerFailure,
+                supersededJobID: supersededJobID,
+                candidateCheckerRetrySourceJobID: candidateCheckerRetrySourceJobID
             )
         case .cancelled(let message, let stage):
             record = CachedChapterTaskOutcome(
@@ -2451,7 +2506,11 @@ enum ChapterTaskOutcomeStore {
                 stageRawValue: stage?.rawValue,
                 validationReason: validationReason,
                 pendingExemptionNames: pendingExemptionNames,
-                jobID: jobID
+                jobID: jobID,
+                checkerTarget: checkerTarget,
+                isPreJobCheckerFailure: isPreJobCheckerFailure,
+                supersededJobID: supersededJobID,
+                candidateCheckerRetrySourceJobID: candidateCheckerRetrySourceJobID
             )
         default:
             return

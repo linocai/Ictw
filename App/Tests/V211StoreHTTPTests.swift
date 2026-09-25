@@ -94,6 +94,9 @@ private final class Harness {
             connectionInterrupted: editor.pollingConnectionInterrupted,
             taskMonitoringMessage: editor.taskMonitoringMessage,
             preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
+            canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
+                generatedCandidateCheckerUnavailable: editor.failedCandidateCheckerResult?.status == "unavailable",
+            checkerTarget: editor.checkerTarget,
             isLastChapterInBook: false
         ))
     }
@@ -131,6 +134,11 @@ private struct V211StoreHTTPTests {
             ("F4 late unavailable survives chapter switch", lateChecker),
             ("F4 late unavailable survives local edit", editedChecker),
             ("F4 timeout, invalid response and legacy unavailable remain actionable", checkerFailureShapes),
+            ("Build64 Checker configuration failure opens settings and survives reload", checkerConfigurationStartFailure),
+            ("Build64 hidden Checker configuration failure keeps its newer local recovery", hiddenCheckerConfigurationStartFailure),
+            ("Build64 unknown Checker start does not adopt an older terminal job", unknownCheckerStartStaysUnconfirmed),
+            ("Build64 obsolete remote Checker outcome clears old evidence", obsoleteRemoteCheckerClearsEvidence),
+            ("Build64 remote input invalidates Checker evidence before a failed job read", remoteInputInvalidatesCheckerBeforeJobRead),
             ("F5 safe preflight reasons and override boundary", preflight),
             ("F5 accept preflight preserves explicit length-only choice", acceptPreflight),
             ("v2.2 passed short draft requires its own acceptance confirmation", shortDraftAcceptanceConfirmation),
@@ -431,7 +439,7 @@ private struct V211StoreHTTPTests {
     @MainActor static func lateChecker() async throws {
         let h = try await Harness("latecheck", ["check_mode": "unavailable", "check_delay": 0.25])
         let task = Task { await h.editor.rerunChecker() }
-        try await eventually("check begins") { try await fixture().requests.contains { $0.path.hasSuffix("/check") } }
+        try await eventually("check begins") { try await fixture().requests.contains { $0.path.hasSuffix("/check/start") } }
         await h.load(1)
         _ = await task.value
         try check(h.editor.currentChapter?.id == h.chapters[1].id && h.editor.checkerResult == nil, "old failure must not contaminate new chapter")
@@ -441,7 +449,7 @@ private struct V211StoreHTTPTests {
     @MainActor static func editedChecker() async throws {
         let h = try await Harness("editcheck", ["check_mode": "unavailable", "check_delay": 0.25])
         let task = Task { await h.editor.rerunChecker() }
-        try await eventually("check begins") { try await fixture().requests.contains { $0.path.hasSuffix("/check") } }
+        try await eventually("check begins") { try await fixture().requests.contains { $0.path.hasSuffix("/check/start") } }
         h.editor.editString(\.draftText, value: "本次新修改")
         _ = await task.value
         try check(h.editor.currentChapter?.draftText == "本次新修改" && !h.editor.checkerAppliesToVisibleDraft, "late check cannot authorize edited prose")
@@ -449,16 +457,138 @@ private struct V211StoreHTTPTests {
     }
 
     @MainActor static func checkerFailureShapes() async throws {
-        for (mode, expected) in [("timeout", "超时"), ("invalid", "格式无效"), ("legacy", "检查")] {
+        for (mode, expected) in [("timeout", "超时"), ("invalid", "尚未得到可用结论"), ("legacy", "尚未得到可用结论")] {
             let h = try await Harness("checkshape", ["check_mode": mode])
             _ = await h.editor.rerunChecker()
             try check(h.editor.checkerResult?.hasConcreteVerdict == false, "unavailable cannot become an effective verdict")
             try check(h.notices.history.contains { $0.message.contains(expected) && $0.tone == .error }, "each unavailable shape needs a safe error notice")
+            if mode == "invalid" {
+                try check(!h.notices.history.contains { $0.message.contains("格式无效") }, "Checker protocol details must not leak into author notices")
+            }
             try check(h.snapshot().primaryAction == .rerunChecker, "failed check must offer recheck, never normal acceptance")
             _ = try await fixture("config", ["check_mode": "passed"])
             _ = await h.editor.rerunChecker()
             try check(h.snapshot().primaryAction == .accept, "fresh successful recheck must recover")
         }
+    }
+
+    @MainActor static func checkerConfigurationStartFailure() async throws {
+        let h = try await Harness("checker-config-start", [
+            "job_kind": "check", "job_phase": "failed",
+        ])
+        // First record the durable old check identity, then make this new
+        // start fail before the server can create another JobRun. Its old
+        // terminal row turns obsolete on a later foreground read.
+        _ = try await fixture("config", [
+            "check_start_reject": true,
+            "check_start_reject_code": "api_key_undecryptable",
+            "job_outcome_current": false,
+        ])
+        _ = await h.editor.rerunChecker()
+        guard case let .failed(code, _, .bibleChecking) = h.editor.writingPhase else {
+            throw HTTPTestFailure(description: "a Checker configuration refusal before JobRun must persist Checker-stage failure")
+        }
+        try check(code == "api_key_undecryptable", "configuration refusal must retain the stable backend code")
+        try check(h.editor.checkerTarget == "visible_draft", "pre-JobRun manual Checker failure must retain its visible-draft target")
+        try check(h.snapshot().primaryAction == .openSettings, "manual Checker configuration failure must lead to settings")
+        await h.editor.refreshActiveJobIfNeeded()
+        try check(h.snapshot().primaryAction == .openSettings, "foreground reconciliation must not discard a newer local Checker configuration recovery")
+        _ = await h.editor.refreshTaskStatus()
+        try check(h.snapshot().primaryAction == .openSettings, "foreground refresh must not let an older failed Checker job overwrite the newer configuration recovery")
+        let requests = try await fixture().requests
+        try check(requests.filter { $0.path.hasSuffix("/check/start") }.count == 1, "configuration failure must never repeat the Checker POST")
+
+        await h.load(0)
+        guard case let .failed(restoredCode, _, .bibleChecking) = h.editor.writingPhase else {
+            throw HTTPTestFailure(description: "configuration failure must survive a cold load as a visible Checker task")
+        }
+        try check(restoredCode == "api_key_undecryptable" && h.editor.checkerTarget == "visible_draft", "cold load must retain the Checker configuration recovery target")
+        try check(h.snapshot().primaryAction == .openSettings, "cold-loaded Checker configuration failure must still open settings")
+    }
+
+    @MainActor static func unknownCheckerStartStaysUnconfirmed() async throws {
+        let h = try await Harness("checker-start-lost", [
+            "job_kind": "check", "job_phase": "failed", "check_start_lost": true,
+        ])
+        _ = await h.editor.rerunChecker()
+        guard case let .failed(code, _, nil) = h.editor.writingPhase else {
+            throw HTTPTestFailure(description: "lost Checker start must remain an unconfirmed start, not an old terminal job")
+        }
+        try check(code == "checker_start_unconfirmed" && h.editor.checkerTarget == "visible_draft", "unconfirmed start must retain its visible Checker target")
+        try check(h.snapshot().primaryAction == .refreshTaskStatus, "unconfirmed start must offer only read-only task refresh")
+        _ = await h.editor.refreshTaskStatus()
+        guard case let .failed(refreshedCode, _, nil) = h.editor.writingPhase else {
+            throw HTTPTestFailure(description: "refresh must not adopt a pre-existing terminal Checker job as this request")
+        }
+        try check(refreshedCode == "checker_start_unconfirmed", "refresh must preserve the unconfirmed start state")
+        await h.load(0)
+        guard case let .failed(reloadedCode, _, nil) = h.editor.writingPhase else {
+            throw HTTPTestFailure(description: "cold load must preserve the unconfirmed start state")
+        }
+        try check(reloadedCode == "checker_start_unconfirmed" && h.snapshot().primaryAction == .refreshTaskStatus, "cold load must not turn the old terminal job into a result for the lost POST")
+        let requests = try await fixture().requests
+        try check(requests.filter { $0.path.hasSuffix("/check/start") }.count == 1, "unconfirmed start recovery must never repeat the POST")
+    }
+
+    @MainActor static func hiddenCheckerConfigurationStartFailure() async throws {
+        let h = try await Harness("hidden-checker-config-start", [
+            "job_kind": "check", "job_phase": "failed",
+            "checker_target": "generated_candidate", "can_retry_checker": true,
+            "checker_retry_reject": true,
+            "checker_retry_reject_code": "api_key_undecryptable",
+        ])
+        try await eventually("hidden retry source before configuration refusal") {
+            h.editor.candidateCheckerRetrySourceJobID != nil
+        }
+        _ = await h.editor.retryGeneratedCandidateChecker()
+        guard case let .failed(code, _, .bibleChecking) = h.editor.writingPhase else {
+            throw HTTPTestFailure(description: "a hidden Checker configuration refusal must keep Checker-stage recovery")
+        }
+        try check(code == "api_key_undecryptable", "hidden configuration refusal must retain the backend code")
+        try check(h.snapshot().primaryAction == .openSettings, "hidden configuration refusal must lead to settings")
+        try check(h.editor.candidateCheckerRetrySourceJobID != nil, "configuration refusal must retain the private retry handle")
+        _ = await h.editor.refreshTaskStatus()
+        try check(h.snapshot().primaryAction == .openSettings, "foreground refresh must not restore the older hidden terminal result")
+        await h.load(0)
+        guard case let .failed(reloadedCode, _, .bibleChecking) = h.editor.writingPhase else {
+            throw HTTPTestFailure(description: "hidden configuration recovery must survive a cold load")
+        }
+        try check(reloadedCode == "api_key_undecryptable" && h.snapshot().primaryAction == .openSettings, "cold load must retain hidden Checker configuration recovery")
+        try check(h.editor.candidateCheckerRetrySourceJobID != nil, "cold load must retain the private retry handle")
+        let requests = try await fixture().requests
+        try check(requests.filter { $0.path.hasSuffix("/checker/retry") }.count == 1, "hidden configuration recovery must never repeat its POST")
+    }
+
+    @MainActor static func obsoleteRemoteCheckerClearsEvidence() async throws {
+        let h = try await Harness("obsolete-visible-check")
+        _ = await h.editor.rerunChecker()
+        try check(h.editor.checkerAppliesToVisibleDraft && h.editor.checkerResult?.isPassed == true, "fixture must establish current visible Checker evidence")
+
+        _ = try await fixture("config", [
+            "remote_draft_text": "另一台设备已更新的正文。",
+            "job_kind": "check",
+            "job_phase": "done",
+            "job_outcome_current": false,
+        ])
+        _ = await h.editor.refreshTaskStatus()
+        try check(h.editor.currentChapter?.draftText == "另一台设备已更新的正文。", "refresh must accept the remote chapter before reconciling its stale job")
+        try check(h.editor.checkerResult == nil && !h.editor.checkerAppliesToVisibleDraft, "obsolete terminal Checker status must clear the old pass instead of leaving it on remote prose")
+        try check(h.editor.checkerTarget == nil && h.editor.candidateCheckerRetrySourceJobID == nil, "obsolete terminal Checker status must also clear recovery handles")
+        try check(h.snapshot().primaryAction == .rerunChecker, "remote replacement with an obsolete check result must require a fresh visible recheck")
+    }
+
+    @MainActor static func remoteInputInvalidatesCheckerBeforeJobRead() async throws {
+        let h = try await Harness("remote-input-job-down")
+        _ = await h.editor.rerunChecker()
+        try check(h.editor.checkerAppliesToVisibleDraft && h.snapshot().primaryAction == .accept, "fixture must establish a current pass before the remote replacement")
+        _ = try await fixture("config", [
+            "remote_draft_text": "远端已替换正文。",
+            "job_status": 503,
+        ])
+        _ = await h.editor.refreshTaskStatus()
+        try check(h.editor.currentChapter?.draftText == "远端已替换正文。", "successful chapter refresh must expose authoritative remote prose")
+        try check(h.editor.checkerResult == nil && !h.editor.checkerAppliesToVisibleDraft, "remote input replacement must clear old Checker evidence even when /job fails")
+        try check(h.snapshot().primaryAction == .rerunChecker, "old pass cannot keep accept enabled after remote prose replacement")
     }
 
     @MainActor static func preflight() async throws {
@@ -535,7 +665,7 @@ private struct V211StoreHTTPTests {
         _ = await h.editor.rerunChecker()
         let before = try await fixture().requests
         try check(h.editor.pendingProductionContext?.action == .check, "incomplete history must require a visible check confirmation")
-        try check(!before.contains { $0.path.hasSuffix("/check") }, "history warning must not silently start Checker")
+        try check(!before.contains { $0.path.hasSuffix("/check/start") }, "history warning must not silently start Checker")
         guard let capturedConfirmation = h.editor.pendingProductionContext else {
             throw HTTPTestFailure(description: "missing history confirmation")
         }
@@ -544,7 +674,7 @@ private struct V211StoreHTTPTests {
         h.editor.dismissProductionContextConfirmation()
         _ = await h.editor.confirmProductionContextAndContinue(capturedConfirmation)
         let after = try await fixture().requests
-        guard let checkEvent = after.last(where: { $0.path.hasSuffix("/check") }) else {
+        guard let checkEvent = after.last(where: { $0.path.hasSuffix("/check/start") }) else {
             throw HTTPTestFailure(description: "confirmed history context must start the requested check")
         }
         let body = try JSONSerialization.jsonObject(with: Data(checkEvent.bodyText.utf8)) as? [String: Any]
@@ -611,13 +741,26 @@ private struct V211StoreHTTPTests {
                 guard case .failed(_, _, .bibleChecking) = h.editor.writingPhase else {
                     throw HTTPTestFailure(description: "manual check failure must name the Checker stage")
                 }
+                try check(h.snapshot().primaryAction == .rerunChecker, "failed manual Checker must restore a recheck action instead of Writer generation")
             }
             if phase == "cancelled" {
                 guard case .cancelled(_, .bibleChecking) = h.editor.writingPhase else {
                     throw HTTPTestFailure(description: "manual check cancellation must name the Checker stage")
                 }
+                try check(h.snapshot().primaryAction == .rerunChecker, "cancelled manual Checker must restore a recheck action instead of Writer generation")
+                try check(h.snapshot().taskBanner?.action == .rerunChecker, "cancelled manual Checker banner must restore the same recheck action")
             }
         }
+
+        let missingProjection = try await Harness("manual-check-no-projection", [
+            "job_kind": "check", "job_phase": "idle",
+        ])
+        _ = await missingProjection.editor.rerunChecker()
+        try check(missingProjection.editor.checkerAppliesToVisibleDraft, "fixture must first establish current visible Checker evidence")
+        _ = try await fixture("config", ["job_kind": "check", "job_phase": "done", "job_without_visible_checker": true])
+        await missingProjection.load(0)
+        try check(!missingProjection.editor.checkerAppliesToVisibleDraft && missingProjection.editor.checkerResult == nil, "a current done check without visible evidence must clear an old pass badge")
+        try check(missingProjection.snapshot().primaryAction == .rerunChecker, "a done check without a visible result must require a fresh recheck")
     }
 
     @MainActor static func extractorJobKeepsVisibleChecker() async throws {
@@ -674,7 +817,7 @@ private struct V211StoreHTTPTests {
         let after = try await fixture().requests
         let newRequests = after.dropFirst(before.count)
         try check(newRequests.contains { $0.path.hasSuffix("/checker/retry") }, "retry must use candidate-only endpoint")
-        try check(!newRequests.contains { $0.path.hasSuffix("/write") || $0.path.hasSuffix("/check") }, "candidate retry must not start Writer or recheck visible draft")
+        try check(!newRequests.contains { $0.path.hasSuffix("/write") || $0.path.hasSuffix("/check/start") }, "candidate retry must not start Writer or recheck visible draft")
         guard let retry = newRequests.last(where: { $0.path.hasSuffix("/checker/retry") }) else {
             throw HTTPTestFailure(description: "candidate retry request missing")
         }
@@ -690,7 +833,8 @@ private struct V211StoreHTTPTests {
             _ = await repeated.editor.retryGeneratedCandidateChecker()
             try check(repeated.editor.candidateCheckerRetrySourceJobID == repeated.chapters[0].id + "-source", "failed check retry must retain Writer source for another retry")
             try check(!repeated.editor.checkerAppliesToVisibleDraft && repeated.editor.checkerResult == nil, "hidden check result must never become visible manuscript evidence")
-            try check(repeated.notices.history.contains { $0.message.contains("姓名分组") }, "precise checker validation reason must reach notifications")
+            try check(repeated.notices.history.contains { $0.message.contains("尚未得到可用结论") }, "candidate Checker protocol failure must offer a safe recovery reason")
+            try check(!repeated.notices.history.contains { $0.message.contains("姓名分组") }, "candidate Checker protocol diagnostics must remain private")
         }
         let repeatRequests = try await fixture().requests
         try check(repeatRequests.filter { $0.path.hasSuffix("/checker/retry") }.count == 2, "both retries must reach only the candidate checker endpoint")
@@ -709,6 +853,26 @@ private struct V211StoreHTTPTests {
                 try check(expired.snapshot().primaryAction == .retryGeneration, "expired source must recover through a fresh generation action")
             }
         }
+
+        let retryStartFailure = try await Harness("candidate-retry-start-failure", [
+            "writing": true, "job_checker_rejected": true, "can_retry_checker": true,
+            "checker_retry_failure": true,
+            "checker_retry_error_code": "checker_retry_start_failed",
+        ])
+        try await eventually("retry-start source available") { retryStartFailure.editor.candidateCheckerRetrySourceJobID != nil }
+        _ = await retryStartFailure.editor.retryGeneratedCandidateChecker()
+        try check(retryStartFailure.snapshot().taskBanner?.text == "检查未能完成，生成稿已保留，当前正文未变", "retry start failure must be unavailable, never a rejected generated draft")
+        try check(retryStartFailure.snapshot().primaryAction == .retryGeneratedCandidateChecker, "retry start failure must keep the generated-candidate retry action")
+
+        let retryExecutionFailure = try await Harness("candidate-retry-execution-failure", [
+            "writing": true, "job_checker_rejected": true, "can_retry_checker": true,
+            "checker_retry_failure": true,
+            "checker_retry_error_code": "checker_retry_failed",
+        ])
+        try await eventually("retry-execution source available") { retryExecutionFailure.editor.candidateCheckerRetrySourceJobID != nil }
+        _ = await retryExecutionFailure.editor.retryGeneratedCandidateChecker()
+        try check(retryExecutionFailure.snapshot().taskBanner?.text == "检查未能完成，生成稿已保留，当前正文未变", "structured unavailable Checker result must outrank an execution error code")
+        try check(retryExecutionFailure.snapshot().primaryAction == .retryGeneratedCandidateChecker, "unavailable candidate retry execution must remain a candidate-only retry")
 
         let dirty = try await Harness("candidate-dirty", [
             "writing": true, "job_checker_rejected": true, "can_retry_checker": true,

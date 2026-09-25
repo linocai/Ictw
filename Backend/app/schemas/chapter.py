@@ -293,3 +293,4 @@ class WriteJobStatus(BaseModel):
     visible_checker_result: dict | None = None
     can_retry_checker: bool = False
     checker_source_job_id: str | None = None
+    checker_target: str | None = None

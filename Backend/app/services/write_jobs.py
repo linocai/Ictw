@@ -45,10 +45,17 @@ from app.services.archive_v2 import (
     validate_archive_output,
 )
 from app.services.content_revisions import bump_content_revision
-from app.services.checker_validation import CheckerValidationError, checker_failure_message, validate_checker_result
+from app.services.checker_validation import (
+    CheckerValidationError,
+    checker_failure_diagnostics,
+    checker_failure_message,
+    validate_checker_result,
+)
 from app.services.production_context import (
     bind_selected_candidate_draft,
     is_frozen_input_current,
+    ProductionInputChanged,
+    is_frozen_selector_input_current,
     prepare_selected_write_input,
 )
 from app.services.search_index import rebuild_book_search_index
@@ -95,6 +102,7 @@ class WriteJob:
         checker_draft_text: str = "",
         checker_draft_fingerprint: str = "",
         checker_user_message: str = "",
+        selector_input_snapshot: dict[str, Any] | None = None,
     ) -> None:
         self.chapter_id = chapter_id
         self.job_id = job_id
@@ -119,6 +127,7 @@ class WriteJob:
         self.checker_draft_text = checker_draft_text
         self.checker_draft_fingerprint = checker_draft_fingerprint
         self.checker_user_message = checker_user_message
+        self.selector_input_snapshot = selector_input_snapshot or {}
         self.cancel_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.discard_on_cancel = False
@@ -539,7 +548,7 @@ def _valid_checker_result(raw: Any, fingerprint: str, *, bible_required: bool = 
 
 
 def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
-    """Recheck one retained Writer candidate without repeating selection/write.
+    """Run one frozen Checker attempt without repeating Writer/Selector work.
 
     The route has already persisted the immutable check attempt and constructed
     the prompt.  This worker therefore owns no ORM object while the Checker
@@ -548,6 +557,7 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     """
     snapshot = job.checker_snapshot
     fingerprint = job.checker_draft_fingerprint
+    visible_draft = snapshot.get("draft", {}).get("source") == "chapter"
     try:
         assert job.checker is not None
         result = _checked_call(job, sf, job.checker_user_message, snapshot)
@@ -566,6 +576,7 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             "check_attempt_id": job.job_id, "error_code": "checker_invalid_response",
             "error_message": checker_failure_message(exc),
             "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or "")},
+            "_validation_diagnostics": checker_failure_diagnostics(exc),
         }
 
     # Result payloads are also consumed directly by the job read-model.  Use
@@ -593,10 +604,12 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
 
             current = (
                 run.phase == "checking"
+                and (visible_draft or chapter.status != "finalized")
                 and candidate.latest_checker_attempt_id == job.job_id
                 and candidate.checker_input_fingerprint == snapshot.get("input_fingerprint")
                 and candidate.checker_input_snapshot == snapshot
                 and hashlib.sha256(candidate.draft_text.encode()).hexdigest() == snapshot.get("draft", {}).get("sha256")
+                and run.chapter_write_generation == chapter.write_generation
                 and is_frozen_input_current(db, chapter, snapshot)
             )
             if not current:
@@ -610,6 +623,20 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
 
             candidate.checker_result = result
             if result.get("verdict") == "passed":
+                if visible_draft:
+                    # A manual reread is informational.  It never changes
+                    # accepted/finalized state, revision, search index, or
+                    # the current prose, even if that prose first originated
+                    # from a Writer candidate.
+                    _apply_job_phase(
+                        db, job.job_id, "done", checker_result=result,
+                        draft_fingerprint=fingerprint, input_snapshot=snapshot,
+                        input_fingerprint=snapshot.get("input_fingerprint"),
+                        context_limitations=snapshot.get("context_limitations"),
+                    )
+                    db.commit()
+                    job.mark_terminal("done")
+                    return
                 promoted = db.execute(
                     update(Chapter)
                     .where(Chapter.id == chapter.id, Chapter.write_generation == run.chapter_write_generation)
@@ -644,10 +671,21 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 item.get("reason", "").strip() for item in result.get("issues", [])
                 if isinstance(item, dict) and isinstance(item.get("reason"), str) and item.get("reason", "").strip()
             ]
-            message = result.get("error_message") or (
-                f"Checker 未通过：{'；'.join(reasons)}；失败稿已后台留档，未替换当前正文"
-                if reasons else "Checker 未通过；失败稿已后台留档，未替换当前正文"
-            )
+            if result.get("status") == "unavailable":
+                message = result.get("error_message") or (
+                    "检查未能完成，正文已保留，可重新复查"
+                    if visible_draft else "检查未能完成，生成稿已保留，当前正文未变；可重试检查"
+                )
+            elif visible_draft:
+                message = result.get("error_message") or (
+                    f"Checker 发现需要处理的问题：{'；'.join(reasons)}；正文已保留"
+                    if reasons else "检查未能完成；正文已保留，可重新复查"
+                )
+            else:
+                message = result.get("error_message") or (
+                    f"Checker 未通过：{'；'.join(reasons)}；失败稿已后台留档，未替换当前正文"
+                    if reasons else "Checker 未通过；失败稿已后台留档，未替换当前正文"
+                )
             _apply_job_phase(
                 db, job.job_id, "failed", checker_result=result,
                 draft_fingerprint=fingerprint, input_snapshot=snapshot,
@@ -661,7 +699,30 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             job.mark_terminal("failed")
         except Exception:
             db.rollback()
-            record_job_phase(sf, job.job_id, "failed", error_code="checker_retry_failed", error_message="Checker 重试执行失败")
+            # Persistence/execution failed after a valid private candidate was
+            # already admitted. Keep an explicit unavailable Checker result so
+            # the read model offers candidate-only retry instead of claiming
+            # that story content was rejected.
+            unavailable = {
+                "status": "unavailable",
+                "draft_fingerprint": fingerprint,
+                "input_fingerprint": snapshot.get("input_fingerprint", ""),
+                "check_attempt_id": job.job_id,
+                "error_code": "checker_retry_failed",
+                "error_message": "检查未能完成，生成稿已保留，当前正文未变；可重试检查",
+                "error_context": {"agent_role": "checker"},
+            }
+            record_job_phase(
+                sf, job.job_id, "failed",
+                checker_result=unavailable,
+                draft_fingerprint=fingerprint,
+                input_snapshot=snapshot,
+                input_fingerprint=snapshot.get("input_fingerprint"),
+                context_limitations=snapshot.get("context_limitations"),
+                error_code="checker_retry_failed",
+                error_message="检查未能完成，生成稿已保留，当前正文未变；可重试检查",
+                error_context={"agent_role": "checker"},
+            )
             job.mark_terminal("failed")
             return False
         finally:
@@ -754,6 +815,18 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             _mark_chapter_changed(sf, job)
             job.mark_terminal("cancelled")
             return
+        if job.memory_selector and not is_frozen_selector_input_current(
+            db, chapter, job.selector_input_snapshot,
+        ):
+            if not _restore_baseline(
+                db, job, phase="failed", error_code="production_input_changed",
+                error_message="生成前参考资料已变化，原正文已保留；请重新生成",
+            ):
+                _mark_chapter_changed(sf, job)
+                job.mark_terminal("cancelled")
+                return
+            job.mark_terminal("failed")
+            return
         if _should_stop(job):
             if not _restore_baseline(
                 db, job, phase="cancelled", error_code="write_cancelled", error_message="写作任务已取消"
@@ -763,9 +836,21 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         # Freeze every source that will constrain Writer before it is called.
         # Binding the private candidate text later is a pure JSON operation;
         # it must never reread history/projection after the model has started.
-        prepared_checker_snapshot = prepare_selected_write_input(
-            db, chapter, memory_manifest=manifest
-        )
+        try:
+            prepared_checker_snapshot = prepare_selected_write_input(
+                db, chapter, memory_manifest=manifest,
+                selector_candidates=job.memory_candidates,
+            )
+        except ProductionInputChanged:
+            if not _restore_baseline(
+                db, job, phase="failed", error_code="production_input_changed",
+                error_message="生成前参考资料已变化，原正文已保留；请重新生成",
+            ):
+                _mark_chapter_changed(sf, job)
+                job.mark_terminal("cancelled")
+                return
+            job.mark_terminal("failed")
+            return
         reference_context = prepared_checker_snapshot["reference_context"]
         message = writer_user_message(
             chapter.book, chapter, bible=job.bible_snapshot, reference_context=reference_context,
@@ -879,6 +964,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 "error_code": "checker_invalid_response",
                 "error_message": checker_failure_message(exc),
                 "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or "")},
+                "_validation_diagnostics": checker_failure_diagnostics(exc),
             }
         checker_result["context_limitations"] = _public_context_limitations(
             checker_snapshot.get("context_limitations")
@@ -967,9 +1053,12 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 for item in checker_result.get("issues", [])
                 if isinstance(item, dict) and isinstance(item.get("reason"), str) and item.get("reason", "").strip()
             ]
-            default_message = "Checker 未通过；失败稿已后台留档，未替换当前正文"
-            if issue_reasons:
-                default_message = f"Checker 未通过：{'；'.join(issue_reasons)}；失败稿已后台留档，未替换当前正文"
+            if checker_result.get("status") == "unavailable":
+                default_message = "检查未能完成，生成稿已保留，当前正文未变；可重试检查"
+            else:
+                default_message = "Checker 未通过；失败稿已后台留档，未替换当前正文"
+                if issue_reasons:
+                    default_message = f"Checker 未通过：{'；'.join(issue_reasons)}；失败稿已后台留档，未替换当前正文"
             error_message = checker_result.get("error_message") or default_message
             error_context = checker_result.get("error_context") or {"agent_role": "checker"}
 

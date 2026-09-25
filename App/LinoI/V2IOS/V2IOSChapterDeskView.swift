@@ -77,6 +77,7 @@ struct V2IOSChapterReaderView: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var isMoving = false
+    @State private var showingSettings = false
 
     let summary: ChapterSummary
     let resolvedChapter: Chapter
@@ -86,7 +87,10 @@ struct V2IOSChapterReaderView: View {
             if let banner = snapshot.taskBanner {
                 V2IOSTaskBanner(
                     banner: banner,
-                    primaryAction: snapshot.primaryAction,
+                    // Reader has no task primary dock. Keep the recovery
+                    // action visible in its banner instead of suppressing it
+                    // merely because the shared snapshot calls it primary.
+                    primaryAction: .none,
                     perform: performReaderAction,
                     networkActionsAvailable: sync.networkActionsAvailable
                 )
@@ -122,6 +126,12 @@ struct V2IOSChapterReaderView: View {
             isAccepted: chapter.status == "finalized",
             onSave: nil
         )
+        .sheet(isPresented: $showingSettings) {
+            V2IOSSettingsView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        }
     }
 
     private var chapter: Chapter {
@@ -145,6 +155,8 @@ struct V2IOSChapterReaderView: View {
                 taskMonitoringMessage: editor.taskMonitoringMessage,
                 preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
                 canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
+                generatedCandidateCheckerUnavailable: editor.failedCandidateCheckerResult?.status == "unavailable",
+                checkerTarget: editor.checkerTarget,
                 isLastChapterInBook: V2DeskChapterPosition.isLastChapter(chapter.id, in: workspace.chapters)
             )
         ).commands
@@ -164,6 +176,8 @@ struct V2IOSChapterReaderView: View {
                 taskMonitoringMessage: editor.taskMonitoringMessage,
                 preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
                 canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
+                generatedCandidateCheckerUnavailable: editor.failedCandidateCheckerResult?.status == "unavailable",
+                checkerTarget: editor.checkerTarget,
                 isLastChapterInBook: V2DeskChapterPosition.isLastChapter(chapter.id, in: workspace.chapters)
             )
         )
@@ -171,10 +185,16 @@ struct V2IOSChapterReaderView: View {
 
     private func performReaderAction(_ action: V2DeskPrimaryAction) {
         switch action {
+        case .rerunChecker:
+            Task { _ = await editor.rerunChecker() }
+        case .retryGeneratedCandidateChecker:
+            Task { if let chapter = await editor.retryGeneratedCandidateChecker() { workspace.upsert(chapter) } }
         case .retryArchive:
             Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
         case .refreshTaskStatus:
             Task { if let chapter = await editor.refreshTaskStatus() { workspace.upsert(chapter) } }
+        case .openSettings:
+            showingSettings = true
         default:
             break
         }
@@ -393,6 +413,8 @@ struct V2IOSChapterDeskView: View {
             taskMonitoringMessage: editor.taskMonitoringMessage,
             preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
             canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
+                generatedCandidateCheckerUnavailable: editor.failedCandidateCheckerResult?.status == "unavailable",
+            checkerTarget: editor.checkerTarget,
             isLastChapterInBook: V2DeskChapterPosition.isLastChapter(editor.currentChapter?.id, in: workspace.chapters)
         )
     }
@@ -420,7 +442,7 @@ struct V2IOSChapterDeskView: View {
     }
 
     private func tapPrimary(_ action: V2DeskPrimaryAction) {
-        guard sync.networkActionsAvailable else { return }
+        guard !action.requiresNetwork || sync.networkActionsAvailable else { return }
         switch action {
         case .generate, .retryGeneration: Task { if let chapter = await editor.generate() { workspace.upsert(chapter) } }
         case .cancelGeneration: Task { if let chapter = await editor.cancelWriting() { workspace.upsert(chapter) } }
@@ -673,7 +695,7 @@ private struct V2IOSTaskBanner: View {
                     .foregroundStyle(banner.tone == .danger ? V2DeskPalette.color(.danger, scheme: colorScheme) : V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
                     .frame(minWidth: 44, minHeight: 32)
                     .buttonStyle(.plain)
-                    .disabled(!networkActionsAvailable)
+                    .disabled(action.requiresNetwork && !networkActionsAvailable)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 9)
@@ -706,7 +728,7 @@ private struct V2IOSActionDock: View {
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
             }.buttonStyle(.plain).accessibilityLabel("查看\(alternateFace.title)")
             if primary != .none {
-                V2IOSPrimaryButton(title: primary.title, disabled: !networkActionsAvailable, action: primaryAction)
+                V2IOSPrimaryButton(title: primary.title, disabled: primary.requiresNetwork && !networkActionsAvailable, action: primaryAction)
             }
             Button(action: inspirationAction) {
                 Text("✦").font(.system(size: 17)).foregroundStyle(V2DeskPalette.color(.accent, scheme: colorScheme)).frame(width: 48, height: 48).overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))

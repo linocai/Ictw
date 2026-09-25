@@ -749,6 +749,8 @@ struct V2MacWorkspaceDesk: View {
             taskMonitoringMessage: editor.taskMonitoringMessage,
             preflightAcceptanceMessage: editor.preflightAcceptanceMessage,
             canRetryGeneratedCandidateChecker: editor.candidateCheckerRetrySourceJobID != nil,
+                generatedCandidateCheckerUnavailable: editor.failedCandidateCheckerResult?.status == "unavailable",
+            checkerTarget: editor.checkerTarget,
             isLastChapterInBook: V2DeskChapterPosition.isLastChapter(editor.currentChapter?.id, in: workspace.chapters)
         ))
     }
@@ -811,7 +813,7 @@ struct V2MacWorkspaceDesk: View {
     }
 
     private func runPrimaryAction() {
-        guard sync.networkActionsAvailable else { return }
+        guard !snapshot.primaryAction.requiresNetwork || sync.networkActionsAvailable else { return }
         runAction(snapshot.primaryAction)
     }
 

@@ -1,5 +1,6 @@
 """Regression cases from the Sept 23 production stalls; no real prose/providers."""
 import pytest
+from sqlalchemy import select
 from app.agents.memory_selector import MemorySelectorAgent
 from app.llm.base import LLMError
 from app.services.context import MemoryBlock, memory_selection_problem, pack_selector_context
@@ -134,6 +135,134 @@ def test_readiness_copy_change_does_not_strand_a_frozen_check_candidate(client):
         assert not context.is_frozen_input_current(db, chapter, snapshot)
 
 
+def test_background_visible_checker_keeps_finalized_prose_and_archive(client, auth_headers, wait_for_terminal):
+    from app.llm.factory import get_checker_client
+
+    class PassingChecker:
+        model_name = "synthetic-checker"
+
+        def complete_json(self, **kwargs):
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    chapter_id, _, _ = _story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        chapter.status = "finalized"
+        chapter.draft_text = "林夕在雨后回家。"
+        original_text = chapter.draft_text
+        original_revision = chapter.content_revision
+        original_archive = chapter.archive_status
+        db.commit()
+    client.app.dependency_overrides[get_checker_client] = PassingChecker
+    started = client.post(f"/api/v1/chapters/{chapter_id}/check/start", headers=auth_headers)
+    assert started.status_code == 200
+    assert started.json()["phase"] == "checking"
+    assert started.json()["checker_target"] == "visible_draft"
+    status = wait_for_terminal(client, chapter_id, auth_headers)
+    assert status["kind"] == "check" and status["phase"] == "done"
+    assert status["checker_target"] == "visible_draft"
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        assert chapter.status == "finalized"
+        assert chapter.draft_text == original_text
+        assert chapter.content_revision == original_revision
+        assert chapter.archive_status == original_archive
+
+
+def test_selector_input_change_stops_before_writer_and_keeps_old_draft(client, auth_headers, wait_for_terminal, monkeypatch):
+    """A changed projected end state is Selector input, not a rebindable ID change."""
+    from app.llm.factory import get_checker_client, get_memory_selector_client, get_writer_client
+    from app.services import production_context as context
+
+    chapter_id, _prior_id, _future_id = _story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        selected_id = chapter.character_links[0].character_id
+    state = {"changed": False}
+
+    def projected(_db, _chapter):
+        return ({selected_id: {"章前状态": "已改变" if state["changed"] else "原状态"}}, [])
+
+    class MutatingSelector:
+        model_name = "synthetic-selector"
+        calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            state["changed"] = True
+            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+
+    class CountingWriter:
+        model_name = "synthetic-writer"
+        calls = 0
+
+        def complete_stream(self, **_kwargs):
+            self.calls += 1
+            yield "不应调用"
+
+    selector = MutatingSelector()
+    writer = CountingWriter()
+    monkeypatch.setattr(context, "_projection_before", projected)
+    client.app.dependency_overrides[get_memory_selector_client] = lambda: selector
+    client.app.dependency_overrides[get_writer_client] = lambda: writer
+    client.app.dependency_overrides[get_checker_client] = lambda: type("PassingChecker", (), {
+        "complete_json": lambda self, **_kwargs: {"verdict": "passed", "issues": [], "name_uses": []},
+    })()
+
+    started = client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers)
+    assert started.status_code == 200
+    status = wait_for_terminal(client, chapter_id, auth_headers)
+    assert status["phase"] == "failed" and status["error_code"] == "production_input_changed"
+    assert selector.calls == 1 and writer.calls == 0
+
+
+def test_selector_receives_readable_unselected_relationship_identity(client, auth_headers, wait_for_terminal, monkeypatch):
+    from app.llm.factory import get_checker_client, get_memory_selector_client, get_writer_client
+    from app.services import production_context as context
+    from conftest import FakeWriter
+    from app.models import Character
+
+    chapter_id, _prior_id, _future_id = _story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        selected_id = chapter.character_links[0].character_id
+        other = db.scalars(
+            select(Character).where(Character.book_id == chapter.book_id, Character.id != selected_id)
+        ).first()
+        assert other is not None
+        other_id = other.id
+
+    monkeypatch.setattr(
+        context,
+        "_projection_before",
+        lambda _db, _chapter: ({selected_id: {f"relationship:{other_id}": "旧友"}}, []),
+    )
+
+    class CapturingSelector:
+        model_name = "synthetic-selector"
+        user = ""
+
+        def complete_json(self, *, user, **_kwargs):
+            self.user = user
+            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+
+    selector = CapturingSelector()
+    client.app.dependency_overrides[get_memory_selector_client] = lambda: selector
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter("文" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: type("PassingChecker", (), {
+        "complete_json": lambda self, **_kwargs: {"verdict": "passed", "issues": [], "name_uses": []},
+    })()
+
+    assert client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).status_code == 200
+    assert wait_for_terminal(client, chapter_id, auth_headers)["phase"] == "done"
+    assert "与夏天的关系：旧友" in selector.user
+    assert other_id not in selector.user
+
+
 def test_generation_validation_failure_is_specific_audited_and_retryable(client, auth_headers, wait_for_terminal, caplog):
     from conftest import FakeWriter
     from sqlalchemy import select
@@ -154,13 +283,366 @@ def test_generation_validation_failure_is_specific_audited_and_retryable(client,
     assert response.status_code == 200
     status = wait_for_terminal(client, chapter_id, auth_headers)
     assert status["error_code"] == "checker_invalid_response"
-    assert "Checker 返回字段不符合协议" in status["error_message"]
+    assert "尚未得到可用结论" in status["error_message"]
     assert status["error_context"]["model_name"] == "synthetic-checker"
     assert status["can_retry_checker"]
     assert "never-log-this-secret" not in str(status) + caplog.text
     with db_module.SessionLocal() as db:
         audits = db.scalars(select(LLMCallAudit).where(LLMCallAudit.agent_role == "checker")).all()
         assert len(audits) == 1 and audits[0].error_code == "checker_invalid_response"
+
+
+def test_hidden_checker_unavailability_never_uses_rejection_copy_on_first_or_retry(client, auth_headers, wait_for_terminal):
+    from conftest import FakeWriter
+    from app.llm.factory import get_checker_client, get_writer_client
+
+    class TimeoutChecker:
+        model_name = "synthetic-checker"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            raise LLMError("provider timeout", code="llm_timeout")
+
+    chapter_id, _prior_id, _future_id = _story()
+    checker = TimeoutChecker()
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter("文" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    assert client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).status_code == 200
+    first = wait_for_terminal(client, chapter_id, auth_headers)
+    assert first["error_code"] == "llm_timeout"
+    assert "检查未能完成，生成稿已保留，当前正文未变" in first["error_message"]
+    assert "Checker 未通过" not in first["error_message"]
+
+    retried = client.post(
+        f"/api/v1/chapters/{chapter_id}/checker/retry", headers=auth_headers,
+        json={"source_job_id": first["checker_source_job_id"]},
+    )
+    assert retried.status_code == 200
+    second = wait_for_terminal(client, chapter_id, auth_headers)
+    assert second["error_code"] == "llm_timeout"
+    assert "检查未能完成，生成稿已保留，当前正文未变" in second["error_message"]
+    assert "Checker 未通过" not in second["error_message"]
+    assert checker.calls == 2
+
+
+def test_hidden_checker_retry_execution_failure_stays_retryable_and_unavailable(
+    client, auth_headers, wait_for_terminal, monkeypatch,
+):
+    """An unexpected retry persistence failure is not a story rejection."""
+    from conftest import FakeWriter
+    from app.llm.factory import get_checker_client, get_writer_client
+    from app.services import write_jobs
+
+    class FirstInvalidThenPassingChecker:
+        model_name = "synthetic-checker"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    chapter_id, _prior_id, _future_id = _story()
+    checker = FirstInvalidThenPassingChecker()
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter("文" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    failed = wait_for_terminal(client, chapter_id, auth_headers)
+    assert failed["can_retry_checker"] is True
+
+    original_begin = write_jobs._begin_final_checker_cas
+    invoked = False
+
+    def fail_once(db):
+        nonlocal invoked
+        if not invoked:
+            invoked = True
+            raise RuntimeError("synthetic retry persistence interruption")
+        return original_begin(db)
+
+    monkeypatch.setattr(write_jobs, "_begin_final_checker_cas", fail_once)
+    client.post(
+        f"/api/v1/chapters/{chapter_id}/checker/retry", headers=auth_headers,
+        json={"source_job_id": failed["checker_source_job_id"]},
+    ).raise_for_status()
+    unavailable = wait_for_terminal(client, chapter_id, auth_headers)
+    assert unavailable["error_code"] == "checker_retry_failed"
+    assert unavailable["checker_result"]["status"] == "unavailable"
+    assert unavailable["can_retry_checker"] is True
+    assert "检查未能完成" in unavailable["error_message"]
+    assert "Checker 未通过" not in unavailable["error_message"]
+
+    monkeypatch.setattr(write_jobs, "_begin_final_checker_cas", original_begin)
+    client.post(
+        f"/api/v1/chapters/{chapter_id}/checker/retry", headers=auth_headers,
+        json={"source_job_id": failed["checker_source_job_id"]},
+    ).raise_for_status()
+    recovered = wait_for_terminal(client, chapter_id, auth_headers)
+    assert recovered["phase"] == "done"
+    assert checker.calls == 3
+
+
+def test_hidden_candidate_retry_cannot_replace_finalized_manuscript(client, auth_headers, wait_for_terminal):
+    from conftest import FakeExtractor, FakeWriter
+    from app.llm.factory import get_checker_client, get_extractor_client, get_writer_client
+
+    class InvalidChecker:
+        model_name = "synthetic-checker"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            # A malformed reply creates a retryable hidden candidate without
+            # exposing it as a visible manuscript conclusion.
+            return {"verdict": "passed", "issues": []}
+
+    chapter_id, _prior_id, _future_id = _story()
+    original = "原" * 4000
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        chapter.draft_text = original
+        chapter.status = "draft_ready"
+        original_revision = chapter.content_revision
+        db.commit()
+
+    checker = InvalidChecker()
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter("新" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    client.app.dependency_overrides[get_extractor_client] = lambda: FakeExtractor()
+    assert client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).status_code == 200
+    failed = wait_for_terminal(client, chapter_id, auth_headers)
+    assert failed["phase"] == "failed" and failed["can_retry_checker"]
+
+    accepted = client.post(
+        f"/api/v1/chapters/{chapter_id}/accept", headers=auth_headers,
+        json={"override_checker": True},
+    )
+    assert accepted.status_code == 200
+    assert wait_for_terminal(client, chapter_id, auth_headers)["phase"] == "done"
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None and chapter.status == "finalized"
+        finalized_revision = chapter.content_revision
+        finalized_archive = chapter.archive_status
+
+    refused = client.post(
+        f"/api/v1/chapters/{chapter_id}/checker/retry", headers=auth_headers,
+        json={"source_job_id": failed["checker_source_job_id"]},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "checker_retry_not_available"
+    assert checker.calls == 1
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        assert chapter.draft_text == original
+        assert chapter.status == "finalized"
+        assert chapter.content_revision == finalized_revision
+        assert chapter.archive_status == finalized_archive
+        assert chapter.content_revision > original_revision
+
+
+def test_visible_checker_claim_invalidates_an_older_hidden_retry_lineage(client, auth_headers, wait_for_terminal):
+    """A later visible reread owns the chapter over a retained hidden draft."""
+    from conftest import FakeWriter
+    from app.llm.factory import get_checker_client, get_writer_client
+
+    class SequencedChecker:
+        model_name = "synthetic-checker"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                # A malformed hidden response leaves a retryable private
+                # candidate while the author still sees the original prose.
+                return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    chapter_id, _prior_id, _future_id = _story()
+    original = "原" * 4000
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        chapter.draft_text = original
+        chapter.status = "draft_ready"
+        db.commit()
+
+    checker = SequencedChecker()
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter("新" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    hidden_failure = wait_for_terminal(client, chapter_id, auth_headers)
+    assert hidden_failure["can_retry_checker"] is True
+
+    visible = client.post(f"/api/v1/chapters/{chapter_id}/check/start", headers=auth_headers)
+    assert visible.status_code == 200
+    visible_done = wait_for_terminal(client, chapter_id, auth_headers)
+    assert visible_done["phase"] == "done"
+    assert visible_done["checker_target"] == "visible_draft"
+
+    refused = client.post(
+        f"/api/v1/chapters/{chapter_id}/checker/retry", headers=auth_headers,
+        json={"source_job_id": hidden_failure["checker_source_job_id"]},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "checker_retry_input_changed"
+    assert checker.calls == 2
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        assert chapter.draft_text == original
+        assert chapter.status == "draft_ready"
+
+
+def test_new_writer_claim_invalidates_an_older_hidden_retry_lineage(client, auth_headers, wait_for_terminal):
+    """A completed later Writer must also own the chapter over hidden A."""
+    from conftest import FakeWriter
+    from app.llm.factory import get_checker_client, get_writer_client
+
+    class FirstInvalidThenPassingChecker:
+        model_name = "synthetic-checker"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {"verdict": "passed", "issues": []}
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    chapter_id, _prior_id, _future_id = _story()
+    checker = FirstInvalidThenPassingChecker()
+    writer_outputs = iter(["甲" * 4000, "乙" * 4000])
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter(next(writer_outputs))
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+
+    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    hidden_failure = wait_for_terminal(client, chapter_id, auth_headers)
+    assert hidden_failure["can_retry_checker"] is True
+
+    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    current = wait_for_terminal(client, chapter_id, auth_headers)
+    assert current["phase"] == "done"
+    assert current["chapter"]["draft_text"] == "乙" * 4000
+
+    refused = client.post(
+        f"/api/v1/chapters/{chapter_id}/checker/retry", headers=auth_headers,
+        json={"source_job_id": hidden_failure["checker_source_job_id"]},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "checker_retry_input_changed"
+    assert checker.calls == 2
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None and chapter.draft_text == "乙" * 4000
+
+
+def test_new_writer_failure_still_invalidates_an_older_hidden_retry_lineage(client, auth_headers, wait_for_terminal):
+    """Starting Writer B is enough to retire hidden A, even when B fails."""
+    from conftest import FakeWriter
+    from app.llm.base import LLMError
+    from app.llm.factory import get_checker_client, get_writer_client
+
+    class InvalidThenUnavailableChecker:
+        model_name = "synthetic-checker"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {"verdict": "passed", "issues": []}
+            raise LLMError("synthetic timeout", code="llm_timeout")
+
+    chapter_id, _prior_id, _future_id = _story()
+    checker = InvalidThenUnavailableChecker()
+    writer_outputs = iter(["甲" * 4000, "乙" * 4000])
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter(next(writer_outputs))
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+
+    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    hidden_a = wait_for_terminal(client, chapter_id, auth_headers)
+    assert hidden_a["can_retry_checker"] is True
+    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    failed_b = wait_for_terminal(client, chapter_id, auth_headers)
+    assert failed_b["phase"] == "failed" and failed_b["error_code"] == "llm_timeout"
+
+    refused = client.post(
+        f"/api/v1/chapters/{chapter_id}/checker/retry", headers=auth_headers,
+        json={"source_job_id": hidden_a["checker_source_job_id"]},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "checker_retry_input_changed"
+    assert checker.calls == 2
+
+
+def test_visible_checker_rebuilds_holder_when_bible_changes_and_survives_later_job(client, auth_headers, wait_for_terminal):
+    from conftest import FakeExtractor
+    from app.llm.factory import get_checker_client, get_extractor_client
+    from app.models import ChapterDraftCandidate
+
+    class PassingChecker:
+        model_name = "synthetic-checker"
+
+        def complete_json(self, **_kwargs):
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    chapter_id, _prior_id, _future_id = _story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        chapter.draft_text = "文" * 4000
+        chapter.status = "draft_ready"
+        db.commit()
+    client.app.dependency_overrides[get_checker_client] = PassingChecker
+    client.app.dependency_overrides[get_extractor_client] = lambda: FakeExtractor()
+
+    assert client.post(f"/api/v1/chapters/{chapter_id}/check/start", headers=auth_headers).status_code == 200
+    assert wait_for_terminal(client, chapter_id, auth_headers)["phase"] == "done"
+    with db_module.SessionLocal() as db:
+        first = db.scalars(
+            select(ChapterDraftCandidate).where(
+                ChapterDraftCandidate.chapter_id == chapter_id,
+                ChapterDraftCandidate.is_current.is_(True),
+            )
+        ).one()
+        first_id = first.id
+
+    client.patch(
+        f"/api/v1/chapters/{chapter_id}", headers=auth_headers,
+        json={"user_prompt": "更新后的本章意图"},
+    ).raise_for_status()
+    assert client.post(f"/api/v1/chapters/{chapter_id}/check/start", headers=auth_headers).status_code == 200
+    checked = wait_for_terminal(client, chapter_id, auth_headers)
+    assert checked["phase"] == "done"
+    visible = client.get(f"/api/v1/chapters/{chapter_id}/job", headers=auth_headers).json()
+    assert visible["visible_checker_result"]["verdict"] == "passed"
+    with db_module.SessionLocal() as db:
+        current = db.scalars(
+            select(ChapterDraftCandidate).where(
+                ChapterDraftCandidate.chapter_id == chapter_id,
+                ChapterDraftCandidate.is_current.is_(True),
+            )
+        ).one()
+        assert current.id != first_id
+
+    assert client.post(f"/api/v1/chapters/{chapter_id}/accept", headers=auth_headers).status_code == 200
+    archived = wait_for_terminal(client, chapter_id, auth_headers)
+    assert archived["kind"] == "extract" and archived["visible_checker_result"]["verdict"] == "passed"
 
 
 def test_hidden_identity_check_only_exposes_kind_reason_while_visible_keeps_repair_choices(client, auth_headers, wait_for_terminal):
@@ -174,7 +656,7 @@ def test_hidden_identity_check_only_exposes_kind_reason_while_visible_keeps_repa
     class IdentityChecker:
         def complete_json(self, **kwargs):
             return {"verdict": "passed", "issues": [], "name_uses": [
-                {"hit_ids": ["n1"], "classification": "character", "reason": "人名"},
+                {"group_id": "g1", "classification": "character", "reason": "人名"},
             ]}
 
     client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter("林夕在雨后回家。" * 600)
@@ -240,3 +722,137 @@ def test_job_retry_capability_matches_endpoint_after_input_changes(client, auth_
                           json={"source_job_id": source_id})
     assert refused.status_code == 409
     assert refused.json()["detail"]["code"] == "checker_retry_input_changed"
+
+
+def test_sync_visible_checker_rebuilds_holder_when_bible_changes(client, auth_headers):
+    """Build62's synchronous check must use the same fresh holder rule as /check/start."""
+    from app.llm.factory import get_checker_client
+    from app.models import ChapterDraftCandidate
+
+    class PassingChecker:
+        model_name = "synthetic-checker"
+
+        def complete_json(self, **_kwargs):
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    chapter_id, _prior_id, _future_id = _story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        chapter.draft_text = "文" * 4000
+        chapter.status = "draft_ready"
+        db.commit()
+    client.app.dependency_overrides[get_checker_client] = PassingChecker
+
+    client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers).raise_for_status()
+    with db_module.SessionLocal() as db:
+        first = db.scalars(
+            select(ChapterDraftCandidate).where(
+                ChapterDraftCandidate.chapter_id == chapter_id,
+                ChapterDraftCandidate.is_current.is_(True),
+            )
+        ).one()
+        first_id = first.id
+
+    client.patch(
+        f"/api/v1/chapters/{chapter_id}", headers=auth_headers,
+        json={"user_prompt": "同步入口也必须重新检查的新意图"},
+    ).raise_for_status()
+    second = client.post(f"/api/v1/chapters/{chapter_id}/check", headers=auth_headers)
+    assert second.status_code == 200 and second.json()["checker_result"]["verdict"] == "passed"
+    with db_module.SessionLocal() as db:
+        current = db.scalars(
+            select(ChapterDraftCandidate).where(
+                ChapterDraftCandidate.chapter_id == chapter_id,
+                ChapterDraftCandidate.is_current.is_(True),
+            )
+        ).one()
+        assert current.id != first_id
+        assert current.checker_result is not None
+
+
+def test_selector_relationship_identity_disambiguates_duplicate_names(client, auth_headers, wait_for_terminal, monkeypatch):
+    """Selector sees an author-readable relation label without authorizing that card."""
+    from app.llm.factory import get_checker_client, get_memory_selector_client, get_writer_client
+    from app.models import Character
+    from app.services import production_context as context
+    from conftest import FakeWriter
+
+    chapter_id, _prior_id, _future_id = _story(duplicate_name=True)
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        selected_id = chapter.character_links[0].character_id
+        other = db.scalars(
+            select(Character).where(
+                Character.book_id == chapter.book_id,
+                Character.name == "夏天",
+            ).order_by(Character.id)
+        ).first()
+        assert other is not None
+        other_id = other.id
+
+    monkeypatch.setattr(
+        context,
+        "_projection_before",
+        lambda _db, _chapter: ({selected_id: {f"relationship:{other_id}": "旧友"}}, []),
+    )
+
+    class CapturingSelector:
+        model_name = "synthetic-selector"
+        user = ""
+
+        def complete_json(self, *, user, **_kwargs):
+            self.user = user
+            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+
+    selector = CapturingSelector()
+    client.app.dependency_overrides[get_memory_selector_client] = lambda: selector
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter("文" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: type("PassingChecker", (), {
+        "complete_json": lambda self, **_kwargs: {"verdict": "passed", "issues": [], "name_uses": []},
+    })()
+
+    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter_id, auth_headers)["phase"] == "done"
+    assert f"与夏天（ID:{other_id[:8]}）的关系：旧友" in selector.user
+    assert other_id not in selector.user
+
+
+def test_selector_relationship_identity_marks_deleted_card_without_uuid_prompt(client, auth_headers, wait_for_terminal, monkeypatch):
+    from app.llm.factory import get_checker_client, get_memory_selector_client, get_writer_client
+    from app.services import production_context as context
+    from conftest import FakeWriter
+
+    chapter_id, _prior_id, _future_id = _story()
+    missing_id = "removed-character-identity"
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        selected_id = chapter.character_links[0].character_id
+
+    monkeypatch.setattr(
+        context,
+        "_projection_before",
+        lambda _db, _chapter: ({selected_id: {f"relationship:{missing_id}": "旧友"}}, []),
+    )
+
+    class CapturingSelector:
+        model_name = "synthetic-selector"
+        user = ""
+
+        def complete_json(self, *, user, **_kwargs):
+            self.user = user
+            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+
+    selector = CapturingSelector()
+    client.app.dependency_overrides[get_memory_selector_client] = lambda: selector
+    client.app.dependency_overrides[get_writer_client] = lambda: FakeWriter("文" * 4000)
+    client.app.dependency_overrides[get_checker_client] = lambda: type("PassingChecker", (), {
+        "complete_json": lambda self, **_kwargs: {"verdict": "passed", "issues": [], "name_uses": []},
+    })()
+
+    client.post(f"/api/v1/chapters/{chapter_id}/write", headers=auth_headers).raise_for_status()
+    assert wait_for_terminal(client, chapter_id, auth_headers)["phase"] == "done"
+    assert "与关系对象已不可用（ID:removed-）的关系：旧友" in selector.user
+    assert missing_id not in selector.user

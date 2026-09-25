@@ -164,6 +164,19 @@ struct APIClient {
         )
     }
 
+    /// Build 64 starts visible-prose checks as JobRuns, then observes their
+    /// terminal result through the normal chapter-job poll.  Keep the older
+    /// synchronous method above solely for an older server/client pairing.
+    func startChecker(
+        chapterId: String, contentRevision: Int, acknowledgedContextToken: String? = nil
+    ) async throws -> WriteJobStatus {
+        try await request(
+            "/chapters/\(chapterId)/check/start", method: "POST",
+            body: CheckerRunPayload(acknowledged_context_token: acknowledgedContextToken),
+            ifMatch: contentRevision
+        )
+    }
+
     func retryCandidateChecker(
         chapterId: String, sourceJobId: String, contentRevision: Int
     ) async throws -> WriteJobStatus {

@@ -1941,3 +1941,49 @@ def test_memories_export_empty_book_uses_placeholders(client, auth_headers):
     assert "【大事记】" in text
     assert "（暂无）" in text
     assert "（暂无人物）" in text
+
+
+def test_sync_checker_cancelled_while_blocked_cannot_restore_terminal_result(client, auth_headers):
+    """The legacy synchronous /check must honor the same ownership gate as jobs."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    class BlockingChecker:
+        def __init__(self) -> None:
+            self.started = Event()
+            self.release = Event()
+
+        def complete_json(self, **_kwargs):
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            return {"verdict": "passed", "issues": [], "name_uses": []}
+
+    book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
+    chapter = client.post(
+        f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "行动"}
+    ).json()
+    prose = "旧" * 4000
+    client.post(
+        f"/api/v1/chapters/{chapter['id']}/import", headers=auth_headers,
+        json={"draft_text": prose},
+    ).raise_for_status()
+    checker = BlockingChecker()
+    client.app.dependency_overrides[get_checker_client] = lambda: checker
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        checking = executor.submit(
+            client.post, f"/api/v1/chapters/{chapter['id']}/check", headers=auth_headers
+        )
+        assert checker.started.wait(timeout=3)
+        cancelled = client.post(f"/api/v1/chapters/{chapter['id']}/write/cancel", headers=auth_headers)
+        assert cancelled.status_code == 200
+        checker.release.set()
+        late = checking.result(timeout=3)
+
+    assert late.status_code == 409
+    assert late.json()["detail"]["code"] == "checker_input_changed"
+    current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
+    status = client.get(f"/api/v1/chapters/{chapter['id']}/job", headers=auth_headers).json()
+    assert current["draft_text"] == prose and current["status"] == "draft_ready"
+    assert status["kind"] == "check" and status["phase"] == "cancelled"
+    assert status["visible_checker_result"] is None

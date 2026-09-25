@@ -82,6 +82,19 @@ class MemoryBlock:
     chapter_index: int
     character_id: str | None = None
     memory_type: str = ""
+    # Archive v2 facts may belong to several characters.  Keep the complete
+    # immutable set while retaining character_id for old callers and old
+    # single-person records.
+    participant_ids: tuple[str, ...] = ()
+    # Stable source identity is deliberately separate from a revision/fact
+    # database ID so an equivalent re-archive can be rebound safely.
+    source_chapter_id: str = ""
+    source_position: int = 0
+
+
+def memory_participant_ids(block: MemoryBlock) -> tuple[str, ...]:
+    values = block.participant_ids or ((block.character_id,) if block.character_id else ())
+    return tuple(sorted({value for value in values if isinstance(value, str) and value}))
 
 
 @dataclass(frozen=True)
@@ -146,10 +159,11 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                         text=f"第 {item.index} 章摘要：{revision.summary.strip()}",
                         chapter_index=item.index,
                         memory_type="summary",
+                        source_chapter_id=item.id,
                     )
                 )
-            for fact in revision.facts:
-                participant_ids = [participant.character_id for participant in fact.participants]
+            for position, fact in enumerate(revision.facts, start=1):
+                participant_ids = tuple(sorted({participant.character_id for participant in fact.participants}))
                 blocks.append(
                     MemoryBlock(
                         id=f"archive_v2_fact:{fact.id}",
@@ -157,6 +171,9 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                         chapter_index=item.index,
                         character_id=participant_ids[0] if len(participant_ids) == 1 else None,
                         memory_type="canonical_fact",
+                        participant_ids=participant_ids,
+                        source_chapter_id=item.id,
+                        source_position=position,
                     )
                 )
             continue
@@ -173,6 +190,7 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     text=f"第 {item.index} 章摘要：{canonical_summary}",
                     chapter_index=item.index,
                     memory_type="summary",
+                    source_chapter_id=item.id,
                 )
             )
         elif item.headline.strip():
@@ -186,6 +204,7 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     text=f"第 {item.index} 章大事记：{item.headline.strip()}",
                     chapter_index=item.index,
                     memory_type="headline",
+                    source_chapter_id=item.id,
                 )
             )
         blocks.extend(_archive_memory_blocks(item))
@@ -211,6 +230,8 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     chapter_index=index_by_id[event.chapter_id],
                     character_id=event.character_id,
                     memory_type="character_event",
+                    participant_ids=(event.character_id,) if event.character_id else (),
+                    source_chapter_id=event.chapter_id,
                 )
             )
     return blocks
@@ -246,6 +267,9 @@ def _archive_memory_blocks(chapter: Chapter) -> list[MemoryBlock]:
                     chapter_index=chapter.index,
                     character_id=character_id if isinstance(character_id, str) else None,
                     memory_type=memory_type,
+                    participant_ids=(character_id,) if isinstance(character_id, str) else (),
+                    source_chapter_id=chapter.id,
+                    source_position=position,
                 )
             )
     return blocks
@@ -264,7 +288,7 @@ def prefilter_memory_candidates(
 
     def score(block: MemoryBlock) -> tuple[int, int, int, str]:
         text = normalize_text(block.text)
-        selected = int(block.character_id in selected_character_ids)
+        selected = int(bool(set(memory_participant_ids(block)).intersection(selected_character_ids)))
         overlap = sum(1 for word in keywords if word and word in text)
         return (-selected, -overlap, -block.chapter_index, block.id)
 
@@ -272,6 +296,46 @@ def prefilter_memory_candidates(
     # Even when the full candidate pool fits, put likely-relevant facts first.
     # This preserves broad recall while preventing chronological order from
     # nudging the model toward a chapter-by-chapter recap.
+    if len(ranked) <= 300 and sum(nonspace_len(block.text) for block in ranked) <= 30_000:
+        return ending + ranked
+    chosen: list[MemoryBlock] = []
+    chars = 0
+    for block in ranked:
+        size = nonspace_len(block.text)
+        if len(chosen) >= 300:
+            break
+        if chars + size > 30_000:
+            continue
+        chosen.append(block)
+        chars += size
+    return ending + chosen
+
+
+def prefilter_memory_candidates_v1(
+    blocks: list[MemoryBlock],
+    *,
+    chapter: Chapter,
+    selected_character_ids: set[str],
+) -> list[MemoryBlock]:
+    """Reproduce Build63 candidate ordering for retained v1 snapshots.
+
+    v1 knew only ``character_id``.  A later archive-v2 multi-participant
+    block must therefore remain unselected for a v1 currentness comparison;
+    otherwise crossing the 300-block/30k-character gate would falsely stale
+    an old retained candidate after this client upgrade.
+    """
+    ending = [block for block in blocks if block.memory_type == "previous_ending"]
+    ordinary = [block for block in blocks if block.memory_type != "previous_ending"]
+    query = normalize_text(f"{chapter.title}\n{chapter.user_prompt}")
+    keywords = _keywords(query)
+
+    def score(block: MemoryBlock) -> tuple[int, int, int, str]:
+        text = normalize_text(block.text)
+        selected = int(block.character_id in selected_character_ids)
+        overlap = sum(1 for word in keywords if word and word in text)
+        return (-selected, -overlap, -block.chapter_index, block.id)
+
+    ranked = sorted(ordinary, key=score)
     if len(ranked) <= 300 and sum(nonspace_len(block.text) for block in ranked) <= 30_000:
         return ending + ranked
     chosen: list[MemoryBlock] = []
@@ -493,6 +557,12 @@ def pack_selector_context(
             result.append(MemoryBlock(
                 "|".join(ids), item["text"].strip(), primary.chapter_index,
                 primary.character_id, memory_type,
+                participant_ids=tuple(sorted({
+                    participant
+                    for source_id in ids
+                    for participant in memory_participant_ids(by_id[source_id])
+                })),
+                source_chapter_id=primary.source_chapter_id,
             ))
         return result
 
@@ -548,7 +618,13 @@ def pack_memory_brief(
             continue
         seen.add(key)
         primary = by_id[ids[0]]
-        packed.append(MemoryBlock("|".join(ids), text.strip(), primary.chapter_index, primary.character_id, "memory_brief"))
+        packed.append(MemoryBlock(
+            "|".join(ids), text.strip(), primary.chapter_index, primary.character_id, "memory_brief",
+            participant_ids=tuple(sorted({
+                participant for source_id in ids for participant in memory_participant_ids(by_id[source_id])
+            })),
+            source_chapter_id=primary.source_chapter_id,
+        ))
         used += size
         used_source_ids.update(ids)
     return packed
@@ -661,6 +737,8 @@ def _previous_ending_blocks(chapter: Chapter) -> list[MemoryBlock]:
             text=paragraph,
             chapter_index=chapter.index,
             memory_type="previous_ending",
+            source_chapter_id=chapter.id,
+            source_position=index,
         )
         for index, paragraph in enumerate(selected, start=1)
     ]
@@ -751,6 +829,7 @@ def checker_user_message(
     name_hits: list[dict[str, Any]] | None = None,
     name_groups: list[dict[str, Any]] | None = None,
     name_candidate_groups: list[dict[str, Any]] | None = None,
+    retry_reason_code: str | None = None,
 ) -> str:
     catalog_lines = []
     for source in source_catalog or []:
@@ -800,8 +879,12 @@ def checker_user_message(
         key, ids, selected_ids = group.get("candidate_key"), group.get("character_ids"), group.get("selected_character_ids")
         if isinstance(key, str) and isinstance(ids, list) and isinstance(selected_ids, list) and all(isinstance(value, str) for value in ids + selected_ids):
             candidate_lines.append(f"{key}：候选ID={','.join(ids)}；已选ID={','.join(selected_ids) or '（无）'}")
+    # Request-local group IDs replace copied hit ID lists.  The exact same
+    # deterministic helper is used by checker_validation when it expands the
+    # semantic answer back into program-owned hit evidence.
+    from app.services.checker_validation import numbered_name_groups
     group_lines = []
-    for group in name_groups or []:
+    for group_id, group in numbered_name_groups(name_groups or []):
         if not isinstance(group, dict):
             continue
         hit_ids = group.get("hit_ids")
@@ -813,7 +896,7 @@ def checker_user_message(
             and all(isinstance(value, str) for value in (source_id, name, candidate_key, context))
         ):
             group_lines.append(
-                f"[{','.join(hit_ids)}] 来源={source_id}，词={name}，候选组={candidate_key}，局部原文={context}"
+                f"[{group_id}] 来源={source_id}，词={name}，候选组={candidate_key}，局部原文={context}"
             )
     name_directory = "\n".join(group_lines) or "（没有待辨别姓名命中；name_uses 返回空数组）"
     candidate_directory = "\n".join(candidate_lines) or "（无待辨别姓名候选组）"
@@ -830,11 +913,16 @@ def checker_user_message(
         "draft_evidence 留空并用 Bible 原文举证，绝不可伪造正文引文。"
         "来源 prior_state:unknown 只表示资料范围，绝不可单独作为正文矛盾、必需事件或 issue 的依据；"
         "只有其他冻结来源存在确切证据时才可报告问题。"
-        "逐组返回 name_uses：每项含 hit_ids、classification、reason 和可选 character_id。"
-        "hit_ids 必须恰好等于下方一个程序分组，不得把不同局部片段或候选组混在一项；"
-        "classification 只能为 character、ordinary_word、uncertain。程序会按 hit_ids 重建每次命中的精确引文与位置。"
+        "逐组返回 name_uses：每项含 group_id、classification、reason 和可选 character_id。"
+        "group_id 必须原样等于下方一个程序分组，每个分组恰好返回一次；不得返回 hit_ids、偏移或自行拆分、合并分组；"
+        "classification 只能为 character、ordinary_word、uncertain。程序会按 group_id 重建每次命中的精确引文与位置。"
         "ordinary_word 不是人物；character/uncertain 的人物授权问题由程序根据冻结目录生成，不必重复写身份 issue。"
     )
+    if retry_reason_code in {"checker_invalid_response", "invalid_protocol", "invalid_name_uses"}:
+        evidence_contract += (
+            "\n上次检查未形成可用结论。请逐一覆盖所有给定 group_id，每组仅出现一次；"
+            "只返回 group_id，不返回 hit_ids。"
+        )
     if not bible.strip():
         return "\n\n".join([
             reference_context,
@@ -1002,7 +1090,11 @@ def _format_unknown_state_slots(unknown_slots: list[dict[str, Any]]) -> str:
         name = item.get("character_name") or item.get("character_id") or "人物"
         slot = item.get("slot") or "状态"
         reason = item.get("message") or "该状态尚无法确定"
-        lines.append(f"- {name} 的 {slot}：待定（{reason}）")
+        if item.get("scope") == "relationship":
+            other = item.get("other_character_name") or item.get("other_character_id") or "关系对象已不可用"
+            lines.append(f"- {name} 与 {other} 的关系：待定（{reason}）")
+        else:
+            lines.append(f"- {name} 的 {slot}：待定（{reason}）")
     return "\n".join(lines) or "（无）"
 
 

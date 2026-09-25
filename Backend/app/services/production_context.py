@@ -10,25 +10,36 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+from collections import Counter, defaultdict
 from dataclasses import dataclass
+from itertools import product
 from typing import Any, Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Chapter, Character
+from app.models import Chapter, ChapterArchiveRevision, Character
 from app.services.context import (
     MEMORY_BUDGET_CHARS,
     MemoryBlock,
+    memory_participant_ids,
     memory_candidates,
+    nonspace_len,
     pack_selector_context,
     pack_writer_context,
     prefilter_memory_candidates,
+    prefilter_memory_candidates_v1,
     writing_reference_context,
 )
 
 
-PRODUCTION_INPUT_VERSION = "production-input-v1"
+PRODUCTION_INPUT_V1 = "production-input-v1"
+PRODUCTION_INPUT_V2 = "production-input-v2"
+PRODUCTION_INPUT_VERSION = PRODUCTION_INPUT_V2
+
+
+class ProductionInputChanged(ValueError):
+    """Selector sources changed semantically before Writer could start."""
 
 
 def _sha256(value: str) -> str:
@@ -51,7 +62,7 @@ def _nonspace(value: str) -> str:
     return "".join(_normal(value).split())
 
 
-def _block_semantic_id(block: MemoryBlock) -> str:
+def _block_semantic_id_v1(block: MemoryBlock) -> str:
     """Stable historical identity independent of an archive revision row ID."""
     normalized = _nonspace(block.text)
     payload = {
@@ -63,6 +74,29 @@ def _block_semantic_id(block: MemoryBlock) -> str:
         "text": normalized,
     }
     return "history:" + _sha256(_stable_json(payload))
+
+
+def _block_semantic_id_v2(block: MemoryBlock) -> str:
+    """Content identity for v2 source rebinding; database IDs never enter."""
+    payload = {
+        "source_chapter_id": block.source_chapter_id or f"legacy-index:{block.chapter_index}",
+        "chapter_index": block.chapter_index,
+        "memory_type": block.memory_type,
+        "participant_ids": list(memory_participant_ids(block)),
+        # v2 treats wording and whitespace as source content.  Unlike the
+        # legacy v1 fingerprint, it must not collapse “A B” into “AB” while
+        # deciding whether a Selector source may be rebound.
+        "text": block.text,
+        # Only ending paragraphs require their physical ordering identity.
+        "source_position": block.source_position if block.memory_type == "previous_ending" else 0,
+    }
+    return "history:" + _sha256(_stable_json(payload))
+
+
+# Retain the legacy helper name for old callers/tests; new snapshots select
+# v2 explicitly through _candidate_range.
+def _block_semantic_id(block: MemoryBlock) -> str:
+    return _block_semantic_id_v2(block)
 
 
 def _catalog_entry(kind: str, source_id: str, text: str, *, semantic_id: str | None = None) -> dict[str, str]:
@@ -123,6 +157,108 @@ def _referenced_prior_state(
     return selected_fields, selected_uncertainties
 
 
+def _referenced_relationship_ids(
+    fields: dict[str, dict[str, str]],
+    unknown_slots: Iterable[dict[str, Any]] = (),
+) -> set[str]:
+    """Return every relationship endpoint whose identity reaches a model."""
+    referenced = {
+        key.removeprefix("relationship:")
+        for values in fields.values()
+        for key in values
+        if isinstance(key, str) and key.startswith("relationship:") and key.removeprefix("relationship:")
+    }
+    for item in unknown_slots:
+        if not isinstance(item, dict) or item.get("scope") != "relationship":
+            continue
+        for key in ("character_id", "other_character_id"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                referenced.add(value)
+    return referenced
+
+
+def _relationship_identities(
+    fields: dict[str, dict[str, str]],
+    characters: list[Character],
+    unknown_slots: Iterable[dict[str, Any]] = (),
+) -> dict[str, str]:
+    """Resolve only relationship IDs actually present in supplied state."""
+    referenced = _referenced_relationship_ids(fields, unknown_slots)
+    by_id = {item.id: item for item in characters}
+    name_counts = Counter(item.name for item in characters)
+    result: dict[str, str] = {}
+    for character_id in sorted(referenced):
+        character = by_id.get(character_id)
+        if character is None:
+            result[character_id] = f"关系对象已不可用（ID:{character_id[:8]}）"
+        elif name_counts[character.name] > 1:
+            result[character_id] = f"{character.name}（ID:{character_id[:8]}）"
+        else:
+            result[character_id] = character.name
+    return result
+
+
+def _display_prior_state(
+    fields: dict[str, dict[str, str]], relationship_identities: dict[str, str],
+) -> dict[str, dict[str, str]]:
+    displayed: dict[str, dict[str, str]] = {}
+    for character_id, values in fields.items():
+        row: dict[str, str] = {}
+        for key, value in values.items():
+            if key.startswith("relationship:"):
+                other_id = key.removeprefix("relationship:")
+                label = relationship_identities.get(other_id, f"关系对象已不可用（ID:{other_id[:8]}）")
+                row[f"与{label}的关系"] = value
+            else:
+                row[key] = value
+        displayed[character_id] = row
+    return displayed
+
+
+def _display_unknown_state_slots(
+    unknown_slots: Iterable[dict[str, Any]],
+    relationship_identities: dict[str, str],
+    characters: list[Character],
+) -> list[dict[str, str]]:
+    """Render pending state from durable IDs without exposing IDs to models."""
+    by_id = {item.id: item for item in characters}
+    name_counts = Counter(item.name for item in characters)
+
+    def current_label(character_id: Any) -> str:
+        if not isinstance(character_id, str):
+            return "人物"
+        character = by_id.get(character_id)
+        if character is None:
+            return f"关系对象已不可用（ID:{character_id[:8]}）"
+        if name_counts[character.name] > 1:
+            return f"{character.name}（ID:{character_id[:8]}）"
+        return character.name
+
+    displayed: list[dict[str, str]] = []
+    for item in unknown_slots:
+        if not isinstance(item, dict):
+            continue
+        scope = item.get("scope") if isinstance(item.get("scope"), str) else "状态"
+        slot = item.get("slot") if isinstance(item.get("slot"), str) else "状态"
+        character_id = item.get("character_id")
+        row = {
+            "scope": scope,
+            "slot": slot,
+            "character_name": current_label(character_id),
+        }
+        if scope == "relationship":
+            other_id = item.get("other_character_id")
+            row["other_character_name"] = relationship_identities.get(
+                other_id, "关系对象已不可用",
+            ) if isinstance(other_id, str) else "关系对象已不可用"
+            row["message"] = "该关系的章末状态尚无法确定"
+        else:
+            row["message"] = "该状态尚无法确定"
+        displayed.append(row)
+    return displayed
+
+
 def _history_blocks(db: Session, chapter: Chapter) -> list[MemoryBlock]:
     selected_ids = {item.id for item in _selected(chapter)}
     return prefilter_memory_candidates(
@@ -130,16 +266,280 @@ def _history_blocks(db: Session, chapter: Chapter) -> list[MemoryBlock]:
     )
 
 
-def _candidate_range(blocks: list[MemoryBlock]) -> list[dict[str, Any]]:
+def _history_blocks_v1(db: Session, chapter: Chapter) -> list[MemoryBlock]:
+    """Use the original Build63 filter only for retained v1 snapshots."""
+    selected_ids = {item.id for item in _selected(chapter)}
+    return prefilter_memory_candidates_v1(
+        memory_candidates(db, chapter), chapter=chapter, selected_character_ids=selected_ids,
+    )
+
+
+def _candidate_row_v1(block: MemoryBlock) -> dict[str, Any]:
+    """Return every source field Build63 persisted for a v1 candidate row."""
+    return {
+        "semantic_id": _block_semantic_id_v1(block),
+        "content_sha256": _sha256(block.text),
+        "chapter_index": block.chapter_index,
+        "memory_type": block.memory_type,
+    }
+
+
+def _candidate_range_v1(blocks: list[MemoryBlock]) -> list[dict[str, Any]]:
     return [
+        _candidate_row_v1(block)
+        for block in sorted(blocks, key=lambda item: (item.chapter_index, item.memory_type, item.id))
+    ]
+
+
+def _candidate_range(blocks: list[MemoryBlock], *, version: str = PRODUCTION_INPUT_VERSION) -> list[dict[str, Any]]:
+    if version == PRODUCTION_INPUT_V1:
+        return _candidate_range_v1(blocks)
+    if version != PRODUCTION_INPUT_V2:
+        raise ValueError("unknown production input version")
+    rows = [
         {
-            "semantic_id": _block_semantic_id(block),
+            "semantic_id": _block_semantic_id_v2(block),
             "content_sha256": _sha256(block.text),
             "chapter_index": block.chapter_index,
             "memory_type": block.memory_type,
+            "participant_ids": list(memory_participant_ids(block)),
+            "source_chapter_id": block.source_chapter_id or f"legacy-index:{block.chapter_index}",
+            "source_position": block.source_position if block.memory_type == "previous_ending" else 0,
         }
-        for block in sorted(blocks, key=lambda item: (item.chapter_index, item.memory_type, item.id))
+        for block in blocks
     ]
+    return sorted(rows, key=lambda item: _stable_json(item))
+
+
+def _v1_candidate_counter(blocks: Iterable[MemoryBlock]) -> Counter[str]:
+    """Compare full v1-visible source rows, including exact source text."""
+    return Counter(_stable_json(_candidate_row_v1(block)) for block in blocks)
+
+
+def _revision_v1_blocks(chapter: Chapter, revision: ChapterArchiveRevision) -> list[MemoryBlock]:
+    """Recreate one retained v2 revision as the Build63 memory source shape."""
+    blocks: list[MemoryBlock] = []
+    if revision.summary.strip():
+        blocks.append(MemoryBlock(
+            id=f"archive_v2:{revision.id}:summary",
+            text=f"第 {chapter.index} 章摘要：{revision.summary.strip()}",
+            chapter_index=chapter.index,
+            memory_type="summary",
+            source_chapter_id=chapter.id,
+        ))
+    for position, fact in enumerate(revision.facts, start=1):
+        participant_ids = tuple(sorted({participant.character_id for participant in fact.participants}))
+        blocks.append(MemoryBlock(
+            id=f"archive_v2_fact:{fact.id}",
+            text=f"第 {chapter.index} 章{fact.fact_type}事实：{fact.fact_text.strip()}",
+            chapter_index=chapter.index,
+            character_id=participant_ids[0] if len(participant_ids) == 1 else None,
+            memory_type="canonical_fact",
+            participant_ids=participant_ids,
+            source_chapter_id=chapter.id,
+            source_position=position,
+        ))
+    return blocks
+
+
+def _is_archive_revision_block(block: MemoryBlock, chapter_id: str) -> bool:
+    return (
+        block.source_chapter_id == chapter_id
+        and (block.id.startswith("archive_v2:") or block.id.startswith("archive_v2_fact:"))
+    )
+
+
+_MAX_V1_REARCHIVE_PROOF_COMBINATIONS = 256
+
+
+def _v1_rearchive_range_is_proved_current(
+    db: Session,
+    chapter: Chapter,
+    frozen_range: list[dict[str, Any]],
+) -> bool:
+    """Prove an old v1 boundary result came from an equivalent retained source.
+
+    A v1 range deliberately omits database IDs.  That means equality of the
+    frozen 300 rows alone cannot rule out a new high-priority row just beyond
+    the limit.  This compatibility path only accepts a retained, formerly
+    complete revision whose *entire* v1-visible contribution equals the
+    current one, then reruns the historical prefilter with those real IDs.
+    """
+    current_full = memory_candidates(db, chapter)
+    selected_ids = {item.id for item in _selected(chapter)}
+    current_range = _candidate_range_v1(prefilter_memory_candidates_v1(
+        current_full, chapter=chapter, selected_character_ids=selected_ids,
+    ))
+    if current_range == frozen_range:
+        return True
+
+    ordinary = [block for block in current_full if block.memory_type != "previous_ending"]
+    if len(ordinary) <= 300 and sum(nonspace_len(block.text) for block in ordinary) <= 30_000:
+        # Below both Build63 gates the frozen range was the complete input.
+        # Its full row multiset therefore proves exact semantic equality even
+        # when a re-archive changed UUID ordering inside the serialized list.
+        # This is deliberately not used at either gate, where a frozen subset
+        # cannot disprove an unseen addition or mutation.
+        return _v1_candidate_counter(current_full) == Counter(
+            _stable_json(row) for row in frozen_range if isinstance(row, dict)
+        )
+
+    # The v1 range contains every preceding-ending paragraph, so its exact
+    # rows can still prove that deterministic continuation source. Other
+    # legacy-shaped rows may be omitted by the 300/30k gate and have no frozen
+    # source identity; without a retained v2 revision they cannot prove that a
+    # later addition or edit was absent at freeze time.
+    endings = [block for block in current_full if block.memory_type == "previous_ending"]
+    frozen_endings = [
+        row for row in frozen_range
+        if isinstance(row, dict) and row.get("memory_type") == "previous_ending"
+    ]
+    if _v1_candidate_counter(endings) != Counter(_stable_json(row) for row in frozen_endings):
+        return False
+
+    prior_chapters = list(db.scalars(
+        select(Chapter).where(
+            Chapter.book_id == chapter.book_id,
+            Chapter.index < chapter.index,
+            Chapter.status == "finalized",
+        ).order_by(Chapter.index, Chapter.id)
+    ).all())
+    replacement_options: list[tuple[str, list[list[MemoryBlock]]]] = []
+    remaining_frozen_rows = Counter(
+        _stable_json(row) for row in frozen_range if isinstance(row, dict)
+    )
+    for prior in prior_chapters:
+        current_contribution = [
+            block for block in current_full if _is_archive_revision_block(block, prior.id)
+        ]
+        if not current_contribution:
+            continue
+        active_id = prior.active_archive_revision_id
+        if not isinstance(active_id, str) or not active_id:
+            # A current source without an active v2 revision is not a
+            # re-archive proof candidate.  Do not infer old provenance.
+            return False
+        active_revision = db.get(ChapterArchiveRevision, active_id)
+        if (
+            active_revision is None
+            or not active_revision.is_active
+            or active_revision.status != "complete"
+            or _v1_candidate_counter(_revision_v1_blocks(prior, active_revision))
+            != _v1_candidate_counter(current_contribution)
+        ):
+            return False
+        historic_revisions = list(db.scalars(
+            select(ChapterArchiveRevision).where(
+                ChapterArchiveRevision.chapter_id == prior.id,
+                ChapterArchiveRevision.id != active_id,
+                ChapterArchiveRevision.status == "complete",
+                ChapterArchiveRevision.is_active.is_(False),
+            ).order_by(ChapterArchiveRevision.revision, ChapterArchiveRevision.id)
+        ).all())
+        alternatives = [
+            _revision_v1_blocks(prior, revision)
+            for revision in historic_revisions
+        ]
+        alternatives = [
+            blocks for blocks in alternatives
+            if _v1_candidate_counter(blocks) == _v1_candidate_counter(current_contribution)
+        ]
+        if not alternatives:
+            # No retained revision proves an equivalent substitution for this
+            # source. Older, semantically different revisions are irrelevant:
+            # they neither prove nor disprove the current contribution.
+            # It may stay only when its entire current contribution is
+            # explicitly represented in the frozen range; consume those rows
+            # so another active-only source cannot borrow the same evidence.
+            contribution_rows = _v1_candidate_counter(current_contribution)
+            if any(remaining_frozen_rows[row] < count for row, count in contribution_rows.items()):
+                return False
+            remaining_frozen_rows.subtract(contribution_rows)
+        else:
+            replacement_options.append((prior.id, [current_contribution, *alternatives]))
+
+    archive_blocks = [
+        block for prior in prior_chapters
+        for block in current_full
+        if _is_archive_revision_block(block, prior.id)
+    ]
+    if not replacement_options or len(archive_blocks) + len(endings) != len(current_full):
+        return False
+    combinations = 1
+    for _chapter_id, options in replacement_options:
+        combinations *= len(options)
+        if combinations > _MAX_V1_REARCHIVE_PROOF_COMBINATIONS:
+            return False
+
+    replaced_ids = {chapter_id for chapter_id, _options in replacement_options}
+    unchanged = [
+        block for block in current_full
+        if not any(_is_archive_revision_block(block, chapter_id) for chapter_id in replaced_ids)
+    ]
+    for selected_indexes in product(*(range(len(options)) for _chapter_id, options in replacement_options)):
+        # A current-only combination would merely repeat the already unequal
+        # current range. At least one actual old revision must reproduce the
+        # frozen range before this compatibility proof can succeed.
+        if not any(index > 0 for index in selected_indexes):
+            continue
+        selected_options = [
+            options[index]
+            for index, (_chapter_id, options) in zip(selected_indexes, replacement_options, strict=True)
+        ]
+        historical_full = [*unchanged, *(block for option in selected_options for block in option)]
+        # This construction is a complete semantic proof, not a frozen-range
+        # subset check: every replaced chapter was compared above and every
+        # non-replaced source remains in the same full candidate collection.
+        if _v1_candidate_counter(historical_full) != _v1_candidate_counter(current_full):
+            continue
+        historical_range = _candidate_range_v1(prefilter_memory_candidates_v1(
+            historical_full, chapter=chapter, selected_character_ids=selected_ids,
+        ))
+        if historical_range == frozen_range:
+            return True
+    return False
+
+
+def freeze_selector_input(
+    db: Session,
+    chapter: Chapter,
+    candidates: list[MemoryBlock],
+) -> dict[str, Any]:
+    """Freeze the pure values that are actually supplied to Selector.
+
+    Source database IDs are intentionally absent so an equivalent re-archive
+    may be rebound after Selector returns. Rendered relationship identities
+    remain present because they are part of the state cards the model read.
+    """
+    selected = _selected(chapter)
+    projected_state, projected_unknown_slots = _projection_before(db, chapter)
+    prior_state, unknown_slots = _referenced_prior_state(projected_state, projected_unknown_slots, selected)
+    all_characters = _all_characters(db, chapter)
+    identities = _relationship_identities(prior_state, all_characters, unknown_slots)
+    displayed_unknown_slots = _display_unknown_state_slots(unknown_slots, identities, all_characters)
+    return {
+        "protocol_version": PRODUCTION_INPUT_V2,
+        "chapter": {"id": chapter.id, "index": chapter.index, "title": chapter.title},
+        "bible": chapter.user_prompt,
+        "selected_characters": _selected_payload(selected),
+        "normalized_exemptions": normalized_exemptions(chapter.exempted_character_names or []),
+        "prior_state": _display_prior_state(prior_state, identities),
+        "unknown_state_slots": displayed_unknown_slots,
+        "unknown_state_slot_identity": unknown_slots,
+        "relationship_identities": identities,
+        "selector_candidate_range": _candidate_range(candidates, version=PRODUCTION_INPUT_V2),
+    }
+
+
+def is_frozen_selector_input_current(
+    db: Session,
+    chapter: Chapter,
+    frozen: dict[str, Any],
+) -> bool:
+    """Prove Selector's model-facing inputs did not materially change in flight."""
+    if not isinstance(frozen, dict) or frozen.get("protocol_version") != PRODUCTION_INPUT_V2:
+        return False
+    return frozen == freeze_selector_input(db, chapter, _history_blocks(db, chapter))
 
 
 def _lookup_used_sources(
@@ -404,6 +804,9 @@ def _input_fingerprint(snapshot: dict[str, Any]) -> str:
         "name_groups": snapshot["name_groups"],
         "name_candidate_groups": snapshot["name_candidate_groups"],
     }
+    if snapshot["protocol_version"] == PRODUCTION_INPUT_V2:
+        payload["relationship_identities"] = snapshot.get("relationship_identities", {})
+        payload["unknown_state_slot_identity"] = snapshot.get("unknown_state_slot_identity", [])
     return _sha256(_stable_json(payload))
 
 
@@ -532,15 +935,18 @@ def _snapshot(
     exemptions = normalized_exemptions(chapter.exempted_character_names or [])
     projected_state, projected_unknown_slots = _projection_before(db, chapter)
     prior_state, unknown_slots = _referenced_prior_state(projected_state, projected_unknown_slots, selected)
+    all_characters = _all_characters(db, chapter)
+    relationship_identities = _relationship_identities(prior_state, all_characters, unknown_slots)
+    displayed_prior_state = _display_prior_state(prior_state, relationship_identities)
+    displayed_unknown_slots = _display_unknown_state_slots(unknown_slots, relationship_identities, all_characters)
     limitations = production_readiness(db, chapter)
     reference_context = writing_reference_context(
         chapter.book, chapter, memories, previous_ending,
-        conflicts=conflicts, dynamic_fields_by_character=prior_state,
-        unknown_state_slots=unknown_slots,
+        conflicts=conflicts, dynamic_fields_by_character=displayed_prior_state,
+        unknown_state_slots=displayed_unknown_slots,
     )
-    catalog = _base_catalog(chapter, draft_text, selected, prior_state, unknown_slots, exemptions)
+    catalog = _base_catalog(chapter, draft_text, selected, displayed_prior_state, displayed_unknown_slots, exemptions)
     catalog.extend(_lookup_used_sources(candidate_blocks, memories, conflicts, previous_ending))
-    all_characters = _all_characters(db, chapter)
     hits = _name_hits(
         [("draft", draft_text), ("bible", chapter.user_prompt)], all_characters,
         {item.id for item in selected}, set(exemptions),
@@ -557,10 +963,12 @@ def _snapshot(
         "selected_characters": _selected_payload(selected),
         "normalized_exemptions": exemptions,
         "prior_state": prior_state,
-        "unknown_state_slots": unknown_slots,
+        "relationship_identities": relationship_identities,
+        "unknown_state_slots": displayed_unknown_slots,
+        "unknown_state_slot_identity": unknown_slots,
         "reference_context": reference_context,
         "source_catalog": catalog,
-        "selector_candidate_range": _candidate_range(candidate_blocks),
+        "selector_candidate_range": _candidate_range(candidate_blocks, version=PRODUCTION_INPUT_VERSION),
         "memory_manifest": memory_manifest,
         "context_limitations": limitations["context_limitations"],
         "context_token": limitations["context_token"],
@@ -620,6 +1028,7 @@ def prepare_selected_write_input(
     chapter: Chapter,
     *,
     memory_manifest: dict[str, Any],
+    selector_candidates: list[MemoryBlock] | None = None,
 ) -> dict[str, Any]:
     """Freeze all pre-Writer dependencies before a candidate model call.
 
@@ -629,17 +1038,79 @@ def prepare_selected_write_input(
     follow-up operation and does no database read.
     """
     candidates = _history_blocks(db, chapter)
-    memories, conflicts, ending = _memory_from_manifest(candidates, memory_manifest)
+    rebound_manifest = memory_manifest
+    if selector_candidates is not None:
+        rebound_manifest = _rebind_selector_manifest(selector_candidates, candidates, memory_manifest)
+    memories, conflicts, ending = _memory_from_manifest(candidates, rebound_manifest)
     return _snapshot(
         db, chapter, "", memories=memories, conflicts=conflicts,
-        previous_ending=ending, candidate_blocks=candidates, memory_manifest=memory_manifest,
+        previous_ending=ending, candidate_blocks=candidates, memory_manifest=rebound_manifest,
         draft_source="candidate_pending",
     )
 
 
+def _rebind_selector_manifest(
+    frozen_candidates: list[MemoryBlock],
+    current_candidates: list[MemoryBlock],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Map a validated Selector manifest across an equivalent re-archive.
+
+    Each group is proved equivalent by a full v2 semantic key before its IDs
+    are paired in a deterministic order.  This never treats a changed fact as
+    an ordering difference, and it never silently drops a source.
+    """
+    if not isinstance(manifest, dict):
+        raise ProductionInputChanged("Selector 来源清单无效")
+    frozen_counts = Counter(_block_semantic_id_v2(block) for block in frozen_candidates)
+    current_counts = Counter(_block_semantic_id_v2(block) for block in current_candidates)
+    if frozen_counts != current_counts:
+        raise ProductionInputChanged("生成前历史资料已发生实质变化")
+    frozen_by_semantic: dict[str, list[MemoryBlock]] = defaultdict(list)
+    current_by_semantic: dict[str, list[MemoryBlock]] = defaultdict(list)
+    for block in frozen_candidates:
+        frozen_by_semantic[_block_semantic_id_v2(block)].append(block)
+    for block in current_candidates:
+        current_by_semantic[_block_semantic_id_v2(block)].append(block)
+    source_id_map: dict[str, str] = {}
+    for semantic_id, old_blocks in frozen_by_semantic.items():
+        old_sorted = sorted(old_blocks, key=lambda item: item.id)
+        new_sorted = sorted(current_by_semantic[semantic_id], key=lambda item: item.id)
+        if len(old_sorted) != len(new_sorted):
+            raise ProductionInputChanged("生成前历史资料已发生实质变化")
+        source_id_map.update({old.id: new.id for old, new in zip(old_sorted, new_sorted, strict=True)})
+
+    rebound = json.loads(_stable_json(manifest))
+    def rebind_ids(value: Any) -> Any:
+        if not isinstance(value, list) or any(not isinstance(item, str) or item not in source_id_map for item in value):
+            raise ProductionInputChanged("生成前历史来源无法对应")
+        return [source_id_map[item] for item in value]
+
+    for key in ("memory_brief", "conflicts"):
+        rows = rebound.get(key, [])
+        if not isinstance(rows, list):
+            raise ProductionInputChanged("Selector 来源清单无效")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ProductionInputChanged("Selector 来源清单无效")
+            row["source_ids"] = rebind_ids(row.get("source_ids"))
+    start_id = rebound.get("previous_ending_start_id")
+    if start_id is not None:
+        if not isinstance(start_id, str) or start_id not in source_id_map:
+            raise ProductionInputChanged("生成前结尾来源无法对应")
+        rebound["previous_ending_start_id"] = source_id_map[start_id]
+    sources = rebound.get("sources")
+    if isinstance(sources, list):
+        for row in sources:
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] not in source_id_map:
+                raise ProductionInputChanged("生成前历史来源无法对应")
+            row["id"] = source_id_map[row["id"]]
+    return rebound
+
+
 def bind_selected_candidate_draft(prepared: dict[str, Any], draft_text: str) -> dict[str, Any]:
     """Bind Writer output to a prepared snapshot without observing new state."""
-    if not isinstance(prepared, dict) or prepared.get("protocol_version") != PRODUCTION_INPUT_VERSION:
+    if not isinstance(prepared, dict) or prepared.get("protocol_version") not in {PRODUCTION_INPUT_V1, PRODUCTION_INPUT_V2}:
         raise ValueError("prepared selected input is invalid")
     # JSON cloning preserves only the DB-safe protocol fields and prevents a
     # caller from mutating the pre-Writer object while a model request runs.
@@ -689,8 +1160,9 @@ def bind_selected_candidate_draft(prepared: dict[str, Any], draft_text: str) -> 
 
 def is_frozen_input_current(db: Session, chapter: Chapter, snapshot: dict[str, Any]) -> bool:
     """Check real dependencies without replacing a frozen reference with today’s text."""
-    if not isinstance(snapshot, dict) or snapshot.get("protocol_version") != PRODUCTION_INPUT_VERSION:
+    if not isinstance(snapshot, dict) or snapshot.get("protocol_version") not in {PRODUCTION_INPUT_V1, PRODUCTION_INPUT_V2}:
         return False
+    version = snapshot["protocol_version"]
     try:
         if snapshot.get("input_fingerprint") != _input_fingerprint(snapshot):
             return False
@@ -717,10 +1189,27 @@ def is_frozen_input_current(db: Session, chapter: Chapter, snapshot: dict[str, A
         return False
     projected_state, projected_unknown_slots = _projection_before(db, chapter)
     prior_state, unknown_slots = _referenced_prior_state(projected_state, projected_unknown_slots, selected)
-    if snapshot.get("prior_state") != prior_state or snapshot.get("unknown_state_slots") != unknown_slots:
+    if snapshot.get("prior_state") != prior_state:
         return False
-    candidates = _history_blocks(db, chapter)
-    if snapshot.get("selector_candidate_range") != _candidate_range(candidates):
+    if version == PRODUCTION_INPUT_V2:
+        identities = _relationship_identities(prior_state, _all_characters(db, chapter), unknown_slots)
+        if (
+            snapshot.get("relationship_identities") != identities
+            or snapshot.get("unknown_state_slot_identity") != unknown_slots
+            or snapshot.get("unknown_state_slots") != _display_unknown_state_slots(
+                unknown_slots, identities, _all_characters(db, chapter),
+            )
+        ):
+            return False
+    elif snapshot.get("unknown_state_slots") != unknown_slots:
+        return False
+    frozen_range = snapshot.get("selector_candidate_range")
+    if not isinstance(frozen_range, list):
+        return False
+    if version == PRODUCTION_INPUT_V1:
+        if not _v1_rearchive_range_is_proved_current(db, chapter, frozen_range):
+            return False
+    elif frozen_range != _candidate_range(_history_blocks(db, chapter), version=version):
         return False
     # Readiness warnings are presentation/acknowledgement metadata. All real
     # model dependencies were compared above; changing warning classification

@@ -617,6 +617,9 @@ final class ChapterEditorStore: ObservableObject {
     @Published private(set) var pendingProductionContext: PendingProductionContext?
     /// Only the opaque server job ID is retained for the candidate retry.
     @Published private(set) var candidateCheckerRetrySourceJobID: String?
+    /// Backend-declared Checker object identity. This is never inferred from
+    /// parent_job_id because visible prose may have originated from Writer.
+    @Published private(set) var checkerTarget: String?
 
     private let session: AppSession
     let sync: ClientSyncStore
@@ -627,6 +630,12 @@ final class ChapterEditorStore: ObservableObject {
     private var pollingErrorNotified = false
     private var actionOperationID: UUID?
     private var taskRefreshRequestID: UUID?
+    /// Most recently observed durable task identity for this chapter. A
+    /// configuration rejection can occur before a new JobRun exists, so it
+    /// records which older terminal run it supersedes.
+    private var latestTaskJobID: String?
+    private var protectsPreJobCheckerFailure = false
+    private var supersededCheckerJobID: String?
     private var localEditRevision: UInt64 = 0
 
     init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
@@ -710,10 +719,14 @@ final class ChapterEditorStore: ObservableObject {
         checkerResult = nil
         failedCandidateCheckerResult = nil
         candidateCheckerRetrySourceJobID = nil
+        checkerTarget = nil
         checkerAppliesToVisibleDraft = false
         checkerRefreshing = false
         preflightAcceptanceMessage = nil
         staleCheckedSnapshot = nil
+        latestTaskJobID = nil
+        protectsPreJobCheckerFailure = false
+        supersededCheckerJobID = nil
         defer { isLoading = false }
         // Offline-first reading. A local snapshot is safe to render because it
         // is explicitly labelled by `sync.state`; a later refresh never
@@ -757,6 +770,21 @@ final class ChapterEditorStore: ObservableObject {
                 writingPhase = .idle
             }
 
+            // A Checker profile can fail before /check/start creates a new
+            // JobRun. Restore that newer local instruction before asking the
+            // server about an older terminal run, otherwise the old failure
+            // would repaint the same unchanged prose after every cold load.
+            if let outcome = ChapterTaskOutcomeStore.load(chapter: remote),
+               outcome.isPreJobCheckerFailure {
+                writingPhase = outcome.phase
+                currentValidationReason = outcome.validationReason
+                pendingExemptionNames = outcome.pendingExemptionNames
+                checkerTarget = outcome.checkerTarget
+                candidateCheckerRetrySourceJobID = outcome.candidateCheckerRetrySourceJobID
+                protectsPreJobCheckerFailure = true
+                supersededCheckerJobID = outcome.supersededJobID
+            }
+
             let reconciledServerJob = await reconcileLatestJobOnLoad(chapterId: remote.id)
             if !reconciledServerJob {
                 resumePollingIfNeeded()
@@ -768,6 +796,10 @@ final class ChapterEditorStore: ObservableObject {
                 writingPhase = outcome.phase
                 currentValidationReason = outcome.validationReason
                 pendingExemptionNames = outcome.pendingExemptionNames
+                checkerTarget = outcome.checkerTarget
+                candidateCheckerRetrySourceJobID = outcome.candidateCheckerRetrySourceJobID
+                protectsPreJobCheckerFailure = outcome.isPreJobCheckerFailure
+                supersededCheckerJobID = outcome.supersededJobID
             }
         } catch {
             if case APIError.transport = error { sync.markOffline() }
@@ -1110,15 +1142,16 @@ final class ChapterEditorStore: ObservableObject {
                   currentChapter?.id == chapterID,
                   localEditRevision == startingRevision else { return nil }
             if !hasLocalInputDivergence {
-                currentChapter = remote
-                sync.cache.saveChapter(remote)
-                cache.saveClean(remote)
-                saveState = .synced
+                adoptRemoteChapter(remote)
             }
             let status = try await session.api.jobStatus(chapterId: chapterID)
             guard taskRefreshRequestID == requestID,
                   currentChapter?.id == chapterID,
                   localEditRevision == startingRevision else { return nil }
+            if shouldDeferCheckerStatus(status) {
+                sync.markOnline()
+                return currentChapter
+            }
             switch ChapterJobReconciler.decide(
                 status: status,
                 chapter: remote,
@@ -1129,7 +1162,12 @@ final class ChapterEditorStore: ObservableObject {
                 pollJob(chapterId: chapterID)
             case .currentTerminal:
                 applyJobStatus(status, chapterId: chapterID)
-            case .obsoleteTerminal, .unverifiedTerminal, .none:
+            case .obsoleteTerminal:
+                // A remote input update makes any terminal Checker result
+                // unusable, even when this client still holds an old passed
+                // badge. Clear all check-specific recovery state together.
+                discardObsoleteTaskOutcome(chapterID: chapterID)
+            case .unverifiedTerminal, .none:
                 if !writingPhase.isFailed { writingPhase = .idle }
                 pollingConnectionInterrupted = false
                 taskMonitoringMessage = nil
@@ -1186,71 +1224,67 @@ final class ChapterEditorStore: ObservableObject {
         guard case let .proceed(token) = await productionReadiness(
             for: chapter, action: .check, acknowledgedContextToken: acknowledgedContextToken
         ) else { return nil }
-        let runID = UUID().uuidString
         let startingRevision = localEditRevision
         let noticeLocation = noticeLocation(for: chapter)
+        clearPreJobCheckerFailure(chapterID: chapter.id)
         do {
-            let response = try await session.api.rerunChecker(
+            let status = try await session.api.startChecker(
                 chapterId: chapter.id, contentRevision: chapter.contentRevision,
                 acknowledgedContextToken: token
             )
-            var result = response.checkerResult
-            // During the additive rollout some Backend responses keep these
-            // fields beside `checker_result`; retain either public shape.
-            if !response.contextLimitations.isEmpty {
-                result?.contextLimitations = response.contextLimitations
-            }
-            if let result,
-               !result.hasConcreteVerdict {
-                let presented = LinoErrorPresenter.present(checkerUnavailable: result)
-                // Completion notices belong to the action that caused them,
-                // not to whichever chapter happens to be open by the time a
-                // slow checker returns.
-                session.notices.publish(
-                    noticeLocation + "手动复查未完成：\(presented.message)",
-                    critical: presented.critical,
-                    tone: .error,
-                    deduplicationKey: "manual-check:\(chapter.id):\(runID)"
-                )
-            }
             guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else {
-                return result
-            }
-            guard ChapterRefreshReconciler.shouldReplaceLocal(
-                startingRevision: startingRevision,
-                currentRevision: localEditRevision,
-                hasLocalInputDivergence: hasLocalInputDivergence
-            ) else { return nil }
-            checkerResult = result
-            failedCandidateCheckerResult = nil
-            checkerAppliesToVisibleDraft = result != nil
-            updatePendingIdentityNames(from: result)
-            preflightAcceptanceMessage = nil
-            if let result, let checked = currentChapter, result.hasConcreteVerdict {
-                let snapshot = CheckedDraftSnapshot(chapter: checked, checkerResult: result)
-                if cache.saveCheckedSnapshot(snapshot) { staleCheckedSnapshot = snapshot }
-                // A concrete check of the current visible prose supersedes
-                // earlier generation/check/accept failures, but never repairs
-                // an independently failed archive.
-                if case .failed(_, _, let stage) = writingPhase, stage != .extraction {
-                    ChapterTaskOutcomeStore.clear(chapterID: checked.id)
-                    writingPhase = .idle
-                    currentValidationReason = nil
-                    candidateCheckerRetrySourceJobID = nil
-                    if result.identityIssues.isEmpty {
-                        pendingExemptionNames = []
-                    }
+                if status.phase == "failed" || status.phase == "cancelled" {
+                    let presented = LinoErrorPresenter.present(jobFailure: status)
+                    session.notices.publish(
+                        noticeLocation + presented.message,
+                        critical: presented.critical,
+                        tone: .error,
+                        deduplicationKey: "manual-check-terminal-after-leave:\(chapter.id):\(status.jobId ?? operationID.uuidString)"
+                    )
                 }
+                return nil
             }
-            return result
+            clearPreJobCheckerFailure(chapterID: chapter.id)
+            applyJobStatus(status, chapterId: chapter.id)
+            if !Self.isTerminalPhase(status.phase) { pollJob(chapterId: chapter.id) }
+            return checkerResult
         } catch {
+            if await recoverCheckerStartOutcomeIfUnknown(
+                error, chapterId: chapter.id, operationID: operationID, revision: startingRevision
+            ) {
+                return checkerResult
+            }
+            if await adoptRunningJobIfNeeded(
+                error, chapterId: chapter.id, operationID: operationID, revision: startingRevision
+            ) {
+                return checkerResult
+            }
+            let code = LinoErrorPresenter.code(for: error)
+            if actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision),
+               LinoErrorPresenter.requiresModelSettings(code) {
+                // /check/start can reject before the Backend creates a JobRun
+                // (for example while resolving the Checker profile). Preserve
+                // the target explicitly so the recovery card leads to settings
+                // instead of silently falling back to Writer work.
+                checkerTarget = "visible_draft"
+                applyStartFailure(
+                    error,
+                    chapter: chapter,
+                    intendedStage: .bibleChecking,
+                    operationID: operationID,
+                    revision: startingRevision,
+                    noticeLocation: noticeLocation,
+                    action: "手动复查"
+                )
+                return nil
+            }
             _ = await recordActionRevisionConflictIfNeeded(error, chapter: chapter)
             let presented = LinoErrorPresenter.present(error: error)
             session.notices.publish(
                 noticeLocation + "手动复查未完成：\(presented.message)",
                 critical: presented.critical,
                 tone: .error,
-                deduplicationKey: "manual-check:\(chapter.id):\(runID)"
+                deduplicationKey: "manual-check-start:\(chapter.id):\(operationID.uuidString)"
             )
             if actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision),
                let message = Self.preflightAcceptanceOverrideMessage(from: error) {
@@ -1281,6 +1315,7 @@ final class ChapterEditorStore: ObservableObject {
         let operationID = beginAction()
         let revision = localEditRevision
         let location = noticeLocation(for: chapter)
+        clearPreJobCheckerFailure(chapterID: chapter.id)
         writingPhase = .checking
         do {
             let status = try await session.api.retryCandidateChecker(
@@ -1288,15 +1323,21 @@ final class ChapterEditorStore: ObservableObject {
                 contentRevision: chapter.contentRevision
             )
             guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return nil }
+            clearPreJobCheckerFailure(chapterID: chapter.id)
             applyJobStatus(status, chapterId: chapter.id)
             if !Self.isTerminalPhase(status.phase) { pollJob(chapterId: chapter.id) }
             return currentChapter
         } catch {
             let permanentRetryErrors = ["checker_retry_input_changed", "checker_retry_not_available", "checker_source_not_found", "checker_retry_unavailable"]
+            let code = LinoErrorPresenter.code(for: error)
             if actionIsCurrent(operationID, chapterID: chapter.id, revision: revision),
-               permanentRetryErrors.contains(LinoErrorPresenter.code(for: error) ?? "") {
+               permanentRetryErrors.contains(code ?? "") {
                 candidateCheckerRetrySourceJobID = nil
                 failedCandidateCheckerResult = nil
+            }
+            if actionIsCurrent(operationID, chapterID: chapter.id, revision: revision),
+               LinoErrorPresenter.requiresModelSettings(code) {
+                checkerTarget = "generated_candidate"
             }
             applyStartFailure(
                 error, chapter: chapter, intendedStage: .bibleChecking,
@@ -1565,6 +1606,10 @@ final class ChapterEditorStore: ObservableObject {
         do {
             let status = try await session.api.jobStatus(chapterId: chapter.id)
             guard currentChapter?.id == chapter.id else { return }
+            // The failed local start can be newer than this persisted job.
+            // In that case even an obsolete decision must not discard the
+            // settings/recovery instruction before a distinct job is seen.
+            if shouldDeferCheckerStatus(status) { return }
             switch ChapterJobReconciler.decide(
                 status: status,
                 chapter: chapter,
@@ -1775,6 +1820,15 @@ final class ChapterEditorStore: ObservableObject {
         announceFailure: Bool = true
     ) {
         guard currentChapter?.id == chapterId else { return }
+        // A pre-JobRun failure/unconfirmed response belongs to a newer user
+        // action than an already terminal Checker record. This guard is
+        // shared by foreground refresh, cold-load reconciliation, and a poll
+        // that was already in flight when the newer action failed.
+        guard !shouldDeferCheckerStatus(status) else { return }
+        if let jobID = status.jobId { latestTaskJobID = jobID }
+        if status.kind == "check", Self.isActiveJobPhase(status.phase) {
+            clearPreJobCheckerFailure(chapterID: chapterId)
+        }
         pollingConnectionInterrupted = false
         taskMonitoringMessage = nil
         if let context = status.memoryContext { memoryContext = context }
@@ -1802,6 +1856,7 @@ final class ChapterEditorStore: ObservableObject {
             }
         case "checking":
             checkerAppliesToVisibleDraft = false
+            checkerTarget = status.checkerTarget
             writingPhase = .checking
             // A manual check can target accepted prose. It observes the
             // existing chapter and must never reopen it as Writer work.
@@ -1816,6 +1871,11 @@ final class ChapterEditorStore: ObservableObject {
             writingPhase = .extracting
             setCurrentChapterStatus("finalized", chapterId: chapterId)
         case "done":
+            let preservesIndependentExtractorFailure = status.kind == "check"
+                && status.checkerTarget == "visible_draft"
+                && currentChapter?.status == "finalized"
+                && writingPhase.isFailed
+                && writingPhase.currentStage == .extraction
             memoryContext = status.memoryContext ?? memoryContext
             failedCandidateCheckerResult = nil
             let visibleResult: CheckerResult?
@@ -1843,6 +1903,19 @@ final class ChapterEditorStore: ObservableObject {
                 checkerResult = visibleResult
                 checkerAppliesToVisibleDraft = true
                 updatePendingIdentityNames(from: visibleResult)
+            } else if status.kind == "write" || status.kind == "check" {
+                // A current terminal Writer/manual-Checker result with no
+                // visible projection must not leave the prior manuscript's
+                // pass badge attached to newly loaded prose.
+                checkerResult = nil
+                checkerAppliesToVisibleDraft = false
+                pendingExemptionNames = []
+            }
+            if status.kind == "check" && status.checkerTarget == "visible_draft" {
+                // A successful visible-prose check supersedes an older hidden
+                // candidate retry handle; the two objects must never share a
+                // recovery action.
+                candidateCheckerRetrySourceJobID = nil
             }
             if let chapter = status.chapter {
                 currentChapter = chapter
@@ -1857,7 +1930,10 @@ final class ChapterEditorStore: ObservableObject {
                 }
             }
             ChapterTaskOutcomeStore.clear(chapterID: chapterId)
-            writingPhase = .idle
+            checkerTarget = nil
+            if !preservesIndependentExtractorFailure {
+                writingPhase = .idle
+            }
             if visibleResult == nil {
                 pendingExemptionNames = []
             }
@@ -1879,6 +1955,7 @@ final class ChapterEditorStore: ObservableObject {
             )
             currentValidationReason = nil
             pendingExemptionNames = []
+            checkerTarget = status.kind == "check" ? status.checkerTarget : nil
             if status.kind == "write" || status.kind == "check" || status.kind == "extract" {
                 let visibleResult = status.visibleCheckerResult
                 checkerResult = visibleResult
@@ -1890,7 +1967,8 @@ final class ChapterEditorStore: ObservableObject {
                 ChapterTaskOutcomeStore.save(
                     phase: writingPhase,
                     chapter: chapter,
-                    jobID: status.jobId
+                    jobID: status.jobId,
+                    checkerTarget: status.kind == "check" ? status.checkerTarget : nil
                 )
             }
             Task { [weak self] in
@@ -1915,6 +1993,7 @@ final class ChapterEditorStore: ObservableObject {
             setCurrentChapterStatus("finalized", chapterId: chapterId)
         }
         if status.kind == "write" {
+            checkerTarget = nil
             failedCandidateCheckerResult = status.failedCandidateCheckerResult
             candidateCheckerRetrySourceJobID = status.canRetryChecker
                 ? (status.checkerSourceJobId ?? status.jobId)
@@ -1924,6 +2003,7 @@ final class ChapterEditorStore: ObservableObject {
             updatePendingIdentityNames(from: status.visibleCheckerResult)
             saveCheckedSnapshotIfCurrent(status.visibleCheckerResult, chapter: currentChapter)
         } else if status.kind == "check" {
+            checkerTarget = status.checkerTarget
             let visibleResult = status.visibleCheckerResult
             failedCandidateCheckerResult = status.failedCandidateCheckerResult
             candidateCheckerRetrySourceJobID = status.canRetryChecker ? status.checkerSourceJobId : nil
@@ -1932,6 +2012,7 @@ final class ChapterEditorStore: ObservableObject {
             updatePendingIdentityNames(from: visibleResult)
             saveCheckedSnapshotIfCurrent(visibleResult, chapter: currentChapter)
         } else if status.kind == "extract" {
+            checkerTarget = nil
             // A failed archive leaves accepted prose intact. Restore only
             // the server-projected visible Checker result so its evidence
             // remains current after reopening the chapter.
@@ -1970,7 +2051,8 @@ final class ChapterEditorStore: ObservableObject {
                 chapter: chapter,
                 validationReason: currentValidationReason,
                 pendingExemptionNames: pendingExemptionNames,
-                jobID: status.jobId
+                jobID: status.jobId,
+                checkerTarget: status.kind == "check" ? status.checkerTarget : nil
             )
         }
         let location = currentChapter.map { chapter in
@@ -2008,6 +2090,13 @@ final class ChapterEditorStore: ObservableObject {
         guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return }
         pendingExemptionNames = []
         let code = LinoErrorPresenter.code(for: error)
+        let isPreJobCheckerFailure = intendedStage == .bibleChecking
+            && LinoErrorPresenter.requiresModelSettings(code)
+        if isPreJobCheckerFailure {
+            protectsPreJobCheckerFailure = true
+            supersededCheckerJobID = latestTaskJobID
+            stopPolling(for: chapter.id)
+        }
         if let apiError = error as? APIError,
            case let .validation(_, validationCode, _, names, _) = apiError,
            validationCode == "unselected_characters_in_bible" {
@@ -2021,7 +2110,12 @@ final class ChapterEditorStore: ObservableObject {
                 phase: writingPhase,
                 chapter: chapter,
                 validationReason: currentValidationReason,
-                pendingExemptionNames: pendingExemptionNames
+                pendingExemptionNames: pendingExemptionNames,
+                checkerTarget: intendedStage == .bibleChecking ? checkerTarget : nil,
+                isPreJobCheckerFailure: isPreJobCheckerFailure,
+                supersededJobID: isPreJobCheckerFailure ? supersededCheckerJobID : nil,
+                candidateCheckerRetrySourceJobID: isPreJobCheckerFailure
+                    ? candidateCheckerRetrySourceJobID : nil
             )
         }
     }
@@ -2226,6 +2320,72 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
+    /// A connection drop or response decoding failure after `POST /check/start`
+    /// cannot distinguish a server-side start from a local failure.  Observe
+    /// the existing job exactly once; do not turn uncertainty into a second
+    /// Checker request.
+    private func recoverCheckerStartOutcomeIfUnknown(
+        _ error: Error,
+        chapterId: String,
+        operationID: UUID,
+        revision: UInt64
+    ) async -> Bool {
+        guard Self.checkerStartOutcomeMayBeUnknown(error) else { return false }
+        var supersededJobID: String?
+        do {
+            let status = try await session.api.jobStatus(chapterId: chapterId)
+            guard actionIsCurrent(operationID, chapterID: chapterId, revision: revision) else { return true }
+            // Only an active, explicitly visible Checker job with a durable
+            // job ID can be the post that lost its response.  A terminal
+            // record (even `outcome_current`) may be an older check of the
+            // same prose, and therefore cannot prove this POST succeeded.
+            let isMatchingActiveChecker = status.kind == "check"
+                && status.phase == "checking"
+                && status.checkerTarget == "visible_draft"
+                && status.outcomeCurrent == nil
+                && status.jobId != nil
+            if isMatchingActiveChecker {
+                applyJobStatus(status, chapterId: chapterId)
+                pollJob(chapterId: chapterId)
+                return true
+            }
+            supersededJobID = status.jobId
+        } catch {
+            // The monitor state below deliberately remains unresolved.  It
+            // gives the author a read-only recovery action instead of posting
+            // the same Checker request again after a lost response.
+        }
+        guard actionIsCurrent(operationID, chapterID: chapterId, revision: revision) else { return true }
+        pollingConnectionInterrupted = true
+        taskMonitoringMessage = "复查是否已启动暂未确认，请刷新任务状态。"
+        checkerTarget = "visible_draft"
+        protectsPreJobCheckerFailure = true
+        supersededCheckerJobID = supersededJobID ?? latestTaskJobID
+        stopPolling(for: chapterId)
+        writingPhase = .failed(
+            code: "checker_start_unconfirmed",
+            message: taskMonitoringMessage ?? "复查是否已启动暂未确认。",
+            stage: nil
+        )
+        if let chapter = currentChapter, chapter.id == chapterId {
+            ChapterTaskOutcomeStore.save(
+                phase: writingPhase,
+                chapter: chapter,
+                checkerTarget: checkerTarget,
+                isPreJobCheckerFailure: true,
+                supersededJobID: supersededCheckerJobID
+            )
+        }
+        return true
+    }
+
+    private static func checkerStartOutcomeMayBeUnknown(_ error: Error) -> Bool {
+        if error is DecodingError { return true }
+        guard let apiError = error as? APIError else { return false }
+        if case .transport = apiError { return true }
+        return false
+    }
+
     private static func validationReason(from violations: [Violation]?) -> String? {
         let messages = violations?
             .map { $0.message.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -2245,6 +2405,39 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
+    /// A terminal Checker row only proves the action that created that row.
+    /// It cannot resolve a later start request that either failed before a
+    /// JobRun was written or lost its response.  Until a new active job is
+    /// observed or the author makes another explicit request, preserve the
+    /// newer local recovery state through every observer entrance.
+    private func shouldDeferCheckerStatus(_ status: WriteJobStatus) -> Bool {
+        guard protectsPreJobCheckerFailure,
+              status.kind == "check",
+              status.checkerTarget == checkerTarget || status.checkerTarget == nil else {
+            return false
+        }
+        // When the preflight saw a durable old job, its active state is just
+        // as old as its terminal state. It cannot displace a newer local
+        // configuration failure. A different active job confirms a later
+        // request and may safely clear this local recovery state.
+        if let supersededCheckerJobID {
+            return status.jobId == supersededCheckerJobID
+        }
+        // With no job identity, only a terminal row is provably older. An
+        // active visible check may be the POST whose response was lost and is
+        // still allowed to establish its own durable identity.
+        return Self.isTerminalPhase(status.phase)
+    }
+
+    private func clearPreJobCheckerFailure(chapterID: String) {
+        protectsPreJobCheckerFailure = false
+        supersededCheckerJobID = nil
+        guard let chapter = currentChapter, chapter.id == chapterID,
+              let outcome = ChapterTaskOutcomeStore.load(chapter: chapter),
+              outcome.isPreJobCheckerFailure else { return }
+        ChapterTaskOutcomeStore.clear(chapterID: chapterID)
+    }
+
     private func setCurrentChapterStatus(_ status: String, chapterId: String) {
         guard var chapter = currentChapter, chapter.id == chapterId else { return }
         chapter.status = status
@@ -2260,6 +2453,7 @@ final class ChapterEditorStore: ObservableObject {
         do {
             let status = try await session.api.jobStatus(chapterId: chapterId)
             guard let latestChapter = currentChapter, latestChapter.id == chapterId else { return true }
+            if shouldDeferCheckerStatus(status) { return true }
             switch ChapterJobReconciler.decide(
                 status: status,
                 chapter: latestChapter,
@@ -2288,10 +2482,16 @@ final class ChapterEditorStore: ObservableObject {
 
     private func discardObsoleteTaskOutcome(chapterID: String) {
         ChapterTaskOutcomeStore.clear(chapterID: chapterID)
+        clearPreJobCheckerFailure(chapterID: chapterID)
         writingPhase = .idle
         currentValidationReason = nil
         pendingExemptionNames = []
         failedCandidateCheckerResult = nil
+        candidateCheckerRetrySourceJobID = nil
+        checkerResult = nil
+        checkerAppliesToVisibleDraft = false
+        checkerTarget = nil
+        preflightAcceptanceMessage = nil
         pollingConnectionInterrupted = false
         taskMonitoringMessage = nil
     }
@@ -2319,9 +2519,35 @@ final class ChapterEditorStore: ObservableObject {
             currentRevision: localEditRevision,
             hasLocalInputDivergence: hasLocalInputDivergence
         ) else { return }
-        currentChapter = refreshed
-        cache.saveClean(refreshed)
+        adoptRemoteChapter(refreshed)
+    }
+
+    /// A successful chapter read is enough to make old local evidence stale.
+    /// The accompanying /job read may fail, so it cannot be the only place
+    /// that invalidates a pass attached to the former prose or Bible.
+    private func adoptRemoteChapter(_ remote: Chapter) {
+        let changedCheckerInput: Bool
+        if let current = currentChapter, current.id == remote.id {
+            changedCheckerInput = current.draftText != remote.draftText
+                || current.title != remote.title
+                || current.userPrompt != remote.userPrompt
+                || current.characterLinks.map(\.characterId).sorted() != remote.characterLinks.map(\.characterId).sorted()
+                || current.exemptedCharacterNames.sorted() != remote.exemptedCharacterNames.sorted()
+        } else {
+            changedCheckerInput = false
+        }
+        currentChapter = remote
+        sync.cache.saveChapter(remote)
+        cache.saveClean(remote)
         saveState = .synced
+        guard changedCheckerInput else { return }
+        checkerResult = nil
+        checkerAppliesToVisibleDraft = false
+        failedCandidateCheckerResult = nil
+        candidateCheckerRetrySourceJobID = nil
+        checkerTarget = nil
+        preflightAcceptanceMessage = nil
+        clearPreJobCheckerFailure(chapterID: remote.id)
     }
 
     private func clearTaskOutcome(chapterID: String) {
@@ -2337,6 +2563,7 @@ final class ChapterEditorStore: ObservableObject {
         if hadPersistedOutcome {
             ChapterTaskOutcomeStore.clear(chapterID: chapterID)
         }
+        clearPreJobCheckerFailure(chapterID: chapterID)
         failedCandidateCheckerResult = nil
         switch writingPhase {
         case .failed, .cancelled:

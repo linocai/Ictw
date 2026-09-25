@@ -18,6 +18,29 @@ IDENTITY_ISSUE_KINDS = {"unselected_character", "ambiguous_character", "uncertai
 class CheckerValidationError(ValueError):
     """A model response cannot truthfully be persisted as a Checker conclusion."""
 
+    def __init__(
+        self,
+        message: str = "检查结果不符合协议",
+        *,
+        reason_code: str = "invalid_protocol",
+        diagnostics: dict[str, int | str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        # These are deliberately structural counters only.  They can be kept
+        # with a private JobRun without retaining names, candidate prose,
+        # model reasons, or copied protocol tokens.
+        self.diagnostics = {
+            key: value
+            for key, value in (diagnostics or {}).items()
+            if key in {
+                "protocol_version", "expected_group_count", "received_row_count",
+                "unknown_group_count", "missing_group_count", "duplicate_group_count",
+            }
+            and isinstance(value, (int, str))
+            and (not isinstance(value, int) or 0 <= value <= 10_000)
+        }
+
 
 def normalize_for_evidence(value: str) -> str:
     """NFKC plus whitespace-only normalization; never a semantic/fuzzy match."""
@@ -139,49 +162,73 @@ def _program_name_groups(snapshot: dict[str, Any], hits: dict[str, dict[str, Any
     return result
 
 
+def numbered_name_groups(groups: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[tuple[str, dict[str, Any]]]:
+    """Give frozen name groups stable request-local IDs in their saved order.
+
+    The same pure numbering is used when rendering the model prompt and when
+    interpreting the response.  It intentionally does not rewrite the
+    persisted v1 ``name_groups`` rows or any frozen fingerprint.
+    """
+    return [(f"g{index}", group) for index, group in enumerate(groups, start=1)]
+
+
 def _checked_name_uses(
     raw_uses: list[Any],
     hits: dict[str, dict[str, Any]],
     snapshot: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    groups = _program_name_groups(snapshot, hits)
-    seen_groups: set[frozenset[str]] = set()
+    grouped = _program_name_groups(snapshot, hits)
+    groups = dict(numbered_name_groups(list(grouped.values())))
+    seen_groups: set[str] = set()
     result: list[dict[str, Any]] = []
     for item in raw_uses:
         if not isinstance(item, dict):
-            raise CheckerValidationError("name_use 不是对象")
-        allowed = {"hit_ids", "classification", "reason", "character_id"}
-        required = {"hit_ids", "classification", "reason"}
+            raise CheckerValidationError("name_use 不是对象", reason_code="invalid_name_use_row")
+        allowed = {"group_id", "classification", "reason", "character_id"}
+        required = {"group_id", "classification", "reason"}
         if not set(item).issubset(allowed) or not required.issubset(item):
-            raise CheckerValidationError("name_use 字段不符合协议")
-        hit_ids = item.get("hit_ids")
+            raise CheckerValidationError("name_use 字段不符合协议", reason_code="invalid_name_use_fields")
+        group_id = item.get("group_id")
         classification = item.get("classification")
         reason = item.get("reason")
         character_id = item.get("character_id")
         if (
-            not isinstance(hit_ids, list) or not hit_ids
-            or any(not isinstance(value, str) for value in hit_ids)
-            or len(set(hit_ids)) != len(hit_ids)
+            not isinstance(group_id, str) or not group_id
             or classification not in NAME_CLASSIFICATIONS
             or not isinstance(reason, str) or not reason.strip()
         ):
-            raise CheckerValidationError("name_use 缺少分组、分类或理由")
-        key = frozenset(hit_ids)
-        group = groups.get(key)
+            raise CheckerValidationError("name_use 缺少分组、分类或理由", reason_code="invalid_name_use_values")
+        group = groups.get(group_id)
         if group is None:
-            if any(hit_id not in hits for hit_id in hit_ids):
-                raise CheckerValidationError("name_use 引用了未知命中 ID")
-            raise CheckerValidationError("name_use 不能跨程序局部片段或候选组")
-        if key in seen_groups:
-            raise CheckerValidationError("同一姓名分组被重复分类")
-        first = hits[hit_ids[0]]
+            raise CheckerValidationError(
+                "name_use 引用了未知分组",
+                reason_code="unknown_group_id",
+                diagnostics={
+                    "protocol_version": "group_id_v1",
+                    "expected_group_count": len(groups),
+                    "received_row_count": len(raw_uses),
+                    "unknown_group_count": 1,
+                },
+            )
+        if group_id in seen_groups:
+            raise CheckerValidationError(
+                "同一姓名分组被重复分类",
+                reason_code="duplicate_group_id",
+                diagnostics={
+                    "protocol_version": "group_id_v1",
+                    "expected_group_count": len(groups),
+                    "received_row_count": len(raw_uses),
+                    "duplicate_group_count": 1,
+                },
+            )
+        first = hits[group["hit_ids"][0]]
         if character_id is not None and (
             not isinstance(character_id, str) or character_id not in first["candidate_character_ids"]
         ):
-            raise CheckerValidationError("name_use 的人物 ID 不属于该姓名候选")
+            raise CheckerValidationError("name_use 的人物 ID 不属于该姓名候选", reason_code="invalid_character_id")
         if classification == "ordinary_word" and character_id is not None:
-            raise CheckerValidationError("普通词不能绑定人物 ID")
-        seen_groups.add(key)
+            raise CheckerValidationError("普通词不能绑定人物 ID", reason_code="invalid_character_id")
+        seen_groups.add(group_id)
         for hit_id in group["hit_ids"]:
             hit = hits[hit_id]
             # Exact evidence and offset are program-reconstructed from the
@@ -197,7 +244,16 @@ def _checked_name_uses(
                 "evidence_end": hit["source_end"],
             })
     if seen_groups != set(groups):
-        raise CheckerValidationError("Checker 未逐项处理程序提供的姓名分组")
+        raise CheckerValidationError(
+            "Checker 未逐项处理程序提供的姓名分组",
+            reason_code="missing_group_id",
+            diagnostics={
+                "protocol_version": "group_id_v1",
+                "expected_group_count": len(groups),
+                "received_row_count": len(raw_uses),
+                "missing_group_count": len(set(groups) - seen_groups),
+            },
+        )
     return result
 
 
@@ -358,7 +414,14 @@ def validate_checker_result(
 
 
 def checker_failure_message(exc: Exception) -> str:
-    """Only our fixed validation diagnostics may cross the public boundary."""
+    """Public copy deliberately never exposes protocol internals."""
     if isinstance(exc, CheckerValidationError):
-        return "检查结果未通过校验：" + str(exc)
+        return "检查未能完成，尚未得到可用结论；可重新复查"
     return "检查模型未返回有效检查结论"
+
+
+def checker_failure_diagnostics(exc: Exception) -> dict[str, int | str]:
+    """Return safe private structure diagnostics for JobRun persistence."""
+    if not isinstance(exc, CheckerValidationError):
+        return {"reason_code": "invalid_response"}
+    return {"reason_code": exc.reason_code, **exc.diagnostics}

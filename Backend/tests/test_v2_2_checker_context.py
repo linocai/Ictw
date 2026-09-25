@@ -22,6 +22,11 @@ from app.services.context import (
     writing_reference_context,
 )
 from app.services.production_context import (
+    PRODUCTION_INPUT_V1,
+    ProductionInputChanged,
+    _candidate_range_v1,
+    _history_blocks,
+    _history_blocks_v1,
     freeze_manual_checker_input,
     freeze_selected_write_input,
     is_frozen_input_current,
@@ -61,17 +66,25 @@ def _ordinary_raw(snapshot: dict) -> dict:
         "issues": [],
         "name_uses": [
             {
-                "hit_ids": group["hit_ids"],
+                "group_id": f"g{index}",
                 "classification": "ordinary_word",
                 "reason": "这里描述季节，不是人物出场。",
             }
-            for group in snapshot["name_groups"]
+            for index, group in enumerate(snapshot["name_groups"], start=1)
         ],
     }
 
 
 def _group_for_hit(snapshot: dict, hit: dict) -> dict:
     return next(group for group in snapshot["name_groups"] if hit["hit_id"] in group["hit_ids"])
+
+
+def _group_id_for_hit(snapshot: dict, hit: dict) -> str:
+    return next(
+        f"g{index}"
+        for index, group in enumerate(snapshot["name_groups"], start=1)
+        if hit["hit_id"] in group["hit_ids"]
+    )
 
 
 def test_checker_evidence_and_name_use_contract_are_strict(client) -> None:
@@ -127,7 +140,7 @@ def test_character_and_uncertain_name_uses_need_explicit_identity_issue(client) 
                 "source_evidence": "selected_character_ids",
             }],
             "name_uses": [{
-                "hit_ids": _group_for_hit(snapshot, hit)["hit_ids"], "classification": "character",
+                "group_id": _group_id_for_hit(snapshot, hit), "classification": "character",
                 "reason": "这里是说话的人物。", "character_id": hit["candidate_character_ids"][0],
             }],
         }
@@ -169,11 +182,11 @@ def test_same_name_occurrences_are_classified_at_their_own_frozen_offsets(client
             }],
             "name_uses": [
                 {
-                    "hit_ids": _group_for_hit(snapshot, season)["hit_ids"], "classification": "ordinary_word",
+                    "group_id": _group_id_for_hit(snapshot, season), "classification": "ordinary_word",
                     "reason": "这里指季节。",
                 },
                 {
-                    "hit_ids": _group_for_hit(snapshot, speaker)["hit_ids"], "classification": "character",
+                    "group_id": _group_id_for_hit(snapshot, speaker), "classification": "character",
                     "reason": "这里是说话者。", "character_id": speaker["candidate_character_ids"][0],
                 },
             ],
@@ -181,8 +194,8 @@ def test_same_name_occurrences_are_classified_at_their_own_frozen_offsets(client
         assert validate_checker_result(raw, snapshot)["verdict"] == "violation"
 
         forged = copy.deepcopy(raw)
-        forged["name_uses"][1]["hit_ids"] = _group_for_hit(snapshot, season)["hit_ids"] + _group_for_hit(snapshot, speaker)["hit_ids"]
-        with pytest.raises(CheckerValidationError, match="不能跨"):
+        forged["name_uses"][1]["group_id"] = _group_id_for_hit(snapshot, season)
+        with pytest.raises(CheckerValidationError, match="重复"):
             validate_checker_result(forged, snapshot)
 
 
@@ -215,6 +228,8 @@ def test_compact_name_groups_handle_500_mixed_uses_without_prompt_or_reply_blowu
         assert len(snapshot["name_groups"]) == 2
         speaking = next(group for group in snapshot["name_groups"] if "说道" in group["local_context"])
         seasonal = next(group for group in snapshot["name_groups"] if "天气很热" in group["local_context"])
+        seasonal_id = f"g{snapshot['name_groups'].index(seasonal) + 1}"
+        speaking_id = f"g{snapshot['name_groups'].index(speaking) + 1}"
         raw = {
             "verdict": "violation",
             "issues": [{
@@ -223,9 +238,9 @@ def test_compact_name_groups_handle_500_mixed_uses_without_prompt_or_reply_blowu
                 "source_evidence": "selected_character_ids",
             }],
             "name_uses": [
-                {"hit_ids": seasonal["hit_ids"], "classification": "ordinary_word", "reason": "这里指季节。"},
+                {"group_id": seasonal_id, "classification": "ordinary_word", "reason": "这里指季节。"},
                 {
-                    "hit_ids": speaking["hit_ids"], "classification": "character", "reason": "这里是说话者。",
+                    "group_id": speaking_id, "classification": "character", "reason": "这里是说话者。",
                     "character_id": snapshot["name_hits"][0]["candidate_character_ids"][0],
                 },
             ],
@@ -242,13 +257,16 @@ def test_compact_name_groups_handle_500_mixed_uses_without_prompt_or_reply_blowu
         assert sum(item["classification"] == "ordinary_word" for item in checked["name_uses"]) == 250
 
         unknown = copy.deepcopy(raw)
-        unknown["name_uses"][0]["hit_ids"] = ["n404404"]
-        with pytest.raises(CheckerValidationError, match="未知命中"):
+        unknown["name_uses"][0]["group_id"] = "g404404"
+        with pytest.raises(CheckerValidationError, match="未知分组") as unknown_error:
             validate_checker_result(unknown, snapshot)
+        assert unknown_error.value.reason_code == "unknown_group_id"
+        assert unknown_error.value.diagnostics["expected_group_count"] == 2
         duplicate = copy.deepcopy(raw)
-        duplicate["name_uses"][0]["hit_ids"].append(duplicate["name_uses"][0]["hit_ids"][0])
-        with pytest.raises(CheckerValidationError, match="缺少分组"):
+        duplicate["name_uses"][1]["group_id"] = duplicate["name_uses"][0]["group_id"]
+        with pytest.raises(CheckerValidationError, match="重复") as duplicate_error:
             validate_checker_result(duplicate, snapshot)
+        assert duplicate_error.value.reason_code == "duplicate_group_id"
 
 
 def test_bible_only_unselected_name_uses_bible_evidence_without_fabricating_draft(client) -> None:
@@ -268,7 +286,7 @@ def test_bible_only_unselected_name_uses_bible_evidence_without_fabricating_draf
                 "source_kind": "bible", "source_id": "bible", "source_evidence": "夏天必须在雨后回家",
             }],
             "name_uses": [{
-                "hit_ids": _group_for_hit(snapshot, hit)["hit_ids"], "classification": "character",
+                "group_id": _group_id_for_hit(snapshot, hit), "classification": "character",
                 "reason": "这里是人物承担行动。", "character_id": hit["candidate_character_ids"][0],
             }],
         }
@@ -375,6 +393,102 @@ def test_selected_write_input_freezes_before_writer_and_binds_candidate_without_
         chapter.user_prompt = "新的 Bible。"
         db.commit()
         assert not is_frozen_input_current(db, chapter, candidate)
+
+
+def test_v1_serialized_snapshot_keeps_original_fingerprint_rules(client) -> None:
+    """A retained v1 payload is checked as v1, never relabelled as v2."""
+    chapter_id, _prior_id, _future_id = _story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        modern = freeze_manual_checker_input(db, chapter, chapter.draft_text)
+        legacy = copy.deepcopy(modern)
+        legacy["protocol_version"] = PRODUCTION_INPUT_V1
+        legacy.pop("relationship_identities", None)
+        # This is the serialized v1 candidate range: single character_id,
+        # no participant/source identity fields and the original sort rule.
+        legacy["selector_candidate_range"] = _candidate_range_v1(_history_blocks_v1(db, chapter))
+        legacy["input_fingerprint"] = production_context_service._input_fingerprint(legacy)
+        assert is_frozen_input_current(db, chapter, legacy)
+
+        # A real dependency mutation still invalidates this old snapshot.
+        chapter.book.world_setting = "修改后的世界观"
+        db.commit()
+        assert not is_frozen_input_current(db, chapter, legacy)
+
+
+@pytest.mark.parametrize("shape", ["over_count", "over_budget"])
+def test_v1_currentness_keeps_build63_candidate_prefilter_at_both_limits(client, monkeypatch, shape) -> None:
+    """A later multi-person v2 fact cannot reorder retained v1 source scope."""
+    chapter_id, _prior_id, _future_id = _story()
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        selected_id = chapter.character_links[0].character_id
+        if shape == "over_count":
+            blocks = [MemoryBlock(f"a{index:03d}", "旧事实", 1) for index in range(300)]
+            blocks.append(MemoryBlock(
+                "z-multi", "双人事实", 1, memory_type="canonical_fact",
+                participant_ids=(selected_id, "other"),
+            ))
+        else:
+            blocks = [
+                MemoryBlock("a-large", "甲" * 20_000, 1),
+                MemoryBlock(
+                    "z-multi", "乙" * 20_000, 1, memory_type="canonical_fact",
+                    participant_ids=(selected_id, "other"),
+                ),
+            ]
+        monkeypatch.setattr(production_context_service, "memory_candidates", lambda _db, _chapter: blocks)
+        old_scope = _history_blocks_v1(db, chapter)
+        new_scope = _history_blocks(db, chapter)
+        assert all(block.id != "z-multi" for block in old_scope)
+        assert any(block.id == "z-multi" for block in new_scope)
+
+        modern = freeze_manual_checker_input(db, chapter, chapter.draft_text)
+        legacy = copy.deepcopy(modern)
+        legacy["protocol_version"] = PRODUCTION_INPUT_V1
+        legacy.pop("relationship_identities", None)
+        legacy["selector_candidate_range"] = _candidate_range_v1(old_scope)
+        legacy["input_fingerprint"] = production_context_service._input_fingerprint(legacy)
+        assert is_frozen_input_current(db, chapter, legacy)
+
+        blocks[0] = MemoryBlock("a-changed", "已变化的旧事实", 1)
+        assert not is_frozen_input_current(db, chapter, legacy)
+
+
+def test_selector_manifest_rebinds_only_equivalent_v2_sources(client, monkeypatch) -> None:
+    chapter_id, _prior_id, _future_id = _story()
+    old = [MemoryBlock(
+        "old-fact", "两人一起归还钥匙。", 1, memory_type="canonical_fact",
+        participant_ids=("a", "b"), source_chapter_id="chapter-one", source_position=1,
+    )]
+    current = [MemoryBlock(
+        "new-fact", "两人一起归还钥匙。", 1, memory_type="canonical_fact",
+        participant_ids=("b", "a"), source_chapter_id="chapter-one", source_position=1,
+    )]
+    manifest = {
+        "memory_brief": [{"text": "两人已归还钥匙。", "source_ids": ["old-fact"]}],
+        "conflicts": [], "previous_ending_start_id": None, "selection_mode": "selector",
+        "sources": [{"id": "old-fact"}],
+    }
+    with db_module.SessionLocal() as db:
+        chapter = db.get(Chapter, chapter_id)
+        assert chapter is not None
+        monkeypatch.setattr(production_context_service, "_history_blocks", lambda _db, _chapter: current)
+        prepared = prepare_selected_write_input(
+            db, chapter, memory_manifest=manifest, selector_candidates=old,
+        )
+        assert prepared["memory_manifest"]["memory_brief"][0]["source_ids"] == ["new-fact"]
+        assert prepared["memory_manifest"]["sources"][0]["id"] == "new-fact"
+
+        changed = [MemoryBlock(
+            "changed-fact", "两人没有归还钥匙。", 1, memory_type="canonical_fact",
+            participant_ids=("a", "b"), source_chapter_id="chapter-one", source_position=1,
+        )]
+        monkeypatch.setattr(production_context_service, "_history_blocks", lambda _db, _chapter: changed)
+        with pytest.raises(ProductionInputChanged):
+            prepare_selected_write_input(db, chapter, memory_manifest=manifest, selector_candidates=old)
 
 
 def test_selector_validation_uses_independent_700_and_2400_budgets_and_one_correction() -> None:
