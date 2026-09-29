@@ -1,0 +1,310 @@
+{
+  "version": "2.3.2",
+  "build": 71,
+  "commit": "699bebeaedd7134727def2b12d2a9d73376638a6",
+  "baseline": "59ba6594d0431d6dd78a5e9bfccd5ffec44505b9",
+  "backup": "/opt/linoi/backups/20260929-build71-699bebe-r2",
+  "source_files_verified": 71,
+  "head": "20260929_0015",
+  "active_jobs": 0,
+  "integrity": "ok",
+  "foreign_keys": "ok",
+  "restore_test": "passed",
+  "business_tables_unchanged_except_personas_and_search": true,
+  "env_unchanged": true,
+  "personas_dry_run": {
+    "applied": false,
+    "changed": {
+      "agent_personas": 2,
+      "book_agent_personas": 0
+    }
+  },
+  "personas_applied": {
+    "applied": true,
+    "changed": {
+      "agent_personas": 2,
+      "book_agent_personas": 0
+    }
+  },
+  "personas_idempotent": true,
+  "search_rebuilt": true,
+  "internal_health": 200,
+  "public_health": 200,
+  "route_statuses": {
+    "/api/v1/health": 401,
+    "/docs": 404,
+    "/openapi.json": 404,
+    "/redoc": 404
+  },
+  "single_instance": true,
+  "pid": "826413",
+  "proxy_read_send_seconds": 420,
+  "proxy_connect_seconds": 10,
+  "proxy_nginx_test": "passed",
+  "npm_config_backup": "/opt/linoi/backups/20260929-build71-699bebe-r2/npm-config-before.db",
+  "model_calls": 0,
+  "postcheck": {
+    "business_tables_unchanged_except_book_open_timestamps_after_mac_validation": true,
+    "pre_post_restore_verified": true,
+    "source_matches_commit": true,
+    "public_internal_health": 200,
+    "proxy_budget_seconds": 420,
+    "warning_lines_after_start": 0,
+    "actual_model_calls_for_release": 0
+  },
+  "release": {
+    "assets": [
+      {
+        "digest": "sha256:c0d30625f7dcf1739365534ea9ecc9409f3bfcd9df03e2487e64202c71ef4f6a",
+        "name": "ICTW-v2.3.2-build71-macOS.zip",
+        "size": 3185480
+      }
+    ],
+    "url": "https://github.com/linocai/Ictw/releases/tag/v2.3.2-build71"
+  },
+  "device_support": {
+    "checked_at": "2026-09-29T11:41:20.100537+00:00",
+    "devices": [
+      {
+        "model": "iPhone17,3",
+        "os": "",
+        "build": "",
+        "validated": false,
+        "reason": "No local support cache; this connection record needs no cleanup"
+      },
+      {
+        "model": "iPhone18,4",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "0c2a1a965f1ed87612fec9272ae1bc508d8aef72d81ec7c62e8f52040291d5b8",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "dca7116f518c99b0b2ec01f91cad6edda9efb7d07061c804d1ca1c2f6e39306c",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "65303e9403b9caf37e85eae43fb16667b4404582fc3df8e758b9ab0b5cee0a54"
+        }
+      },
+      {
+        "model": "iPhone19,2",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "ce718b23beb9210cfeea20547ad797b8c893ebc1f2513878c3603ac6262c7327",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "448d9b4f685ea5b83c5acff545e36dbaaf7a8894dc684fcd12f6b14b025434c3",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "3b8e1bf966e44c6b01812f1f331affb81a085e82e60eaca67411426af5acedb6"
+        }
+      }
+    ],
+    "candidates": [],
+    "deleted": [],
+    "user_confirmed_unused_models": [],
+    "unused_reason": "",
+    "pending_devices": [],
+    "status": "audited"
+  },
+  "native_isolated_ui": {
+    "build": 71,
+    "source_manifest": "f2567c381f844c9ae5209f166c74cefa1f331ece0e8d1186bcbe1587d8d83a38",
+    "checks": [
+      "accepted and draft pages render",
+      "dirty draft export blocked with actionable notice",
+      "independent save persisted",
+      "subsequent exported file contains exact new text",
+      "Cmd+N and Cmd+, preserve dirty world form",
+      "cold start retained-only shortcut visible",
+      "retained draft Bible/note/prose visible",
+      "copy leaves retained draft intact"
+    ],
+    "model_calls": 0,
+    "not_covered": [
+      "iOS device UI",
+      "retained draft deletion confirmation native click"
+    ]
+  },
+  "cumulative_audit": {
+    "base_commit": "59ba6594d0431d6dd78a5e9bfccd5ffec44505b9",
+    "target_commit": "699bebeaedd7134727def2b12d2a9d73376638a6",
+    "source_manifest": "f2567c381f844c9ae5209f166c74cefa1f331ece0e8d1186bcbe1587d8d83a38",
+    "scope": "All committed Build65–71 changes, 89 files in release commit, 198-file verified source manifest; prior full independent Build70 audit plus Build71 targeted recheck, hash continuity verified before release. No claim of new line-by-line audit of all inherited code.",
+    "backend_tests": "560 passed, 12 existing skips",
+    "client_tests": "92 HTTP, 140 UI handler/policy and client-state gates passed on identical source in preceding turn",
+    "migration": "Only new schema migration is 20260929_0015; dependencies unchanged",
+    "production_base_source_files_matched": 68
+  },
+  "first_attempt": {
+    "result": "Automatically rolled back and verified Build64 internal readiness",
+    "reason": "Integrity gate omitted FTS derived index tables from expected search-rebuild changes",
+    "resolution": "Production backup rehearsal proved only migration, editable persona and search/FTS tables changed; 17 business tables identical. Explicit FTS table names added before successful second attempt.",
+    "backup_rehearsal": {
+      "changed_tables": [
+        "alembic_version",
+        "agent_personas",
+        "search_documents",
+        "search_documents_fts",
+        "search_documents_fts_data",
+        "search_documents_fts_idx",
+        "search_documents_fts_docsize"
+      ],
+      "unchanged_business_tables": 17,
+      "integrity": "ok",
+      "foreign_keys": "ok",
+      "migration_and_persona_index_rehearsal": "passed"
+    }
+  },
+  "mac_install": {
+    "path": "/Applications/ICTW.app",
+    "version": "2.3.2",
+    "build": 71,
+    "backup": "/Users/linotsai/Lino/app_backups/ICTW-v2.3.0-build64-before-build71-20260929.app",
+    "strict_signature": true,
+    "hardened_runtime": true,
+    "get_task_allow": false,
+    "notarized": false,
+    "normal_launch": true,
+    "accepted_page": true,
+    "existing_draft_editor": true,
+    "business_mutations": "Book-open timestamps only; no model, checker, accept or archive calls"
+  },
+  "ios": {
+    "version": "2.3.2",
+    "build": 71,
+    "minimum_os": "27.0",
+    "strict_signature": true,
+    "products": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/Build/Products/Release-iphoneos",
+    "ipa_created": false,
+    "device_installation": "User installs with Xcode",
+    "native_device_ui_verified": false
+  },
+  "mac_dsym": "UUID: E04388C9-A99C-3BA8-8EAE-CF21CCC5278D (arm64) /Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-macOS.app.dSYM/Contents/Resources/DWARF/ICTW",
+  "ios_dsym": "UUID: 5C3A54F2-1197-3359-8F72-51528F7E33C0 (arm64) /Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/Build/Products/Release-iphoneos/LinoI.app.dSYM/Contents/Resources/DWARF/LinoI",
+  "superseded_work_backups_removed": [
+    {
+      "path": "/Users/linotsai/Lino/Ictw/Backend/backups/build69-source-baseline.zip",
+      "before_bytes": 2709599,
+      "after_bytes": 0,
+      "sha256": "7769ce7bfed282c6ad76c0f3d6eb132b30689e8d740be83162de1a994a294bde"
+    },
+    {
+      "path": "/Users/linotsai/Lino/Ictw/Backend/backups/build70-source-baseline.zip",
+      "before_bytes": 2757990,
+      "after_bytes": 0,
+      "sha256": "794f6f231e135c9daaa562b7a55e9dc4983abc3af82cafe585679a60a25b34bd"
+    },
+    {
+      "path": "/Users/linotsai/Lino/Ictw/Backend/backups/build71-source-baseline.zip",
+      "before_bytes": 2824929,
+      "after_bytes": 0,
+      "sha256": "b52534fe0089941699444d83aad58b7887e2bf218fe7913f36cab721c0c620f7"
+    },
+    {
+      "path": "/Users/linotsai/Lino/Ictw/Backend/backups/build70-native-validation.zip",
+      "before_bytes": 6295253,
+      "after_bytes": 0,
+      "sha256": "f5562db76a00537f9344a6bbf61b3afb6775702dc051838ceb93d69be3067eeb"
+    }
+  ],
+  "remote_cleanup": {
+    "removed": [
+      {
+        "path": "/opt/linoi/backups/20260929-build71-699bebe",
+        "files": 5,
+        "before_bytes": 13734344,
+        "after_bytes": 0,
+        "manifest_sha256": "fe2d8cdc2213905dfb9691c88673e90fb4118fb86c256a2582bc3146d1a00dd4"
+      },
+      {
+        "path": "/tmp/ictw-build71-699bebe",
+        "files": 214,
+        "before_bytes": 105146128,
+        "after_bytes": 0,
+        "manifest_sha256": "8610ab6f0532f065d8e49d9e50ed5aa31334530e0a981bda0cfb4564c78a4ccc"
+      },
+      {
+        "path": "/tmp/ictw-build71-699bebe-r2",
+        "files": 216,
+        "before_bytes": 140225820,
+        "after_bytes": 0,
+        "manifest_sha256": "76a64ece72477441b8d4a4e72589b6dcd0fd7f91f93a9eba89c259b0f21a3656"
+      }
+    ],
+    "retained_backup": "/opt/linoi/backups/20260929-build71-699bebe-r2",
+    "retained_release": "/opt/linoi/releases/v2.3.2-build71",
+    "failed_attempt_backup_deduplicated": true,
+    "opt_linoi_disk_kib": 574736
+  },
+  "local_artifact_cleanup": [
+    {
+      "path": "/Applications/ICTW-build64-retired.app",
+      "before_bytes": 7432098,
+      "after_bytes": 0,
+      "files": 6,
+      "manifest_sha256": "c19b2f6d94bc11c5ceb83cecb7ff7b6aa28586a1b7076b22860fa0252a296953"
+    },
+    {
+      "path": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/SDKStatCaches.noindex",
+      "before_bytes": 1580888,
+      "after_bytes": 0,
+      "files": 1,
+      "manifest_sha256": "283923960b93f8fbe0908381e79246c5539fa22712351711f26cc107cc992877"
+    },
+    {
+      "path": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/SDKExplicitPrecompiledModules",
+      "before_bytes": 51772200,
+      "after_bytes": 0,
+      "files": 64,
+      "manifest_sha256": "7f1044cd0c4119d8e73961ebde68e70b9e599d54db36f3e5bdaf56e04e2928ae"
+    },
+    {
+      "path": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/Logs",
+      "before_bytes": 33971,
+      "after_bytes": 0,
+      "files": 2,
+      "manifest_sha256": "c312ec7d4f7f241356d177ae69debd735d361f2fc8668097f190243232d28431"
+    },
+    {
+      "path": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/ModuleCache.noindex",
+      "before_bytes": 5147823,
+      "after_bytes": 0,
+      "files": 65,
+      "manifest_sha256": "6e0ad23e9063aae60118efc7b72701ee94b451d0429b18979adb665252f8e481"
+    },
+    {
+      "path": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/CompilationCache.noindex",
+      "before_bytes": 16736,
+      "after_bytes": 0,
+      "files": 7,
+      "manifest_sha256": "b20d92262540d232d1efa70f8d8b5818d38237a7093b17d6fb2b70dce1950db0"
+    },
+    {
+      "path": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/Build/Intermediates.noindex",
+      "before_bytes": 22983922,
+      "after_bytes": 0,
+      "files": 131,
+      "manifest_sha256": "b191b499229ae38b41b59dbc34287a7b1df1ae262f9f69857fa342e01fa6130a"
+    }
+  ],
+  "local_temporary_cleanup": {
+    "path": "/tmp/ictw-build71-release",
+    "files": 3163,
+    "before_bytes": 368693292,
+    "after_bytes": 0,
+    "manifest_sha256": "bc98e3baafec244aac6654cd5765b76f7d1711994ca030e58baa96a868372a6e",
+    "no_open_handles": true
+  },
+  "temporary_directory_final_scan": {
+    "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T": [],
+    "/tmp": []
+  },
+  "retained_delivery": [
+    "/Applications/ICTW.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-macOS.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-macOS.app.dSYM",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-macOS.zip",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.2-build71-iOS-DerivedData/Build/Products/Release-iphoneos",
+    "/Users/linotsai/Lino/app_backups/ICTW-v2.3.0-build64-before-build71-20260929.app",
+    "/opt/linoi/backups/20260929-build71-699bebe-r2",
+    "/opt/linoi/releases/v2.3.2-build71"
+  ]
+}
