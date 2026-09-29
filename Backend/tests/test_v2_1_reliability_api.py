@@ -7,7 +7,7 @@ from alembic.config import Config
 from sqlalchemy import text
 
 from app.llm.factory import build_llm_client, get_checker_client, resolve_model_binding
-from app.models import ChapterDraftCandidate, CharacterEvent, SearchDocument
+from app.models import Chapter, ChapterDraftCandidate, CharacterEvent, SearchDocument
 
 
 def _create_book(client, headers, title: str = "可靠书") -> dict:
@@ -118,6 +118,11 @@ def test_chapter_character_and_event_expose_and_honor_content_revisions(client, 
     import app.db as db_module
     db = db_module.SessionLocal()
     try:
+        # Live legacy events belong to accepted, explicitly eligible history.
+        stored_chapter = db.get(Chapter, chapter["id"])
+        stored_chapter.status = "finalized"
+        stored_chapter.legacy_archive_eligible = True
+        stored_chapter.archive_status = "legacy"
         event = CharacterEvent(
             book_id=book["id"],
             character_id=character["id"],
@@ -178,6 +183,11 @@ def test_search_indexes_visible_content_but_never_hidden_candidates(client, auth
     import app.db as db_module
     db = db_module.SessionLocal()
     try:
+        # Live legacy events belong to accepted, explicitly eligible history.
+        stored_chapter = db.get(Chapter, chapter["id"])
+        stored_chapter.status = "finalized"
+        stored_chapter.legacy_archive_eligible = True
+        stored_chapter.archive_status = "legacy"
         event = CharacterEvent(
             book_id=book["id"], character_id=character.json()["id"], chapter_id=chapter["id"],
             event_type="story", event_text="旧站台重逢",

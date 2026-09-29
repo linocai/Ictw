@@ -24,6 +24,7 @@ from app.models import (
     ChapterArchiveStateDelta,
     ChapterCharacter,
     Character,
+    CharacterEvent,
     CharacterStateChange,
     JobRun,
 )
@@ -35,7 +36,7 @@ from app.services.character_state_projection import (
     projected_state_before_chapter,
     uncertainty_changes_for_revision,
 )
-from app.services.context import normalize_text
+from app.services.context import normalize_text, has_usable_legacy_memory
 from app.services.content_revisions import begin_sqlite_write_cas
 
 
@@ -66,14 +67,63 @@ class ArchiveV2ValidationError(ValueError):
 
 
 def archive_validation_message(reason: str | None) -> str | None:
+    """Translate controlled rule failures; never expose unknown protocol text."""
+    if not reason:
+        return reason
     prefix = "归档未通过确定性校验："
-    if reason and reason.startswith(prefix):
-        return prefix + archive_validation_message(reason[len(prefix):])
-    return {
+    if reason.startswith(prefix):
+        return prefix + (archive_validation_message(reason[len(prefix):]) or "记忆整理结果不完整")
+    messages = {
         "duplicate state delta slot": "归档结果中，同一人物状态或人物关系被重复记录",
         "conflicting state delta slot": "同一人物状态或人物关系出现互相冲突的记录，无法确定章末状态",
         "state delta owner must participate in its fact": "人物状态所引用的事实未包含该人物",
-    }.get(reason, reason)
+        "archive output must be an object": "模型返回的记忆整理结果格式不正确",
+        "archive output contains unsupported fields": "记忆整理结果包含无法识别的内容项",
+        "facts must be an array": "记忆整理结果缺少有效的事实列表",
+        "end_state_delta must be an array": "记忆整理结果缺少有效的人物状态变化列表",
+        "selected character names must be non-empty and unique": "本章所选人物的姓名为空或重名，无法区分人物",
+        "fact must be an object": "一条记忆事实的格式不正确",
+        "fact contains unsupported fields": "一条记忆事实包含无法识别的内容项",
+        "duplicate fact_ref": "不同记忆事实使用了相同编号，无法核对状态依据",
+        "fact type is unsupported": "记忆事实的分类无法识别",
+        "fact importance must be 1..3": "记忆事实的重要程度标记不正确",
+        "participant_names must be an array of at most 4 names": "事实涉及的人物名单格式或人数不符合要求",
+        "fact references an unselected character": "记忆事实涉及未获本章授权的人物",
+        "duplicate fact participant": "同一条记忆事实重复列出了人物",
+        "relationship fact must have exactly two participants": "人物关系记录未明确对应的两个人物",
+        "relationship delta fact must have exactly two participants": "人物关系变化缺少明确的双方人物依据",
+        "fact source span does not exist": "记忆事实引用了正文中不存在的证据位置",
+        "fact source span is reversed": "记忆事实引用的正文证据起止顺序错误",
+        "duplicate canonical fact": "同一条记忆事实被重复记录",
+        "state delta must be an object": "一条人物状态变化的格式不正确",
+        "state delta contains unsupported fields": "人物状态变化包含无法识别的内容项",
+        "state delta references an unknown fact": "人物状态变化没有对应的有效事实依据",
+        "state delta operation must be set or clear": "无法判断人物状态是更新还是清除",
+        "state delta value cannot be unknown or a placeholder": "人物状态没有明确结果，不能作为确定事实保存",
+        "clear state delta value must be null": "人物状态同时要求清除并保留内容，含义冲突",
+        "legacy relationship delta participants must match its fact": "关系变化中的人物与其事实依据不一致",
+        "state delta references an unselected character": "人物状态变化涉及未获本章授权的人物",
+        "state delta slot is unsupported": "人物状态的类别无法识别",
+        "unsupported archive contract version": "记忆整理结果的格式版本不受支持",
+        "Extractor output must be an object": "模型返回的记忆整理结果格式不正确",
+    }
+    if reason in messages:
+        return messages[reason]
+    if reason in messages.values():
+        return reason
+    if re.search(r"[\u4e00-\u9fff]", reason) and not re.search(r"[A-Za-z_]", reason):
+        return reason
+    if re.fullmatch(r"facts exceed (?:chapter limit|raw safety limit) \d+", reason):
+        return "本章提取的记忆事实过多，请重新整理"
+    if re.fullmatch(r"end_state_delta(?: and state uncertainties)? exceeds? (?:limit|raw safety limit) \d+", reason):
+        return "本章提取的人物状态变化过多，请重新整理"
+    fields = {"summary": "章节摘要", "fact_ref": "事实编号", "fact text": "记忆事实", "state delta value": "人物状态"}
+    for field, label in fields.items():
+        if reason == f"{field} is required":
+            return f"记忆整理结果缺少{label}"
+        if re.fullmatch(re.escape(field) + r" exceeds \d+ characters", reason):
+            return f"记忆整理结果中的{label}过长"
+    return "模型返回的记忆整理结果不完整或不一致，请重新整理"
 
 
 class ArchiveFingerprintMismatch(ArchiveV2ValidationError):
@@ -679,6 +729,7 @@ def _validate_archive_output_v21(chapter: Chapter, output: dict[str, Any]) -> Va
 
     facts: list[ValidatedFact] = []
     facts_by_source_ref: dict[str, ValidatedFact] = {}
+    source_payloads: dict[str, tuple[Any, ...]] = {}
     canonical_facts: dict[tuple[Any, ...], ValidatedFact] = {}
     for raw in raw_facts:
         if not isinstance(raw, dict):
@@ -724,22 +775,16 @@ def _validate_archive_output_v21(chapter: Chapter, output: dict[str, Any]) -> Va
             str(start_id),
             str(end_id),
         )
-        previous_source = facts_by_source_ref.get(source_ref)
-        if previous_source is not None:
-            previous_payload = (
-                previous_source.fact_type,
-                previous_source.importance,
-                previous_source.text,
-                previous_source.participant_ids,
-                previous_source.start_id,
-                previous_source.end_id,
-            )
-            if previous_payload != source_payload:
+        if source_ref in source_payloads:
+            if source_payloads[source_ref] != source_payload:
                 raise ArchiveV2ValidationError("duplicate fact_ref")
             # The duplicate object has still passed every structural/source
             # check above.  Keep its source reference mapped to the existing
             # canonical fact so deltas remain deterministic.
             continue
+        # A source ref keeps its own verified payload even when its fact is
+        # merged into another ref's canonical fact and evidence span.
+        source_payloads[source_ref] = source_payload
         fact = canonical_facts.get(duplicate_key)
         if fact is None:
             fact = ValidatedFact(
@@ -855,7 +900,7 @@ def create_archive_revision(
     )
     db.add(revision)
     db.flush()
-    if chapter.active_archive_revision_id is None and not chapter.legacy_archive_eligible:
+    if chapter.active_archive_revision_id is None and not has_usable_legacy_memory(chapter):
         chapter.archive_status = "pending"
     chapter.archive_input_fingerprint = fingerprint
     return revision
@@ -863,7 +908,7 @@ def create_archive_revision(
 
 def mark_revision_extracting(revision: ChapterArchiveRevision, chapter: Chapter) -> None:
     revision.status = "extracting"
-    if chapter.active_archive_revision_id is None and not chapter.legacy_archive_eligible:
+    if chapter.active_archive_revision_id is None and not has_usable_legacy_memory(chapter):
         chapter.archive_status = "extracting"
 
 
@@ -1117,16 +1162,31 @@ def invalidate_downstream_archives(db: Session, book_id: str, *, after_index: in
 
 
 def active_archive_revision(db: Session, chapter: Chapter) -> ChapterArchiveRevision | None:
-    if not chapter.active_archive_revision_id:
+    if chapter.status != "finalized" or not chapter.active_archive_revision_id:
         return None
     revision = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id)
-    if revision is None or not revision.is_active or revision.status != "complete":
+    if (
+        revision is None or revision.chapter_id != chapter.id
+        or not revision.is_active or revision.status != "complete"
+    ):
         return None
     if revision.input_fingerprint != archive_input_fingerprint(
         chapter, contract_version=revision.contract_version
     ):
         return None
     return revision
+
+
+def _can_retry_archive(chapter: Chapter, latest: ChapterArchiveRevision | None, *, active_valid: bool, legacy_usable: bool | None = None) -> bool:
+    if chapter.status != "finalized":
+        return False
+    if latest is None:
+        return not (has_usable_legacy_memory(chapter) if legacy_usable is None else legacy_usable)
+    return (
+        latest.status in {"partial", "failed", "stale"}
+        or (not active_valid and latest.status == "complete")
+        or (latest.is_active and latest.status == "complete" and bool(latest.state_uncertainties or []))
+    )
 
 
 def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, dict[str, Any]]:
@@ -1181,6 +1241,13 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
         .order_by(ChapterCharacter.chapter_id, ChapterCharacter.character_id)
     ).all():
         selected_by_chapter.setdefault(link.chapter_id, []).append(link.character_id)
+    legacy_ids = [chapter.id for chapter in chapters if chapter.legacy_archive_eligible]
+    event_chapter_ids = {
+        chapter_id for chapter_id, event_text in db.execute(
+            select(CharacterEvent.chapter_id, CharacterEvent.event_text)
+            .where(CharacterEvent.chapter_id.in_(legacy_ids))
+        ) if (event_text or "").strip()
+    } if legacy_ids else set()
     characters = db.scalars(select(Character).where(Character.book_id == book_id)).all()
     cursor = StateProjectionCursor.for_characters(characters, stable_relationship_keys=True)
     result: dict[str, dict[str, Any]] = {}
@@ -1195,32 +1262,20 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
             state_uncertainties=cursor.materialize_uncertainties(),
         )
         active_valid = (
-            active is not None
+            chapter.status == "finalized"
+            and active is not None
+            and active.chapter_id == chapter.id
             and active.is_active
             and active.status == "complete"
             and active.input_fingerprint == expected_fingerprint
         )
         latest = latest_by_chapter.get(chapter.id)
         has_state_gaps = bool(getattr(active, "state_uncertainties", []) or []) if active_valid else False
-        retry_allowed = (
-            chapter.status == "finalized"
-            and latest is not None
-            and (
-                latest.status in {"partial", "failed", "stale"}
-                or (not active_valid and latest.status == "complete")
-                # A v2.1 revision remains DB-complete and active while a
-                # verified unknown slot is outstanding.  It is still an
-                # author-actionable recovery state, not a terminal success.
-                or (
-                    latest.is_active
-                    and latest.status == "complete"
-                    and bool(getattr(latest, "state_uncertainties", []) or [])
-                )
-            )
-        )
+        legacy_usable = has_usable_legacy_memory(chapter, has_events=chapter.id in event_chapter_ids)
+        retry_allowed = _can_retry_archive(chapter, latest, active_valid=active_valid, legacy_usable=legacy_usable)
         if active_valid:
             schema, status = "v2", ("partial" if has_state_gaps else "complete")
-        elif chapter.status == "finalized" and chapter.legacy_archive_eligible:
+        elif legacy_usable:
             schema, status = "legacy", "complete"
         else:
             schema = "none"
@@ -1246,7 +1301,7 @@ def archive_health_summaries(db: Session, chapters: list[Chapter]) -> dict[str, 
                 cursor.apply(delta)
             for uncertainty in uncertainty_changes_for_revision(active):
                 cursor.apply(uncertainty)
-        elif chapter.legacy_archive_eligible or chapter.archive_input_fingerprint is None:
+        elif chapter.legacy_archive_eligible:
             for change in legacy_by_chapter.get(chapter.id, []):
                 cursor.apply(change)
     return result
@@ -1346,6 +1401,8 @@ def _controlled_diagnostics(
                     record["message"] = message
                     record["recovery"] = "请重新整理本章，并为该状态槽保留唯一、可追溯的章末结果。"
         if all(key in record for key in ("code", "severity", "message", "recovery")):
+            if record["code"] == "archive_validation_failed":
+                record["message"] = archive_validation_message(record["message"])
             records.append(record)
     return records
 
@@ -1367,7 +1424,7 @@ def _latest_attempt_read(revision: ChapterArchiveRevision | None) -> dict[str, A
         "revision": revision.revision,
         "status": revision.status,
         "error_code": revision.error_code,
-        "error_message": archive_validation_message(revision.error_message),
+        "error_message": archive_validation_message(revision.error_message) if revision.error_code == "archive_validation_failed" else revision.error_message,
         "finished_at": revision.finished_at,
     }
 
@@ -1375,7 +1432,7 @@ def _latest_attempt_read(revision: ChapterArchiveRevision | None) -> dict[str, A
 def _unusable_archive_status(chapter: Chapter, latest: ChapterArchiveRevision | None) -> str:
     if chapter.archive_status == "complete" or (latest is not None and latest.status == "complete"):
         return latest.status if latest is not None and latest.status != "complete" else "stale"
-    return chapter.archive_status
+    return "stale" if chapter.archive_status == "legacy" else chapter.archive_status
 
 
 def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
@@ -1385,19 +1442,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
         .where(ChapterArchiveRevision.chapter_id == chapter.id)
         .order_by(ChapterArchiveRevision.revision.desc())
     ).first()
-    retry_allowed = (
-        chapter.status == "finalized"
-        and latest is not None
-        and (
-            latest.status in {"partial", "failed", "stale"}
-            or (active is None and latest.status == "complete")
-            or (
-                latest.is_active
-                and latest.status == "complete"
-                and bool(getattr(latest, "state_uncertainties", []) or [])
-            )
-        )
-    )
+    retry_allowed = _can_retry_archive(chapter, latest, active_valid=active is not None)
     inactive_preview = None
     if latest is not None and latest is not active and latest.status in {"partial", "failed", "stale"}:
         # This deliberately exposes only a compact, inactive display record.
@@ -1455,7 +1500,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "diagnostics": diagnostics,
             "latest_attempt": _latest_attempt_read(latest),
         }
-    if chapter.status == "finalized" and chapter.legacy_archive_eligible:
+    if has_usable_legacy_memory(chapter):
         return {
             "status": "complete",
             "schema": "legacy",
@@ -1465,7 +1510,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "facts": [],
             "state_delta_count": 0,
             "error_code": latest.error_code if latest is not None else None,
-            "error_message": archive_validation_message(latest.error_message) if latest is not None else None,
+            "error_message": (archive_validation_message(latest.error_message) if latest.error_code == "archive_validation_failed" else latest.error_message) if latest is not None else None,
             "can_retry": retry_allowed,
             "latest_attempt_status": latest.status if latest is not None else "legacy",
             "inactive_preview": inactive_preview,
@@ -1484,7 +1529,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
         "facts": [],
         "state_delta_count": 0,
         "error_code": latest.error_code if latest is not None else None,
-        "error_message": archive_validation_message(latest.error_message) if latest is not None else None,
+        "error_message": (archive_validation_message(latest.error_message) if latest.error_code == "archive_validation_failed" else latest.error_message) if latest is not None else None,
         "can_retry": retry_allowed,
         "latest_attempt_status": latest.status if latest is not None else chapter.archive_status,
         "inactive_preview": inactive_preview,

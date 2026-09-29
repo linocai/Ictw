@@ -1,5 +1,19 @@
 import SwiftUI
 
+@MainActor
+enum V2IOSBookNavigation {
+    static func prepare(
+        editor: ChapterEditorStore, workspace: WorkspaceStore,
+        characters: CharactersStore, inspiration: InspirationCreatorStore
+    ) -> Bool {
+        guard editor.resetBookContext() else { return false }
+        workspace.resetBookContext()
+        characters.resetBookContext()
+        inspiration.clearIfChapterChanged(to: nil)
+        return true
+    }
+}
+
 /// Integration root. The app entry may replace the legacy `RootView` with this
 /// type without changing any Store construction or environment wiring.
 struct V2IOSRootView: View {
@@ -87,6 +101,20 @@ private struct V2IOSSyncStatusBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("同步状态，\(state.title)")
+        } else if sync.hasRetainedChapterDrafts {
+            Button(action: openCenter) {
+                HStack {
+                    Label("本机保留稿", systemImage: "doc.on.clipboard")
+                    Text("原章已删除，可查看并复制恢复")
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                }
+                .font(V2DeskType.control(10.5))
+                .padding(.horizontal, 16).padding(.vertical, 6)
+                .background(Color.secondary.opacity(0.06))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("本机保留稿，查看和复制恢复")
         }
     }
 
@@ -139,12 +167,15 @@ private struct V2IOSSyncCenter: View {
                             .disabled(sync.isFlushing)
                     }
                 }
+                if sync.hasRetainedChapterDrafts {
+                    Section { V2RetainedChapterDrafts() }
+                }
                 if !sync.conflicts.isEmpty {
                     Section("需要处理的冲突") {
                         ForEach(sync.conflicts) { conflict in
                             VStack(alignment: .leading, spacing: 10) {
                                 V2DeskConflictDecisionCard(
-                                    title: "\(conflict.resourceLabel)已在另一设备更新",
+                                    title: "\(sync.resourceLabel(for: conflict))已在另一设备更新",
                                     detail: "本机基线版本 \(conflict.submittedRevision)，服务器当前版本 \(conflict.currentRevision)。请先对比三份内容，再明确决定。",
                                     useServer: { serverDecision = conflict },
                                     keepLocal: { localDecision = conflict },
@@ -204,6 +235,7 @@ private struct V2IOSSyncCenter: View {
             Button("采用服务器版本", role: .destructive) {
                 if let conflict = serverDecision {
                     sync.keepServer(conflict)
+                    editor.applyServerConflictDecision(conflict)
                     refreshFromServer(conflict)
                 }
                 serverDecision = nil

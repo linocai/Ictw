@@ -78,6 +78,7 @@ def test_memory_manifest_reports_actual_packed_brief_count(client, auth_headers,
         prior_row = db.get(Chapter, prior["id"])
         assert prior_row is not None
         prior_row.status = "finalized"
+        prior_row.legacy_archive_eligible = True
         prior_row.long_summary = "历史事实"
         prior_row.draft_text = "上一章结尾"
         db.commit()
@@ -169,9 +170,12 @@ def test_schema_and_interactive_docs_are_not_exposed(client):
 
 def test_health_requires_the_schema_to_match_the_shipped_head(client, auth_headers):
     import app.db as db_module
+    from app.main import APP_VERSION
     from sqlalchemy import text
 
-    assert client.get("/api/v1/health", headers=auth_headers).status_code == 200
+    healthy = client.get("/api/v1/health", headers=auth_headers)
+    assert healthy.status_code == 200
+    assert healthy.json() == {"status": "ok", "version": APP_VERSION}
     with db_module.engine.begin() as connection:
         connection.execute(text("UPDATE alembic_version SET version_num = 'not-the-head'"))
     stale = client.get("/api/v1/health", headers=auth_headers)

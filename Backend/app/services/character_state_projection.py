@@ -212,7 +212,8 @@ def _changes_for_projection(db: Session, book_id: str, *, before_index: int | No
         if chapter.active_archive_revision_id:
             active = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id)
         active_valid = (
-            active is not None and active.is_active and active.status == "complete"
+            active is not None and active.chapter_id == chapter.id
+            and active.is_active and active.status == "complete"
             and active.input_fingerprint == archive_input_fingerprint_for_projection(
                 chapter, cursor.materialize_fields(),
                 character_ids=[link.character_id for link in chapter.character_links],
@@ -231,11 +232,8 @@ def _changes_for_projection(db: Session, book_id: str, *, before_index: int | No
             # after the chapter's reliable deltas so it masks all disputed
             # variants independent of the model's array ordering.
             chapter_changes.extend(uncertainty_changes_for_revision(active))
-        # Existing databases receive legacy_archive_eligible=true.  The second
-        # condition keeps direct v1 apply helpers useful in local compatibility
-        # tests, while any attempted v2 revision has a non-null fingerprint and
-        # therefore cannot silently fall back after becoming stale/failed.
-        elif chapter.legacy_archive_eligible or chapter.archive_input_fingerprint is None:
+        # Legacy participation is explicit; a missing fingerprint is not proof.
+        elif chapter.legacy_archive_eligible:
             chapter_changes.extend(
                 db.scalars(
                     select(CharacterStateChange)
@@ -262,6 +260,20 @@ def project_state_changes(
     for change in changes:
         cursor.apply(change)
     return cursor.materialize_fields(), set(cursor.latest.values())
+
+
+def projected_book_state(
+    db: Session, book_id: str,
+) -> tuple[dict[str, dict[str, str]], list[CharacterStateChange | ChapterArchiveStateDelta]]:
+    """Read current fields and effective source rows without changing audit flags."""
+    characters = db.scalars(select(Character).where(Character.book_id == book_id)).all()
+    changes = _changes_for_projection(db, book_id)
+    fields, effective_ids = project_state_changes(changes, characters)
+    effective_rows = [
+        change for change in changes
+        if not isinstance(change, StateUncertainty) and change.id in effective_ids
+    ]
+    return fields, effective_rows
 
 
 def projected_state_before_chapter(

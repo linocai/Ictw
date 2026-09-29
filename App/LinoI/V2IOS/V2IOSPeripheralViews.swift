@@ -3,7 +3,7 @@ import UIKit
 
 /// A compact UIKit bridge allows a sheet drag to enter the same explicit
 /// unsaved-changes decision as its visible Cancel action.
-private struct V2IOSDismissAttemptObserver: UIViewControllerRepresentable {
+struct V2IOSDismissAttemptObserver: UIViewControllerRepresentable {
     let shouldDismiss: () -> Bool
     let onAttempt: () -> Void
 
@@ -52,7 +52,7 @@ private struct V2IOSDismissAttemptObserver: UIViewControllerRepresentable {
 }
 
 @MainActor
-private final class V2IOSCharacterSheetLeaveCoordinator: ObservableObject {
+final class V2IOSCharacterSheetLeaveCoordinator: ObservableObject {
     @Published private(set) var isDirty = false
     @Published private(set) var isSaving = false
     private var requestLeaveAction: (() -> Void)?
@@ -89,10 +89,14 @@ struct V2IOSWorldEditorView: View {
     @State private var saving = false
     @State private var loaded = false
     @State private var showingLeaveConfirmation = false
+    @State private var loadedBookID: String?
+    @State private var loadedContextID: UUID?
+    @State private var submissionID: UUID?
 
     var body: some View {
         NavigationStack {
             TextEditor(text: $text)
+                .disabled(saving)
                 .font(V2DeskType.prose(16))
                 .lineSpacing(7)
                 .scrollContentBackground(.hidden)
@@ -144,12 +148,16 @@ struct V2IOSWorldEditorView: View {
             initialText = session.currentBook?.worldSetting ?? ""
             text = initialText
             loaded = true
+            loadedBookID = session.currentBook?.id
+            loadedContextID = session.bookContextID
         }
+        .onDisappear { submissionID = nil }
     }
 
     private var isDirty: Bool { loaded && text != initialText }
 
     private func requestDismiss() {
+        guard !saving else { return }
         if isDirty { showingLeaveConfirmation = true }
         else { dismiss() }
     }
@@ -159,13 +167,22 @@ struct V2IOSWorldEditorView: View {
             if !isDirty { dismiss() }
             return
         }
+        guard session.currentBook?.id == loadedBookID, session.bookContextID == loadedContextID else { return }
+        let submittedTitle = title, submittedText = text
+        let id = UUID()
+        submissionID = id
         saving = true
         Task {
-            let didSave = await workspace.saveBook(title: title, world: text)
+            guard submissionID == id, session.currentBook?.id == loadedBookID, session.bookContextID == loadedContextID else {
+                saving = false; submissionID = nil; return
+            }
+            let didSave = await workspace.saveBook(title: submittedTitle, world: submittedText)
+            guard submissionID == id else { return }
             saving = false
-            guard didSave else { return }
-            initialText = text
-            dismiss()
+            submissionID = nil
+            guard didSave, session.currentBook?.id == loadedBookID, session.bookContextID == loadedContextID else { return }
+            initialText = submittedText
+            if text == submittedText, title == submittedTitle { dismiss() }
         }
     }
 }
@@ -292,6 +309,7 @@ private struct V2IOSCharacterRow: View {
 private struct V2IOSCharacterDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var sheetLeaveCoordinator: V2IOSCharacterSheetLeaveCoordinator
     @FocusState private var focusedField: V2IOSCharacterFieldID?
     @State private var original: Character
@@ -299,6 +317,7 @@ private struct V2IOSCharacterDetailView: View {
     @State private var saving = false
     @State private var showingDelete = false
     @State private var showingLeaveConfirmation = false
+    @State private var submissionID: UUID?
 
     init(character: Character) {
         _original = State(initialValue: character)
@@ -318,11 +337,12 @@ private struct V2IOSCharacterDetailView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
+            .disabled(saving)
         }
         .v2IOSNoticeOverlay()
         .navigationTitle(edited.name.v2IOSTrimmed.isEmpty ? "人物" : edited.name)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(isDirty)
+        .navigationBarBackButtonHidden(isDirty || saving)
         .toolbar {
             if isDirty {
                 ToolbarItem(placement: .topBarLeading) {
@@ -355,6 +375,7 @@ private struct V2IOSCharacterDetailView: View {
         .onAppear(perform: syncSheetLeaveCoordinator)
         .onChange(of: isDirty) { _, _ in syncSheetLeaveCoordinator() }
         .onChange(of: saving) { _, _ in syncSheetLeaveCoordinator() }
+        .onDisappear { submissionID = nil }
     }
 
     private var isDirty: Bool { edited != original }
@@ -388,6 +409,7 @@ private struct V2IOSCharacterDetailView: View {
     }
 
     private func requestDismiss() {
+        guard !saving else { return }
         if isDirty { showingLeaveConfirmation = true }
         else { dismiss() }
     }
@@ -399,13 +421,23 @@ private struct V2IOSCharacterDetailView: View {
 
     private func saveAndDismiss() {
         guard !saving, isDirty, !edited.name.v2IOSTrimmed.isEmpty else { return }
+        guard session.currentBook?.id == edited.bookId else { return }
+        let submitted = edited
+        let context = session.bookContextID
+        let id = UUID()
+        submissionID = id
         saving = true
         Task {
-            let didSave = await characters.update(edited)
+            guard submissionID == id, session.currentBook?.id == submitted.bookId, session.bookContextID == context else {
+                saving = false; submissionID = nil; return
+            }
+            let didSave = await characters.update(submitted)
+            guard submissionID == id else { return }
             saving = false
-            guard didSave else { return }
-            original = edited
-            dismiss()
+            submissionID = nil
+            guard didSave, session.currentBook?.id == submitted.bookId, session.bookContextID == context else { return }
+            original = submitted
+            if edited == submitted { dismiss() }
         }
     }
 
@@ -460,6 +492,7 @@ private struct V2IOSCharacterField: View {
 private struct V2IOSNewCharacterView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var sheetLeaveCoordinator: V2IOSCharacterSheetLeaveCoordinator
     @FocusState private var focusedField: V2IOSCharacterFieldID?
     @State private var name = ""
@@ -467,6 +500,7 @@ private struct V2IOSNewCharacterView: View {
     @State private var profile = ""
     @State private var saving = false
     @State private var showingLeaveConfirmation = false
+    @State private var submissionID: UUID?
 
     var body: some View {
         ScrollView {
@@ -477,11 +511,12 @@ private struct V2IOSNewCharacterView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
+            .disabled(saving)
         }
         .v2IOSNoticeOverlay()
         .navigationTitle("新增人物")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(isDirty)
+        .navigationBarBackButtonHidden(isDirty || saving)
         .toolbar {
             if isDirty {
                 ToolbarItem(placement: .topBarLeading) {
@@ -507,6 +542,7 @@ private struct V2IOSNewCharacterView: View {
         .onAppear(perform: syncSheetLeaveCoordinator)
         .onChange(of: isDirty) { _, _ in syncSheetLeaveCoordinator() }
         .onChange(of: saving) { _, _ in syncSheetLeaveCoordinator() }
+        .onDisappear { submissionID = nil }
     }
 
     private var isDirty: Bool {
@@ -514,6 +550,7 @@ private struct V2IOSNewCharacterView: View {
     }
 
     private func requestDismiss() {
+        guard !saving else { return }
         if isDirty { showingLeaveConfirmation = true }
         else { dismiss() }
     }
@@ -525,15 +562,26 @@ private struct V2IOSNewCharacterView: View {
 
     private func create() {
         guard !saving, !name.v2IOSTrimmed.isEmpty else { return }
+        guard let bookID = session.currentBook?.id else { return }
+        let context = session.bookContextID
+        let submittedName = name, submittedRole = role, submittedProfile = profile
+        let id = UUID()
+        submissionID = id
         saving = true
         Task {
+            guard submissionID == id, session.currentBook?.id == bookID, session.bookContextID == context else {
+                saving = false; submissionID = nil; return
+            }
             let created = await characters.create(
-                name: name.v2IOSTrimmed,
-                role: role.v2IOSTrimmed,
-                fixedProfile: profile
+                name: submittedName.v2IOSTrimmed,
+                role: submittedRole.v2IOSTrimmed,
+                fixedProfile: submittedProfile
             )
+            guard submissionID == id else { return }
             saving = false
-            if created != nil { dismiss() }
+            submissionID = nil
+            if created != nil, session.currentBook?.id == bookID, session.bookContextID == context,
+               name == submittedName, role == submittedRole, profile == submittedProfile { dismiss() }
         }
     }
 }
@@ -573,6 +621,7 @@ struct V2IOSInspirationSheet: View {
     }
 
     private var canEditChapter: Bool { ChapterEditingPolicy.canEdit(editor.currentChapter) }
+    private var isStale: Bool { inspiration.isStale(comparedTo: editor.currentChapter) }
     private var needsScrolling: Bool {
         inspiration.isLoading || !inspiration.cards.isEmpty || inspiration.errorMessage != nil
     }
@@ -587,10 +636,14 @@ struct V2IOSInspirationSheet: View {
             if let error = inspiration.errorMessage {
                 Text(error).font(V2DeskType.control(13)).foregroundStyle(Color.red).padding(13).v2IOSPaper(.card)
             }
+            if isStale, !inspiration.cards.isEmpty {
+                Text("这些方向基于修改前内容；仍可主动采用，也可按最新内容重想。")
+                    .font(V2DeskType.control(12.5)).foregroundStyle(Color.secondary)
+            }
             ForEach(inspiration.cards) { card in
                 VStack(alignment: .leading, spacing: 12) {
                     Text(card.body).font(V2DeskType.prose(14.5)).lineSpacing(6)
-                    V2IOSSecondaryButton(title: inspiration.adoptedCardIDs.contains(card.id) || addingID == card.id ? "已加入意图" : "加入意图") { add(card) }
+                    V2IOSSecondaryButton(title: inspiration.adoptedCardIDs.contains(card.id) || addingID == card.id ? "已加入意图" : (isStale ? "仍加入意图" : "加入意图")) { add(card) }
                         .disabled(!canEditChapter || inspiration.adoptedCardIDs.contains(card.id) || addingID == card.id)
                 }.padding(14).v2IOSPaper(.manuscriptPaper)
             }
@@ -598,7 +651,7 @@ struct V2IOSInspirationSheet: View {
                 V2IOSSecondaryButton(title: "撤销这次加入", tone: .accent) { undo() }
                     .disabled(!canEditChapter)
             }
-            V2IOSPrimaryButton(title: inspiration.cards.isEmpty ? "开始找灵感" : "换三个", disabled: inspiration.isLoading || !canEditChapter) {
+            V2IOSPrimaryButton(title: isStale ? "按最新内容重想" : (inspiration.cards.isEmpty ? "开始找灵感" : "换三个"), disabled: inspiration.isLoading || !canEditChapter) {
                 selectedDetent = .large
                 if let chapter = editor.currentChapter { inspiration.generate(for: chapter) }
             }

@@ -637,7 +637,8 @@ enum V2DeskPresentation {
                 if generatedCandidateNeedsFreshWrite(code) { return .retryGeneration }
             }
             if source.canRetryGeneratedCandidateChecker { return .retryGeneratedCandidateChecker }
-            if stage == .bibleChecking && source.checkerTarget == "visible_draft" {
+            if source.checkerTarget == "visible_draft"
+                && (stage == .bibleChecking || code == "checker_start_unconfirmed") {
                 return .rerunChecker
             }
             if stage == nil { return .refreshTaskStatus }
@@ -742,7 +743,7 @@ enum V2DeskPresentation {
                 return V2DeskTaskBanner(
                     kind: .connectionInterrupted,
                     tone: .warning,
-                    text: "任务中断，尚不清楚停在哪一步",
+                    text: code == "checker_start_unconfirmed" ? "复查是否启动尚未确认" : "任务中断，尚不清楚停在哪一步",
                     action: .refreshTaskStatus,
                     detail: message
                 )

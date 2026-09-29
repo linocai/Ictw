@@ -23,6 +23,9 @@ struct V2MacDeskSheetHost: View {
 struct V2MacSheetFrame<Content: View>: View {
     let title: String
     var width: CGFloat = 520
+    var dismissDisabled = false
+    var hasUnsavedChanges = false
+    var onDismiss: (() -> Void)? = nil
     @ViewBuilder var content: Content
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -32,7 +35,8 @@ struct V2MacSheetFrame<Content: View>: View {
             HStack {
                 Text(title).font(V2DeskType.prose(17, weight: .semibold))
                 Spacer()
-                V2MacDeskIconButton(symbol: "xmark", label: "关闭") { dismiss() }
+                V2MacDeskIconButton(symbol: "xmark", label: "关闭", action: requestDismiss)
+                    .disabled(dismissDisabled)
             }
             .padding(.horizontal, 22).frame(height: 48)
             .background(V2DeskPalette.color(.titleBar, scheme: colorScheme))
@@ -42,6 +46,13 @@ struct V2MacSheetFrame<Content: View>: View {
         }
         .frame(width: width)
         .background(V2DeskPalette.color(.card, scheme: colorScheme))
+        .interactiveDismissDisabled(dismissDisabled || hasUnsavedChanges)
+        .onExitCommand(perform: requestDismiss)
+    }
+
+    private func requestDismiss() {
+        guard !dismissDisabled else { return }
+        if let onDismiss { onDismiss() } else { dismiss() }
     }
 }
 
@@ -49,14 +60,20 @@ struct V2MacSheetFrame<Content: View>: View {
 
 private struct V2MacNewBookSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @State private var title = ""
     @State private var creating = false
+    @State private var showingLeaveConfirmation = false
     @FocusState private var focused: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        V2MacSheetFrame(title: "新建一本", width: 440) {
+        V2MacSheetFrame(title: "新建一本", width: 440, dismissDisabled: creating, hasUnsavedChanges: !title.isEmpty, onDismiss: requestDismiss) {
             VStack(alignment: .leading, spacing: 18) {
                 V2MacDeskSectionLabel(text: "书名")
                 TextField("", text: $title)
@@ -65,6 +82,7 @@ private struct V2MacNewBookSheet: View {
                     .padding(.vertical, 8)
                     .overlay(alignment: .bottom) { Rectangle().fill(V2DeskPalette.color(.strongLine, scheme: colorScheme)).frame(height: 1) }
                     .focused($focused)
+                    .disabled(creating)
                     .onSubmit { Task { await create() } }
                 Text("世界观可以稍后再写。")
                     .font(V2DeskType.control(12))
@@ -74,16 +92,27 @@ private struct V2MacNewBookSheet: View {
             .padding(24)
         }
         .onAppear { focused = true }
+        .interactiveDismissDisabled(creating || !title.isEmpty)
+        .confirmationDialog("放弃新书输入？", isPresented: $showingLeaveConfirmation) {
+            Button("放弃修改", role: .destructive) { dismiss() }
+            Button("继续编辑", role: .cancel) {}
+        }
+    }
+
+    private func requestDismiss() {
+        guard !creating else { return }
+        if !title.isEmpty { showingLeaveConfirmation = true } else { dismiss() }
     }
 
     private func create() async {
-        guard !creating else { return }
+        guard !creating, editor.persistLocalDraftIfNeeded() else { return }
         creating = true
         let resolvedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名书籍" : title
         let created = await bookshelf.createBook(title: resolvedTitle)
         creating = false
         // A failed create leaves the sheet open with the typed title intact.
-        guard created != nil else { return }
+        guard let created, session.currentBook?.id == created.id else { return }
+        guard V2MacBookNavigation.prepare(editor: editor, workspace: workspace, characters: characters, inspiration: inspiration) else { return }
         dismiss()
     }
 }
@@ -96,11 +125,16 @@ private struct V2MacWorldSheet: View {
     @State private var title = ""
     @State private var world = ""
     @State private var loadedID: String?
+    @State private var loadedContextID: UUID?
+    @State private var originalTitle = ""
+    @State private var originalWorld = ""
     @State private var saving = false
+    @State private var showingLeaveConfirmation = false
+    @State private var submissionID: UUID?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        V2MacSheetFrame(title: "世界观", width: 700) {
+        V2MacSheetFrame(title: "世界观", width: 700, dismissDisabled: saving, hasUnsavedChanges: isDirty, onDismiss: requestDismiss) {
             VStack(alignment: .leading, spacing: 14) {
                 TextField("书名", text: $title)
                     .textFieldStyle(.plain)
@@ -120,28 +154,53 @@ private struct V2MacWorldSheet: View {
                     Text("一篇长文本；标题和空行由你自己书写。")
                         .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
                     Spacer()
-                    Button(saving ? "正在保存" : "保存") { Task { await save() } }
-                        .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(saving)
+                    Button(saving ? "正在保存" : "保存", action: save)
+                        .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(saving || !isDirty || !ownsBook)
                 }
             }
             .padding(22)
+            .disabled(saving)
         }
         .onAppear { sync() }
+        .onDisappear { submissionID = nil }
+        .confirmationDialog("放弃世界观修改？", isPresented: $showingLeaveConfirmation) {
+            Button("放弃修改", role: .destructive) { dismiss() }
+            Button("继续编辑", role: .cancel) {}
+        } message: { Text("未保存的书名和世界观将被放弃。") }
+    }
+
+    private var isDirty: Bool { title != originalTitle || world != originalWorld }
+    private var ownsBook: Bool { session.currentBook?.id == loadedID && session.bookContextID == loadedContextID }
+
+    private func requestDismiss() {
+        guard !saving else { return }
+        if isDirty { showingLeaveConfirmation = true } else { dismiss() }
     }
 
     private func sync() {
         guard let book = session.currentBook, book.id != loadedID else { return }
-        loadedID = book.id; title = book.title; world = book.worldSetting
+        loadedID = book.id; loadedContextID = session.bookContextID
+        title = book.title; world = book.worldSetting
+        originalTitle = title; originalWorld = world
     }
-    private func save() async {
+    private func save() {
+        guard !saving, ownsBook else { return }
+        let submittedTitle = title
+        let submittedWorld = world
+        let id = UUID()
+        submissionID = id
         saving = true
-        let didSave = await workspace.saveBook(title: title, world: world)
-        saving = false
-        // The world setting never reaches the local draft cache, so dismissing
-        // on failure would drop everything the author just wrote.
-        guard didSave else { return }
-        if let book = session.currentBook { bookshelf.upsert(book) }
-        dismiss()
+        Task {
+            guard submissionID == id, ownsBook else { saving = false; submissionID = nil; return }
+            let didSave = await workspace.saveBook(title: submittedTitle, world: submittedWorld)
+            guard submissionID == id else { return }
+            saving = false
+            submissionID = nil
+            guard didSave, ownsBook else { return }
+            originalTitle = submittedTitle; originalWorld = submittedWorld
+            if let book = session.currentBook { bookshelf.upsert(book) }
+            if !isDirty { dismiss() }
+        }
     }
 }
 
@@ -149,12 +208,17 @@ private struct V2MacWorldSheet: View {
 
 private struct V2MacPeopleSheet: View {
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var session: AppSession
+    @Environment(\.dismiss) private var dismiss
     @State private var newPerson = false
     @State private var deleteTarget: Character?
+    @State private var drafts = V2MacCharacterDrafts()
+    @State private var deleting = false
+    @State private var showingLeaveConfirmation = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        V2MacSheetFrame(title: "人物", width: 760) {
+        V2MacSheetFrame(title: "人物", width: 760, dismissDisabled: isBusy, hasUnsavedChanges: drafts.hasUnsavedChanges, onDismiss: requestDismiss) {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     ScrollView {
@@ -174,19 +238,20 @@ private struct V2MacPeopleSheet: View {
                                     }
                                     .padding(.horizontal, 13).frame(minHeight: 48)
                                     .background(characters.selectedCharacterId == person.id ? V2DeskPalette.color(.desk, scheme: colorScheme) : .clear)
-                                }.buttonStyle(.plain)
+                                }.buttonStyle(.plain).disabled(isBusy)
                                 V2MacDeskHairline()
                             }
                         }
                     }
                     Button("新增人物") { newPerson = true }
-                        .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true)).padding(12)
+                        .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true)).padding(12).disabled(isBusy)
                 }
                 .frame(width: 236)
                 .background(V2DeskPalette.color(.rail, scheme: colorScheme))
                 V2MacDeskHairline().frame(width: 1, height: nil)
-                if let person = characters.selected {
-                    V2MacPersonEditor(person: person, delete: { deleteTarget = person })
+                if let person = characters.selected, let bookID = session.currentBook?.id {
+                    V2MacPersonEditor(person: person, bookID: bookID, drafts: $drafts, delete: { deleteTarget = person })
+                        .disabled(deleting)
                 } else {
                     V2MacDeskEmptyPrompt(title: "添加第一个人物", actionTitle: "新增人物") { newPerson = true }
                 }
@@ -195,32 +260,56 @@ private struct V2MacPeopleSheet: View {
         }
         .sheet(isPresented: $newPerson) { V2MacNewPersonSheet() }
         .confirmationDialog("删除这个人物？", isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
-            Button("删除人物", role: .destructive) { if let deleteTarget { Task { await characters.delete(deleteTarget) }; self.deleteTarget = nil } }
+            Button("删除人物", role: .destructive, action: deletePerson)
             Button("取消", role: .cancel) { deleteTarget = nil }
         } message: { Text("这个人物的固定设定和归档记录都会从本书移除。") }
+        .confirmationDialog("放弃人物修改？", isPresented: $showingLeaveConfirmation) {
+            Button("放弃修改", role: .destructive) { dismiss() }
+            Button("继续编辑", role: .cancel) {}
+        } message: { Text("这次编辑中尚未保存的人物设定将被放弃。") }
+    }
+
+    private var isBusy: Bool { drafts.isSaving || deleting }
+
+    private func requestDismiss() {
+        guard !isBusy else { return }
+        if drafts.hasUnsavedChanges { showingLeaveConfirmation = true } else { dismiss() }
+    }
+
+    private func deletePerson() {
+        guard !isBusy, let person = deleteTarget, let bookID = session.currentBook?.id else { return }
+        let context = session.bookContextID
+        deleteTarget = nil
+        deleting = true
+        Task {
+            let deleted = await characters.delete(person)
+            deleting = false
+            if deleted, session.currentBook?.id == bookID, session.bookContextID == context {
+                drafts.remove(.init(bookID: bookID, characterID: person.id))
+            }
+        }
     }
 }
 
 private struct V2MacPersonEditor: View {
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var session: AppSession
     let person: Character
+    let bookID: String
+    @Binding var drafts: V2MacCharacterDrafts
     let delete: () -> Void
-    @State private var name = ""
-    @State private var role = ""
-    @State private var profile = ""
-    @State private var loadedID: String?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             V2MacDeskSectionLabel(text: "我设定的")
-            TextField("姓名", text: $name).textFieldStyle(.plain).font(V2DeskType.prose(17))
+            TextField("姓名", text: field(\.name)).textFieldStyle(.plain).font(V2DeskType.prose(17)).accessibilityLabel("人物姓名")
                 .overlay(alignment: .bottom) { Rectangle().fill(V2DeskPalette.color(.line, scheme: colorScheme)).frame(height: 1) }
-            TextField("身份", text: $role).textFieldStyle(.plain).font(V2DeskType.control(13))
+            TextField("身份", text: field(\.role)).textFieldStyle(.plain).font(V2DeskType.control(13)).accessibilityLabel("人物身份")
                 .overlay(alignment: .bottom) { Rectangle().fill(V2DeskPalette.color(.line, scheme: colorScheme)).frame(height: 1) }
-            TextEditor(text: $profile).scrollContentBackground(.hidden).font(V2DeskType.prose(13)).frame(minHeight: 120).padding(7)
+            TextEditor(text: field(\.fixedProfile)).scrollContentBackground(.hidden).font(V2DeskType.prose(13)).frame(minHeight: 120).padding(7).accessibilityLabel("人物设定")
                 .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme)).overlay { RoundedRectangle(cornerRadius: 7).stroke(V2DeskPalette.color(.line, scheme: colorScheme)) }
-            HStack { Spacer(); Button("保存设定") { Task { await save() } }.buttonStyle(V2MacDeskButton(kind: .primary, compact: true)) }
+            HStack { Spacer(); Button(drafts.isSaving ? "正在保存" : "保存设定", action: save).buttonStyle(V2MacDeskButton(kind: .primary, compact: true)) }
             V2MacDeskHairline()
             V2MacDeskSectionLabel(text: "整理自正文 · 只读")
             ScrollView {
@@ -243,37 +332,81 @@ private struct V2MacPersonEditor: View {
             Button("删除人物", action: delete).buttonStyle(V2MacDeskButton(kind: .danger, compact: true))
         }
         .padding(20).frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear { sync() }.onChange(of: person.id) { _, _ in sync() }
+        .disabled(drafts.isSaving)
+        .onAppear { sync() }.onChange(of: key) { _, _ in sync() }
+        .onChange(of: person) { _, _ in sync() }
     }
-    private func sync() { guard loadedID != person.id else { return }; loadedID = person.id; name = person.name; role = person.role; profile = person.fixedProfile }
-    private func save() async { var updated = person; updated.name = name; updated.role = role; updated.fixedProfile = profile; await characters.update(updated) }
+    private var key: V2MacCharacterDrafts.Key { .init(bookID: bookID, characterID: person.id) }
+    private func field(_ keyPath: WritableKeyPath<Character, String>) -> Binding<String> {
+        Binding(get: { drafts.value(for: key, fallback: person)[keyPath: keyPath] },
+                set: { drafts.edit(key, fallback: person, field: keyPath, value: $0) })
+    }
+    private func sync() { drafts.load(person, for: key) }
+    private func save() {
+        guard session.currentBook?.id == bookID, let submission = drafts.beginSubmit(key, fallback: person) else { return }
+        let context = session.bookContextID
+        Task {
+            guard session.currentBook?.id == bookID, session.bookContextID == context else {
+                drafts.complete(submission, succeeded: false)
+                return
+            }
+            let saved = await characters.update(submission.character)
+            drafts.complete(submission, succeeded: saved && session.currentBook?.id == bookID && session.bookContextID == context)
+        }
+    }
 }
 
 private struct V2MacNewPersonSheet: View {
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var session: AppSession
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var role = ""
     @State private var traits = ""
+    @State private var creating = false
+    @State private var showingLeaveConfirmation = false
+    @State private var submissionID: UUID?
     @FocusState private var focused: Bool
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
-        V2MacSheetFrame(title: "新增人物", width: 480) {
+        V2MacSheetFrame(title: "新增人物", width: 480, dismissDisabled: creating, hasUnsavedChanges: isDirty, onDismiss: requestDismiss) {
             VStack(alignment: .leading, spacing: 14) {
                 TextField("姓名", text: $name).textFieldStyle(.plain).padding(8).background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme)).focused($focused)
                 TextField("身份", text: $role).textFieldStyle(.plain).padding(8).background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
                 TextField("性格", text: $traits).textFieldStyle(.plain).padding(8).background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
-                HStack { Spacer(); Button("创建") { Task { await create() } }.buttonStyle(V2MacDeskButton(kind: .primary)).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-            }.padding(22)
+                HStack { Spacer(); Button(creating ? "正在创建" : "创建", action: create).buttonStyle(V2MacDeskButton(kind: .primary)).disabled(creating || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            }.padding(22).disabled(creating)
         }.onAppear { focused = true }
+        .onDisappear { submissionID = nil }
+        .confirmationDialog("放弃新增人物？", isPresented: $showingLeaveConfirmation) {
+            Button("放弃修改", role: .destructive) { dismiss() }
+            Button("继续编辑", role: .cancel) {}
+        } message: { Text("输入的姓名、身份和设定不会保存。") }
     }
-    private func create() async {
-        // One request carries all three fields. The old two-step form fell back
-        // to `characters.selected` when create failed, which resolves to the
-        // first character in the list and overwrote that person's canon.
-        let created = await characters.create(name: name, role: role, fixedProfile: traits)
-        guard created != nil else { return }
-        dismiss()
+    private var isDirty: Bool { !name.isEmpty || !role.isEmpty || !traits.isEmpty }
+    private func requestDismiss() {
+        guard !creating else { return }
+        if isDirty { showingLeaveConfirmation = true } else { dismiss() }
+    }
+    private func create() {
+        guard !creating, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let bookID = session.currentBook?.id else { return }
+        let context = session.bookContextID
+        let submittedName = name, submittedRole = role, submittedTraits = traits
+        let id = UUID()
+        submissionID = id
+        creating = true
+        Task {
+            guard submissionID == id, session.currentBook?.id == bookID, session.bookContextID == context else {
+                creating = false; submissionID = nil; return
+            }
+            let created = await characters.create(name: submittedName, role: submittedRole, fixedProfile: submittedTraits)
+            guard submissionID == id else { return }
+            creating = false
+            submissionID = nil
+            guard created != nil, session.currentBook?.id == bookID, session.bookContextID == context else { return }
+            guard name == submittedName, role == submittedRole, traits == submittedTraits else { return }
+            dismiss()
+        }
     }
 }
 
@@ -283,20 +416,26 @@ private struct V2MacInspirationSheet: View {
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var inspiration: InspirationCreatorStore
     @Environment(\.colorScheme) private var colorScheme
-    @State private var boundary = ""
+    private var canEditChapter: Bool { ChapterEditingPolicy.canEdit(editor.currentChapter) }
+    private var isStale: Bool { inspiration.isStale(comparedTo: editor.currentChapter) }
 
     var body: some View {
         V2MacSheetFrame(title: "找方向", width: 760) {
             VStack(alignment: .leading, spacing: 14) {
-                TextField("本章推进边界（可选）", text: $boundary)
+                TextField("本章推进边界（可选）", text: $inspiration.pacingBoundary)
                     .textFieldStyle(.plain).font(V2DeskType.control(12.5)).padding(10)
                     .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme)).overlay { RoundedRectangle(cornerRadius: 7).stroke(V2DeskPalette.color(.line, scheme: colorScheme)) }
+                    .disabled(!canEditChapter)
                 HStack {
                     Text(inspiration.isLoading ? "正在找方向" : "")
                         .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
                     Spacer()
-                    Button(inspiration.cards.isEmpty ? "开始找灵感" : "换三个") { generate() }
-                        .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(editor.currentChapter == nil || inspiration.isLoading)
+                    Button(isStale ? "按最新内容重想" : (inspiration.cards.isEmpty ? "开始找灵感" : "换三个")) { generate() }
+                        .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(!canEditChapter || inspiration.isLoading)
+                }
+                if isStale, !inspiration.cards.isEmpty {
+                    Text("这些方向基于修改前内容；仍可主动采用，也可按最新内容重想。")
+                        .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.taskWarning, scheme: colorScheme))
                 }
                 if let error = inspiration.errorMessage {
                     Text(error).font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.danger, scheme: colorScheme))
@@ -307,7 +446,6 @@ private struct V2MacInspirationSheet: View {
                     .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)).padding(.vertical, 24) }
             }.padding(22)
         }
-        .onAppear { boundary = inspiration.pacingBoundary }
     }
     private var cards: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -315,18 +453,18 @@ private struct V2MacInspirationSheet: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(card.body).font(V2DeskType.prose(13.5)).lineSpacing(6).foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme)).textSelection(.enabled)
                     Spacer(minLength: 0)
-                    Button(inspiration.adoptedCardIDs.contains(card.id) ? "已写入意图" : "用这个") { add(card) }
+                    Button(inspiration.adoptedCardIDs.contains(card.id) ? "已写入意图" : (isStale ? "仍用这个" : "用这个")) { add(card) }
                         .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
-                        .disabled(inspiration.adoptedCardIDs.contains(card.id) || editor.currentChapter?.status == "finalized")
+                        .disabled(inspiration.adoptedCardIDs.contains(card.id) || !canEditChapter)
                 }
                 .padding(14).frame(maxWidth: .infinity, minHeight: 250, alignment: .topLeading)
                 .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme)).overlay { RoundedRectangle(cornerRadius: 8).stroke(V2DeskPalette.color(.line, scheme: colorScheme)) }
             }
         }
     }
-    private func generate() { guard let chapter = editor.currentChapter else { return }; inspiration.pacingBoundary = boundary; inspiration.generate(for: chapter) }
+    private func generate() { guard let chapter = editor.currentChapter, canEditChapter else { return }; inspiration.generate(for: chapter) }
     private func add(_ card: InspirationCard) {
-        guard let chapter = editor.currentChapter else { return }
+        guard let chapter = editor.currentChapter, canEditChapter else { return }
         let before = chapter.userPrompt
         let after = before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? card.body : before + "\n\n" + card.body
         editor.editString(\.userPrompt, value: after)
@@ -336,10 +474,26 @@ private struct V2MacInspirationSheet: View {
 
 // MARK: - Settings and personas
 
+@MainActor
+private final class V2MacSettingsEditingState: ObservableObject {
+    @Published private(set) var dirtyForms: Set<String> = []
+    @Published private(set) var busyForms: Set<String> = []
+    var isDirty: Bool { !dirtyForms.isEmpty }
+    var isBusy: Bool { !busyForms.isEmpty }
+    func update(_ id: String, dirty: Bool, busy: Bool) {
+        if dirty { dirtyForms.insert(id) } else { dirtyForms.remove(id) }
+        if busy { busyForms.insert(id) } else { busyForms.remove(id) }
+    }
+}
+
 private struct V2MacSettingsSheet: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var session: AppSession
     @State private var section: V2MacSettingsSection = .personas
+    @State private var personaDraft = V2MacPersonaDraft()
+    @State private var showingLeaveConfirmation = false
+    @StateObject private var editing = V2MacSettingsEditingState()
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
     private enum V2MacSettingsSection: String, CaseIterable, Identifiable {
@@ -349,7 +503,7 @@ private struct V2MacSettingsSheet: View {
     }
 
     var body: some View {
-        V2MacSheetFrame(title: "设置", width: 800) {
+        V2MacSheetFrame(title: "设置", width: 800, dismissDisabled: editing.isBusy || personaDraft.isSaving, hasUnsavedChanges: editing.isDirty || personaDraft.hasUnsavedChanges, onDismiss: requestDismiss) {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(V2MacSettingsSection.allCases) { item in
@@ -360,48 +514,69 @@ private struct V2MacSettingsSheet: View {
                             .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                             .padding(.horizontal, 15)
                             .background(section == item ? V2DeskPalette.color(.desk, scheme: colorScheme) : .clear)
+                            .disabled(editing.isBusy || personaDraft.isSaving)
                     }
                     Spacer()
                 }
                 .padding(.top, 14).frame(width: 168)
                 .background(V2DeskPalette.color(.rail, scheme: colorScheme))
                 V2MacDeskHairline().frame(width: 1, height: nil)
-                if section == .notifications {
-                    NoticeHistoryList().frame(maxWidth: .infinity)
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            switch section {
-                            case .connection: V2MacConnectionSettings()
-                            case .model: V2MacModelSettings()
-                            case .personas: V2MacPersonaSettings()
-                            case .writing: V2MacWritingSettings()
-                            case .appearance: V2MacAppearanceSettings()
-                            case .notifications: EmptyView()
-                            }
-                        }.padding(22)
+                ZStack(alignment: .topLeading) {
+                    ForEach(V2MacSettingsSection.allCases.filter { $0 != .notifications }) { item in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 18) {
+                                switch item {
+                                case .connection: V2MacConnectionSettings()
+                                case .model: V2MacModelSettings()
+                                case .personas: V2MacPersonaSettings(draft: $personaDraft)
+                                case .writing: V2MacWritingSettings()
+                                case .appearance: V2MacAppearanceSettings()
+                                case .notifications: EmptyView()
+                                }
+                            }.padding(22)
+                        }
+                        .opacity(section == item ? 1 : 0)
+                        .allowsHitTesting(section == item)
+                        .accessibilityHidden(section != item)
                     }
-                    .frame(maxWidth: .infinity)
+                    NoticeHistoryList()
+                        .opacity(section == .notifications ? 1 : 0)
+                        .allowsHitTesting(section == .notifications)
+                        .accessibilityHidden(section != .notifications)
                 }
+                .frame(maxWidth: .infinity)
             }
             .frame(height: 560)
         }
-        .task {
+        .environmentObject(editing)
+        .confirmationDialog("放弃设置修改？", isPresented: $showingLeaveConfirmation) {
+            Button("放弃修改", role: .destructive) { dismiss() }
+            Button("继续编辑", role: .cancel) {}
+        } message: { Text("尚未保存的设置和各角色人格输入将被放弃。") }
+        .task(id: session.currentBook?.id) {
             await agents.load()
             if let id = session.currentBook?.id {
                 _ = await agents.loadBookPersonas(bookID: id)
             }
         }
     }
+
+    private func requestDismiss() {
+        guard !editing.isBusy, !personaDraft.isSaving else { return }
+        if editing.isDirty || personaDraft.hasUnsavedChanges { showingLeaveConfirmation = true } else { dismiss() }
+    }
 }
 
 private struct V2MacConnectionSettings: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var editing: V2MacSettingsEditingState
     @State private var endpoint = ""
     @State private var token = ""
     @State private var loaded = false
     @State private var saving = false
+    @State private var originalEndpoint = ""
+    @State private var originalToken = ""
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -428,12 +603,18 @@ private struct V2MacConnectionSettings: View {
                     .disabled(saving || !canSave)
             }
         }
+        .disabled(saving)
         .onAppear {
             guard !loaded else { return }
             loaded = true
             endpoint = session.baseURL
             token = session.token
+            originalEndpoint = endpoint
+            originalToken = token
+            updateEditingState()
         }
+        .onChange(of: endpoint) { _, _ in updateEditingState() }
+        .onChange(of: token) { _, _ in updateEditingState() }
     }
 
     private var canSave: Bool {
@@ -442,17 +623,26 @@ private struct V2MacConnectionSettings: View {
     }
 
     private func save() async {
+        guard !saving else { return }
         let normalizedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         guard URL(string: normalizedEndpoint)?.scheme != nil else {
             session.notices.publish("后端地址需要包含 http(s)://")
             return
         }
         saving = true
+        updateEditingState()
         session.baseURL = normalizedEndpoint
         session.token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         session.saveConnection()
+        originalEndpoint = endpoint
+        originalToken = token
         await bookshelf.load()
         saving = false
+        updateEditingState()
+    }
+
+    private func updateEditingState() {
+        editing.update("connection", dirty: loaded && (endpoint != originalEndpoint || token != originalToken), busy: saving)
     }
 }
 
@@ -460,6 +650,7 @@ private struct V2MacModelSettings: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var agents: AgentSettingsStore
     @State private var addProfile = false
+    @State private var editingProfile: LLMProfile?
     @Environment(\.colorScheme) private var colorScheme
     private let roles = ["memory_selector", "writer", "checker", "extractor", "inspiration_creator"]
     var body: some View {
@@ -473,9 +664,14 @@ private struct V2MacModelSettings: View {
                     .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
             } else {
                 ForEach(agents.profiles) { profile in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(profile.name).font(V2DeskType.control(12.5, weight: .medium))
-                        Text("\(profile.modelName) · \(profile.baseURL)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)).lineLimit(1)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(profile.name).font(V2DeskType.control(12.5, weight: .medium))
+                            Text("\(profile.modelName) · \(profile.baseURL)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)).lineLimit(1)
+                        }
+                        Spacer()
+                        Button("编辑") { editingProfile = profile }
+                            .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
                     }.padding(10).background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme)).overlay { RoundedRectangle(cornerRadius: 7).stroke(V2DeskPalette.color(.line, scheme: colorScheme)) }
                 }
             }
@@ -487,7 +683,8 @@ private struct V2MacModelSettings: View {
                     .id(bookID)
             }
         }
-        .sheet(isPresented: $addProfile) { V2MacNewProfileSheet() }
+        .sheet(isPresented: $addProfile) { V2MacProfileSheet(profile: nil) }
+        .sheet(item: $editingProfile) { V2MacProfileSheet(profile: $0) }
     }
 }
 
@@ -521,8 +718,11 @@ private struct V2MacBookModelSettings: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var sync: ClientSyncStore
+    @EnvironmentObject private var editing: V2MacSettingsEditingState
     @State private var selectedRole = "writer"
     @State private var draft = BookModelSettingsDraft(role: "writer")
+    @State private var retainedDrafts: [String: BookModelSettingsDraft] = [:]
+    @State private var baselines: [String: BookModelSettingsDraft] = [:]
     @State private var saving = false
     @State private var isLoading = true
     @State private var loadFailed = false
@@ -566,7 +766,10 @@ private struct V2MacBookModelSettings: View {
             }
         }
         .task { await loadBindings() }
-        .onChange(of: selectedRole) { _, _ in loadDraft() }
+        .onChange(of: selectedRole) { oldRole, _ in retainedDrafts[oldRole] = draft; loadDraft() }
+        .onChange(of: draftInput) { _, _ in
+            if draft.role == selectedRole { retainedDrafts[selectedRole] = draft; updateEditingState() }
+        }
         .onChange(of: agents.profiles) { _, _ in draft.refreshCapabilities(profiles: agents.profiles, row: row) }
         .confirmationDialog("恢复跟随全局？", isPresented: $confirmRestore) {
             Button("恢复跟随全局", role: .destructive) { Task { await restore() } }
@@ -629,44 +832,136 @@ private struct V2MacBookModelSettings: View {
         isLoading = false
     }
 
-    private func loadDraft() {
-        draft = BookModelSettingsDraft(role: selectedRole, row: row, profiles: agents.profiles)
+    private func loadDraft(force: Bool = false) {
+        let fresh = BookModelSettingsDraft(role: selectedRole, row: row, profiles: agents.profiles)
+        if !force, let retained = retainedDrafts[selectedRole], let baseline = baselines[selectedRole], differs(retained, from: baseline) {
+            draft = retained
+            draft.refreshCapabilities(profiles: agents.profiles, row: row)
+        } else {
+            draft = fresh
+            baselines[selectedRole] = fresh
+        }
+        retainedDrafts[selectedRole] = draft
+        updateEditingState()
     }
 
     private func save() async {
-        guard session.currentBook?.id == bookID, row != nil, let binding = draft.payload else { return }
+        guard !saving, session.currentBook?.id == bookID, row != nil, let binding = draft.payload else { return }
         let role = selectedRole
         saving = true
+        updateEditingState()
         if await agents.saveBookModelBinding(bookID: bookID, role: role, binding: binding) {
-            loadDraft()
+            loadDraft(force: true)
             session.notices.publish("本书模型设置已保存。")
         }
         saving = false
+        updateEditingState()
     }
 
     private func restore() async {
-        guard session.currentBook?.id == bookID, row != nil else { return }
+        guard !saving, session.currentBook?.id == bookID, row != nil else { return }
         saving = true
-        if await agents.clearBookModelBinding(bookID: bookID, role: selectedRole) { loadDraft() }
+        updateEditingState()
+        if await agents.clearBookModelBinding(bookID: bookID, role: selectedRole) { loadDraft(force: true) }
         saving = false
+        updateEditingState()
+    }
+
+    private func updateEditingState() {
+        let isDirty = retainedDrafts.contains { role, value in
+            guard let baseline = baselines[role] else { return false }
+            return differs(value, from: baseline)
+        }
+        editing.update("book-model-\(bookID)", dirty: isDirty, busy: saving)
+    }
+
+    private func differs(_ value: BookModelSettingsDraft, from baseline: BookModelSettingsDraft) -> Bool {
+        value.profileID != baseline.profileID || value.thinking != baseline.thinking
+            || value.effort != baseline.effort || value.temperature != baseline.temperature
+    }
+
+    private var draftInput: [String] {
+        [draft.profileID, draft.thinking.map { String($0) } ?? "default",
+         draft.effort, draft.temperature.map { String($0) } ?? "default"]
     }
 }
 
-private struct V2MacNewProfileSheet: View {
+private struct V2MacProfileSheet: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @Environment(\.dismiss) private var dismiss
-    @State private var name = ""; @State private var endpoint = ""; @State private var key = ""; @State private var model = ""
+    let profile: LLMProfile?
+    @State private var name: String
+    @State private var endpoint: String
+    @State private var model: String
+    // Secrets live only in this form, and are never read from the server.
+    @State private var key = ""
+    @State private var saving = false
+    @State private var showingLeaveConfirmation = false
     @Environment(\.colorScheme) private var colorScheme
+
+    init(profile: LLMProfile?) {
+        self.profile = profile
+        _name = State(initialValue: profile?.name ?? "")
+        _endpoint = State(initialValue: profile?.baseURL ?? "")
+        _model = State(initialValue: profile?.modelName ?? "")
+    }
+
+    private var canSave: Bool {
+        ![name, endpoint, model].contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            && (profile != nil || !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private var isDirty: Bool {
+        name != (profile?.name ?? "") || endpoint != (profile?.baseURL ?? "")
+            || model != (profile?.modelName ?? "") || !key.isEmpty
+    }
+
     var body: some View {
-        V2MacSheetFrame(title: "新增 Profile", width: 480) {
+        V2MacSheetFrame(title: profile == nil ? "新增 Profile" : "编辑 Profile", width: 480, dismissDisabled: saving, hasUnsavedChanges: isDirty, onDismiss: requestDismiss) {
             VStack(alignment: .leading, spacing: 10) {
                 V2MacProfileField("名称", text: $name)
                 V2MacProfileField("Base URL", text: $endpoint)
-                SecureField("API Key", text: $key).textFieldStyle(.plain).padding(8).background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
+                SecureField(profile == nil ? "API Key" : "更换 API Key（留空保留）", text: $key).textFieldStyle(.plain).padding(8).background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
                 V2MacProfileField("模型名称", text: $model)
-                HStack { Spacer(); Button("创建") { Task { await agents.createProfile(name: name, baseURL: endpoint, apiKey: key, model: model); dismiss() } }.buttonStyle(V2MacDeskButton(kind: .primary)).disabled([name, endpoint, key, model].contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) }
+                if profile != nil {
+                    Text("留空保留现有密钥；输入新密钥后更新当前配置，角色绑定继续沿用。")
+                        .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                }
+                HStack {
+                    if saving { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Button(saving ? "正在保存" : (profile == nil ? "创建" : "保存")) { Task { await save() } }
+                        .buttonStyle(V2MacDeskButton(kind: .primary)).disabled(!canSave || saving)
+                }
             }.padding(22)
+                .disabled(saving)
         }
+        .interactiveDismissDisabled(saving || isDirty)
+        .confirmationDialog("放弃 Profile 修改？", isPresented: $showingLeaveConfirmation) {
+            Button("放弃修改", role: .destructive) { dismiss() }
+            Button("继续编辑", role: .cancel) {}
+        } message: { Text("未保存的模型资料和本次输入的密钥将被放弃。") }
+    }
+
+    private func requestDismiss() {
+        guard !saving else { return }
+        if isDirty { showingLeaveConfirmation = true } else { dismiss() }
+    }
+
+    private func save() async {
+        guard canSave, !saving else { return }
+        saving = true
+        defer { saving = false }
+        let saved: Bool
+        if var value = profile {
+            value.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            value.baseURL = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            value.modelName = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            saved = await agents.updateProfile(value, apiKey: key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : key)
+        } else {
+            saved = await agents.createProfile(name: name, baseURL: endpoint, apiKey: key, model: model)
+        }
+        if saved { dismiss() }
     }
 }
 
@@ -681,13 +976,31 @@ private struct V2MacPersonaSettings: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var session: AppSession
     @State private var selectedRole = "writer"
-    @State private var bookMode = true
-    @State private var draft = ""
+    @State private var bookMode = false
+    @State private var bookID: String?
+    @Binding var draft: V2MacPersonaDraft
+    @State private var initialized = false
     @State private var resetBookConfirmation = false
     @Environment(\.colorScheme) private var colorScheme
     private let roles = ["memory_selector", "writer", "checker", "extractor", "inspiration_creator"]
-    private var bookPersona: BookAgentPersona? { agents.bookPersonas.first { $0.agentRole == selectedRole } }
+    private var bookPersona: BookAgentPersona? {
+        guard bookID != nil, agents.bookPersonasBookID == bookID else { return nil }
+        return agents.bookPersonas.first { $0.agentRole == selectedRole }
+    }
     private var globalPersona: AgentPersona? { agents.personas.first { $0.agentRole == selectedRole } }
+    private var selectedContext: V2MacPersonaDraft.Context? {
+        if bookMode {
+            guard let bookID else { return nil }
+            return .init(role: selectedRole, scope: .book(bookID))
+        }
+        return .init(role: selectedRole, scope: .global)
+    }
+    private var currentContext: V2MacPersonaDraft.Context? {
+        guard !bookMode || (bookID != nil && session.currentBook?.id == bookID && agents.bookPersonasBookID == bookID) else { return nil }
+        return selectedContext
+    }
+    private var sourceText: String? { bookMode ? bookPersona?.effectivePersona : globalPersona?.editablePersona }
+    private var draftText: Binding<String> { Binding(get: { draft.text }, set: { draft.edit($0) }) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -696,33 +1009,88 @@ private struct V2MacPersonaSettings: View {
                 .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
             Picker("角色", selection: $selectedRole) { ForEach(roles, id: \.self) { Text($0.v2AgentLabel).tag($0) } }
                 .pickerStyle(.segmented)
-            Picker("范围", selection: $bookMode) { Text("本书人格").tag(true); Text("全局人格").tag(false) }
+                .disabled(draft.isSaving)
+            Picker("范围", selection: $bookMode) {
+                Text("本书人格").tag(true).disabled(session.currentBook == nil)
+                Text("全局人格").tag(false)
+            }
                 .pickerStyle(.segmented)
+                .disabled(draft.isSaving)
             Text(bookMode ? (bookPersona?.source == "book" ? "当前书正在使用自定义人格" : "当前书跟随全局人格") : "全局人格会影响之后启动的所有任务")
                 .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
-            TextEditor(text: $draft).scrollContentBackground(.hidden).font(V2DeskType.prose(13)).frame(minHeight: 220).padding(8)
+            if bookMode, currentContext == nil {
+                Text("当前书已变化，输入仍保留。请重新选择范围后保存。")
+                    .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.danger, scheme: colorScheme))
+            }
+            TextEditor(text: draftText).scrollContentBackground(.hidden).font(V2DeskType.prose(13)).frame(minHeight: 220).padding(8)
                 .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme)).overlay { RoundedRectangle(cornerRadius: 7).stroke(V2DeskPalette.color(.line, scheme: colorScheme)) }
+                .disabled(draft.isSaving)
             HStack {
-                if bookMode, bookPersona?.source == "book" { Button("恢复跟随全局") { resetBookConfirmation = true }.buttonStyle(V2MacDeskButton(kind: .danger, compact: true)) }
+                if bookMode, bookPersona?.source == "book" {
+                    Button("恢复跟随全局") { resetBookConfirmation = true }.buttonStyle(V2MacDeskButton(kind: .danger, compact: true))
+                        .disabled(!draft.canSubmit(in: currentContext, requiresText: false))
+                }
+                if draft.isSaving { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("保存人格") { Task { await save() } }.buttonStyle(V2MacDeskButton(kind: .primary))
+                Button(draft.isSaving ? "正在保存" : "保存人格") { Task { await save() } }.buttonStyle(V2MacDeskButton(kind: .primary))
+                    .disabled(!draft.canSubmit(in: currentContext))
             }
         }
-        .onAppear { syncDraft() }
-        .onChange(of: selectedRole) { _, _ in syncDraft() }
-        .onChange(of: bookMode) { _, _ in syncDraft() }
+        .onAppear {
+            guard !initialized else { return }
+            initialized = true
+            bookMode = session.currentBook != nil
+            bookID = session.currentBook?.id
+            selectDraft()
+        }
+        .onChange(of: selectedRole) { _, _ in selectDraft() }
+        .onChange(of: bookMode) { _, _ in bookID = bookMode ? session.currentBook?.id : nil; selectDraft() }
+        .onChange(of: agents.personas) { _, _ in syncDraft() }
+        .onChange(of: agents.bookPersonas) { _, _ in syncDraft() }
+        .onChange(of: agents.bookPersonasBookID) { _, _ in syncDraft() }
+        .onChange(of: session.currentBook?.id) { _, id in
+            guard !draft.isEdited, !draft.isSaving, bookMode else { return }
+            bookID = id
+            if id == nil { bookMode = false }
+            selectDraft()
+        }
         .confirmationDialog("恢复跟随全局？", isPresented: $resetBookConfirmation) {
             Button("恢复跟随全局", role: .destructive) { Task { await resetBook() } }
             Button("取消", role: .cancel) {}
         } message: { Text("本书对 \(selectedRole.v2AgentLabel) 的覆盖会移除；之后的新任务使用当前全局人格。") }
     }
-    private func syncDraft() { draft = bookMode ? (bookPersona?.effectivePersona ?? "") : (globalPersona?.editablePersona ?? "") }
-    private func save() async {
-        if bookMode, let bookID = session.currentBook?.id { _ = await agents.saveBookPersona(bookID: bookID, role: selectedRole, editablePersona: draft) }
-        else if var persona = globalPersona { persona.editablePersona = draft; await agents.savePersona(persona) }
+    private func selectDraft() {
+        guard let context = selectedContext else { return }
+        draft.select(context)
         syncDraft()
     }
-    private func resetBook() async { if let id = session.currentBook?.id { _ = await agents.resetBookPersona(bookID: id, role: selectedRole) }; syncDraft() }
+    private func syncDraft() {
+        guard let context = currentContext else { return }
+        draft.load(sourceText, for: context)
+    }
+    private func save() async {
+        guard let submission = draft.beginSubmit(in: currentContext) else { return }
+        let saved: Bool
+        switch submission.context.scope {
+        case .book(let id):
+            saved = await agents.saveBookPersona(bookID: id, role: submission.context.role, editablePersona: submission.text)
+        case .global:
+            if var persona = globalPersona {
+                persona.editablePersona = submission.text
+                saved = await agents.savePersona(persona)
+            } else { saved = false }
+        }
+        draft.complete(submission, succeeded: saved, currentContext: currentContext, savedValue: sourceText)
+    }
+    private func resetBook() async {
+        guard let submission = draft.beginSubmit(in: currentContext, requiresText: false) else { return }
+        guard case .book(let id) = submission.context.scope else {
+            draft.complete(submission, succeeded: false, currentContext: currentContext, savedValue: nil)
+            return
+        }
+        let saved = await agents.resetBookPersona(bookID: id, role: submission.context.role)
+        draft.complete(submission, succeeded: saved, currentContext: currentContext, savedValue: sourceText)
+    }
 }
 
 private struct V2MacWritingSettings: View {
@@ -754,6 +1122,7 @@ private struct V2MacAppearanceSettings: View {
 private struct V2MacExportSheet: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var editor: ChapterEditorStore
     @Environment(\.dismiss) private var dismiss
     let currentChapterID: String?
     @State private var scope: ExportScope = .accepted
@@ -764,7 +1133,7 @@ private struct V2MacExportSheet: View {
     @State private var exporting = false
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
-        V2MacSheetFrame(title: "导出正文", width: 520) {
+        V2MacSheetFrame(title: "导出正文", width: 520, dismissDisabled: exporting) {
             VStack(alignment: .leading, spacing: 15) {
                 V2MacDeskSectionLabel(text: "范围")
                 Picker("范围", selection: $scope) {
@@ -777,21 +1146,22 @@ private struct V2MacExportSheet: View {
                 Toggle("每章一个文件", isOn: $separate)
                 Toggle("附世界观", isOn: $includeWorld)
                 Toggle("附人物设定", isOn: $includeCharacters)
-                Text("只读取已保存版本；当前编辑器中未保存的本地修改不会纳入。记忆导出保持独立。")
+                Text("导出前会核对本机修改。未保存的正文可在“更多章节操作”中保存到服务器；待同步或冲突内容请先在同步中心处理。记忆导出保持独立。")
                     .font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
                 HStack {
                     Button("导出记忆") { Task { if let book = session.currentBook { await MacExportSaver.exportMemories(book, session: session) } } }.buttonStyle(V2MacDeskButton(kind: .secondary))
                     Spacer()
                     Button(exporting ? "正在导出" : "导出") { Task { await export() } }.buttonStyle(V2MacDeskButton(kind: .primary)).disabled(exporting || (scope == .current && currentChapterID == nil))
                 }
-            }.padding(22)
+            }.padding(22).disabled(exporting)
         }
     }
     private func export() async {
-        guard let book = session.currentBook else { return }
+        guard !exporting, let book = session.currentBook else { return }
         exporting = true
-        await MacExportSaver.exportComposed(book: book, session: session, bookshelf: bookshelf, scope: scope, currentChapterID: currentChapterID, format: format, includeWorld: includeWorld, includeCharacters: includeCharacters, separateChapters: separate)
-        exporting = false; dismiss()
+        let succeeded = await MacExportSaver.exportComposed(book: book, session: session, bookshelf: bookshelf, editor: editor, scope: scope, currentChapterID: currentChapterID, format: format, includeWorld: includeWorld, includeCharacters: includeCharacters, separateChapters: separate)
+        exporting = false
+        if succeeded { dismiss() }
     }
 }
 
@@ -801,12 +1171,14 @@ private struct V2MacSearchSheet: View {
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var query = ""
     @State private var results: [SearchResult] = []
     @State private var searching = false
     @State private var hasSearched = false
     @State private var openingID: String?
+    @State private var openingToken = UUID()
     @State private var characterDestinationID: String?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -875,6 +1247,7 @@ private struct V2MacSearchSheet: View {
         )) {
             V2MacPeopleSheet()
         }
+        .onDisappear { openingToken = UUID() }
     }
 
     private func search() async {
@@ -888,13 +1261,25 @@ private struct V2MacSearchSheet: View {
 
     private func open(_ result: SearchResult) async {
         guard openingID == nil else { return }
+        let token = UUID()
+        openingToken = token
+        let previousContext = session.bookContextID
+        var ownedContext = previousContext
         openingID = result.id
-        defer { openingID = nil }
+        defer { if openingToken == token { openingID = nil } }
         do {
             let book: Book = try await session.api.request("/books/\(result.bookId)")
+            guard !Task.isCancelled, openingToken == token, session.bookContextID == previousContext else { return }
+            if session.currentBook?.id != book.id {
+                guard V2MacBookNavigation.prepare(editor: editor, workspace: workspace, characters: characters, inspiration: inspiration) else { return }
+            }
             session.currentBook = book
+            let contextID = session.bookContextID
+            ownedContext = contextID
             await workspace.load(bookId: book.id)
+            guard !Task.isCancelled, openingToken == token, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
             await characters.load(bookId: book.id)
+            guard !Task.isCancelled, openingToken == token, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
             if let characterID = result.characterId {
                 guard characters.characters.contains(where: { $0.id == characterID }) else {
                     throw APIError.http(404, "人物已不存在")
@@ -906,9 +1291,13 @@ private struct V2MacSearchSheet: View {
             if let chapterID = result.chapterId,
                let chapter = workspace.chapters.first(where: { $0.id == chapterID }) {
                 await editor.load(chapter)
+                guard !Task.isCancelled, openingToken == token, session.bookContextID == contextID else { return }
             }
             dismiss()
-        } catch { session.notices.publish(error) }
+        } catch {
+            guard openingToken == token, session.bookContextID == ownedContext else { return }
+            session.notices.publish(error)
+        }
     }
 
     private func resultType(_ result: SearchResult) -> String {
@@ -936,16 +1325,19 @@ private struct V2MacProjectPackageSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var working = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        V2MacSheetFrame(title: "项目备份与恢复", width: 520) {
+        V2MacSheetFrame(title: "项目备份与恢复", width: 520, dismissDisabled: working) {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     V2MacDeskSectionLabel(text: "完整备份")
                     Text("备份当前书的正文、人物、关联、有效记忆、人格和模型覆盖。项目包不包含访问密钥、全局模型设置或内部生成过程文本。")
+                        .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                    Text("备份前须保存本书修改、完成同步并处理冲突。正文可在“更多章节操作”中保存到服务器。")
                         .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
                     HStack { Spacer(); Button(working ? "正在准备" : "备份当前书") { Task { await export() } }.buttonStyle(V2MacDeskButton(kind: .primary)).disabled(working || session.currentBook == nil || !sync.networkActionsAvailable) }
                 }
@@ -964,12 +1356,14 @@ private struct V2MacProjectPackageSheet: View {
     }
 
     private func export() async {
+        guard !working else { return }
         working = true
-        if let book = session.currentBook { await MacExportSaver.exportProject(book, session: session, bookshelf: bookshelf) }
+        if let book = session.currentBook { await MacExportSaver.exportProject(book, session: session, bookshelf: bookshelf, editor: editor) }
         working = false
     }
 
     private func importProject() async {
+        guard !working else { return }
         working = true
         await MacExportSaver.importProject(session: session, bookshelf: bookshelf)
         working = false

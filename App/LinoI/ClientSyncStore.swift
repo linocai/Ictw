@@ -60,8 +60,44 @@ enum ConflictReadStrategy: String, Codable, Sendable {
     case bookModelBindings
 }
 
+/// A role is unique only inside its settings scope. Paths are persisted in
+/// the pre-scope cache format, so old records retain their exact identity.
+struct SyncResourceIdentity: Codable, Hashable, Sendable {
+    let kind: SyncResourceKind
+    let id: String
+    let scope: String
+
+    init(kind: SyncResourceKind, id: String, path: String? = nil, bookID: String? = nil) {
+        self.kind = kind
+        self.id = id
+        if kind == .agentPersona || kind == .modelBinding {
+            if let bookID { scope = "book:" + bookID }
+            else if let path {
+                let parts = path.split(separator: "/").map(String.init)
+                let route = kind == .agentPersona ? "agent-personas" : "agent-model-bindings"
+                if parts.count >= 3, parts[0] == "books", parts[2] == route {
+                    scope = "book:" + parts[1]
+                } else if parts.first == route {
+                    scope = "global"
+                } else {
+                    // Preserve unresolvable records independently; never
+                    // pretend that an unknown legacy route was global.
+                    scope = "unresolved:" + path
+                }
+            } else { scope = "global" }
+        } else { scope = "resource" }
+    }
+
+    var bookID: String? { scope.hasPrefix("book:") ? String(scope.dropFirst(5)) : nil }
+    var isResolved: Bool { !scope.hasPrefix("unresolved:") }
+    var key: String { [kind.rawValue, scope, id].map { "\($0.utf8.count):\($0)" }.joined() }
+}
+
 struct PendingMutation: Codable, Identifiable, Hashable, Sendable {
     var id: UUID
+    /// The ID identifies one immutable payload. Coalesced descendants retain
+    /// this lineage so only our own earlier success may advance their base.
+    var lineageID: UUID
     var resourceKind: SyncResourceKind
     var resourceID: String
     var path: String
@@ -77,15 +113,16 @@ struct PendingMutation: Codable, Identifiable, Hashable, Sendable {
     var failure: PendingMutationFailure? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, resourceKind, resourceID, path, method, readPath, readStrategy, baseRevision, payload, baseSnapshot, createdAt, failure
+        case id, lineageID, resourceKind, resourceID, path, method, readPath, readStrategy, baseRevision, payload, baseSnapshot, createdAt, failure
     }
 
     init(
         id: UUID, resourceKind: SyncResourceKind, resourceID: String, path: String, method: String,
         readPath: String, readStrategy: ConflictReadStrategy, baseRevision: Int, payload: Data,
-        baseSnapshot: Data, createdAt: Date
+        baseSnapshot: Data, createdAt: Date, lineageID: UUID? = nil
     ) {
         self.id = id
+        self.lineageID = lineageID ?? id
         self.resourceKind = resourceKind
         self.resourceID = resourceID
         self.path = path
@@ -101,6 +138,7 @@ struct PendingMutation: Codable, Identifiable, Hashable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
+        lineageID = try container.decodeIfPresent(UUID.self, forKey: .lineageID) ?? id
         resourceKind = try container.decode(SyncResourceKind.self, forKey: .resourceKind)
         resourceID = try container.decode(String.self, forKey: .resourceID)
         path = try container.decode(String.self, forKey: .path)
@@ -114,6 +152,8 @@ struct PendingMutation: Codable, Identifiable, Hashable, Sendable {
         failure = try container.decodeIfPresent(PendingMutationFailure.self, forKey: .failure)
     }
 
+    var identity: SyncResourceIdentity { SyncResourceIdentity(kind: resourceKind, id: resourceID, path: path) }
+
     var resourceLabel: String { resourceLabel(bookTitle: nil) }
 
     /// Derive a compact author-facing location from the already persisted
@@ -122,7 +162,7 @@ struct PendingMutation: Codable, Identifiable, Hashable, Sendable {
     func resourceLabel(bookTitle: String?) -> String {
         let base = jsonObject(from: baseSnapshot) ?? [:]
         let object = base.merging(jsonObject(from: payload) ?? [:]) { _, newer in newer }
-        let resolvedBookTitle = bookTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedBookTitle = (bookTitle ?? identity.bookID)?.trimmingCharacters(in: .whitespacesAndNewlines)
         switch resourceKind {
         case .book:
             return labelled("书籍", name: string("title", in: object))
@@ -133,9 +173,9 @@ struct PendingMutation: Codable, Identifiable, Hashable, Sendable {
         case .characterEvent:
             return scoped("人物记录", name: nil, bookTitle: resolvedBookTitle)
         case .agentPersona:
-            return labelled("Agent 人格", name: string("agent_role", in: object) ?? resourceID)
+            return scoped(identity.bookID == nil ? "全局 Agent 人格" : "本书 Agent 人格", name: string("agent_role", in: object) ?? resourceID, bookTitle: resolvedBookTitle)
         case .modelBinding:
-            return labelled("模型设置", name: string("agent_role", in: object) ?? resourceID)
+            return scoped(identity.bookID == nil ? "全局模型设置" : "本书模型设置", name: string("agent_role", in: object) ?? resourceID, bookTitle: resolvedBookTitle)
         case .llmProfile:
             return labelled("模型 Profile", name: string("name", in: object) ?? resourceID)
         }
@@ -174,6 +214,13 @@ struct PendingMutation: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// A direct request may cover the pending version visible when it started,
+/// but never a version that arrived during its network round trip.
+struct DirectMutationReceipt: Sendable {
+    let mutation: PendingMutation
+    let coveredMutationID: UUID?
+}
+
 struct ContentConflict: Codable, Identifiable, Hashable, Sendable {
     var id: UUID
     var resourceKind: SyncResourceKind
@@ -192,10 +239,12 @@ struct ContentConflict: Codable, Identifiable, Hashable, Sendable {
     /// author re-enters it (endpoint changes are the mandatory case).
     var requiresSecretReentry: Bool
     var createdAt: Date
+    var mutationID: UUID? = nil
+    var lineageID: UUID? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, resourceKind, resourceID, submittedRevision, currentRevision, path, method, readPath, readStrategy
-        case baseSnapshot, localPayload, serverSnapshot, requiresSecretReentry, createdAt
+        case baseSnapshot, localPayload, serverSnapshot, requiresSecretReentry, createdAt, mutationID, lineageID
     }
 
     init(
@@ -235,10 +284,15 @@ struct ContentConflict: Codable, Identifiable, Hashable, Sendable {
         serverSnapshot = try container.decode(Data.self, forKey: .serverSnapshot)
         requiresSecretReentry = try container.decodeIfPresent(Bool.self, forKey: .requiresSecretReentry) ?? false
         createdAt = try container.decode(Date.self, forKey: .createdAt)
+        mutationID = try container.decodeIfPresent(UUID.self, forKey: .mutationID)
+        lineageID = try container.decodeIfPresent(UUID.self, forKey: .lineageID)
     }
 
+    var identity: SyncResourceIdentity { SyncResourceIdentity(kind: resourceKind, id: resourceID, path: path) }
+
     var resourceLabel: String {
-        switch resourceKind {
+        if !identity.isResolved { return "旧设置作用域无法确认（本机内容已保留，请回设置页重新保存）" }
+        return switch resourceKind {
         case .book: "书籍"
         case .chapter: "章节"
         case .character: "人物"
@@ -267,15 +321,24 @@ struct RawJSONPayload: Encodable, Sendable {
 struct AppliedSyncMutation: Hashable, Sendable {
     let resourceKind: SyncResourceKind
     let resourceID: String
+    var scope: String = "resource"
 }
 
 /// Per-record files deliberately keep one corrupt local snapshot from hiding
 /// a whole bookshelf. The legacy ChapterDrafts directory remains untouched;
 /// it is a second, compatible layer for existing unsaved drafts.
 final class ClientSnapshotCache {
+    enum SnapshotList: Hashable {
+        case books
+        case chapters(String)
+        case characters(String)
+    }
+
     private let root: URL
     private let encoder = JSONEncoder.lino
     private let decoder = JSONDecoder.lino
+    private var listReadIDs: [SnapshotList: UUID] = [:]
+    private lazy var deletedResources: Set<SyncResourceIdentity> = Set(load([SyncResourceIdentity].self, at: "deleted-resources.json") ?? [])
 
     init(root: URL? = nil) {
         if let root {
@@ -289,26 +352,89 @@ final class ClientSnapshotCache {
         try? FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
     }
 
+    /// A newer read or any write to this exact list supersedes an in-flight
+    /// snapshot before it can replace either visible rows or the cold cache.
+    func beginListRead(_ list: SnapshotList) -> UUID {
+        let id = UUID()
+        listReadIDs[list] = id
+        return id
+    }
+
+    private func canSaveList(_ list: SnapshotList, readID: UUID?) -> Bool {
+        guard readID == nil || listReadIDs[list] == readID else { return false }
+        listReadIDs[list] = UUID()
+        return true
+    }
+
     func books() -> [Book] { load([Book].self, at: "books.json") ?? [] }
-    func saveBooks(_ value: [Book]) { save(value, at: "books.json") }
+    @discardableResult
+    func saveBooks(_ value: [Book], ifCurrent readID: UUID? = nil) -> Bool {
+        guard canSaveList(.books, readID: readID) else { return false }
+        let current = books()
+        return save(value.filter { !isDeleted(kind: .book, id: $0.id) }.map { item in
+            current.first { $0.id == item.id && $0.contentRevision > item.contentRevision } ?? item
+        }, at: "books.json")
+    }
 
     func chapters(bookID: String) -> [ChapterSummary] {
         load([ChapterSummary].self, at: "chapter-lists/\(safe(bookID)).json") ?? []
     }
-    func saveChapters(_ value: [ChapterSummary], bookID: String) {
-        save(value, at: "chapter-lists/\(safe(bookID)).json")
+    @discardableResult
+    func saveChapters(_ value: [ChapterSummary], bookID: String, ifCurrent readID: UUID? = nil,
+                      preservingInFlightRead: Bool = false) -> Bool {
+        // A detail projection is a partial read, not a committed membership
+        // change. A complete list may still fill its other rows afterwards.
+        guard (preservingInFlightRead && readID == nil)
+                || canSaveList(.chapters(bookID), readID: readID) else { return false }
+        let current = chapters(bookID: bookID)
+        return save(value.filter { !isDeleted(kind: .chapter, id: $0.id) }.map { item in
+            current.first { $0.id == item.id && $0.contentRevision > item.contentRevision } ?? item
+        }, at: "chapter-lists/\(safe(bookID)).json")
     }
 
     func characters(bookID: String) -> [Character] {
         load([Character].self, at: "characters/\(safe(bookID)).json") ?? []
     }
-    func saveCharacters(_ value: [Character], bookID: String) {
-        save(value, at: "characters/\(safe(bookID)).json")
+    @discardableResult
+    func saveCharacters(_ value: [Character], bookID: String, ifCurrent readID: UUID? = nil) -> Bool {
+        guard canSaveList(.characters(bookID), readID: readID) else { return false }
+        let current = characters(bookID: bookID)
+        return save(value.filter { !isDeleted(kind: .character, id: $0.id) }.map { item in
+            var visible = current.first { $0.id == item.id && $0.contentRevision > item.contentRevision } ?? item
+            visible.events.removeAll { isDeleted(kind: .characterEvent, id: $0.id) }
+            return visible
+        }, at: "characters/\(safe(bookID)).json")
     }
 
-    func chapter(id: String) -> Chapter? { load(Chapter.self, at: "chapters/\(safe(id)).json") }
-    func saveChapter(_ value: Chapter) { save(value, at: "chapters/\(safe(value.id)).json") }
-    func removeChapter(id: String) { remove("chapters/\(safe(id)).json") }
+    func chapter(id: String) -> Chapter? {
+        guard !isDeleted(kind: .chapter, id: id) else { return nil }
+        return load(Chapter.self, at: "chapters/\(safe(id)).json")
+    }
+    func saveChapter(_ value: Chapter) {
+        guard !isDeleted(kind: .chapter, id: value.id), !isDeleted(kind: .book, id: value.bookId) else { return }
+        guard chapter(id: value.id).map({ $0.contentRevision <= value.contentRevision }) ?? true else { return }
+        save(value, at: "chapters/\(safe(value.id)).json")
+    }
+    func removeChapter(id: String, bookID: String? = nil) {
+        if let bookID = bookID ?? chapter(id: id)?.bookId {
+            saveChapters(chapters(bookID: bookID).filter { $0.id != id }, bookID: bookID)
+        }
+        remove("chapters/\(safe(id)).json")
+    }
+
+    func isDeleted(kind: SyncResourceKind, id: String) -> Bool {
+        deletedResources.contains(SyncResourceIdentity(kind: kind, id: id))
+    }
+
+    var deletedChapterIDs: Set<String> {
+        Set(deletedResources.filter { $0.kind == .chapter }.map(\.id))
+    }
+
+    @discardableResult
+    func markDeleted(_ identity: SyncResourceIdentity) -> Bool {
+        deletedResources.insert(identity)
+        return save(Array(deletedResources), at: "deleted-resources.json")
+    }
 
     func mutations() -> [PendingMutation] { load([PendingMutation].self, at: "pending.json") ?? [] }
     @discardableResult
@@ -348,6 +474,36 @@ final class ClientSnapshotCache {
     private func safe(_ id: String) -> String { id.replacingOccurrences(of: "/", with: "_") }
 }
 
+struct RetainedChapterDraft: Identifiable, Sendable {
+    var id: String { chapterID }
+    let chapterID: String
+    let bookID: String?
+    let bookTitle: String
+    let chapterTitle: String
+    let chapterIndex: Int?
+    let draftText: String
+    let userPrompt: String
+    let authorNote: String
+    let updatedAt: Date
+    fileprivate let removalSnapshot: LocalDraftFileSnapshot
+
+    var copyText: String {
+        let position = chapterIndex.map { "第 \($0) 章 · " } ?? "原章节 · "
+        return "\(bookTitle)\n\(position)\(chapterTitle)\n\n本章 Bible\n\(userPrompt)\n\n作者备注\n\(authorNote)\n\n正文\n\(draftText)"
+    }
+
+    func matchesVisibleInputs(_ chapter: Chapter) -> Bool {
+        guard chapter.id == chapterID,
+              let source = try? JSONDecoder().decode(LocalChapterDraft.self, from: removalSnapshot.data) else { return false }
+        return (source.bookID == nil || source.bookID == chapter.bookId)
+            && source.title == chapter.title && source.userPrompt == chapter.userPrompt
+            && source.authorNote == chapter.authorNote && source.draftText == chapter.draftText
+            && source.targetWordCount == chapter.targetWordCount
+            && source.characterLinks == chapter.characterLinks
+            && source.exemptedCharacterNames == chapter.exemptedCharacterNames
+    }
+}
+
 @MainActor
 final class ClientSyncStore: ObservableObject {
     @Published private(set) var isOnline = true
@@ -358,11 +514,20 @@ final class ClientSyncStore: ObservableObject {
     /// durable offline save. Views use this to replace reassuring copy with a
     /// clear recovery warning.
     @Published private(set) var persistenceFailure: String?
+    /// Also keeps the recovery entry reachable when a retained file cannot be
+    /// read. The explicit list load reports that failure instead of claiming
+    /// there were no author inputs.
+    @Published private(set) var hasRetainedChapterDrafts = false
 
     private var pendingPersistenceFailed = false
     private var conflictPersistenceFailed = false
+    private var deletionPersistenceFailed = false
+    private var directMutations: [UUID: DirectMutationReceipt] = [:]
+    private var latestIntentIDs: [String: UUID] = [:]
+    private var acknowledgedLineages: [UUID: Data] = [:]
 
     let cache: ClientSnapshotCache
+    private let retainedDraftCache = ChapterDraftCache()
     private weak var notices: NoticeBus?
 
     init(cache: ClientSnapshotCache = ClientSnapshotCache(), notices: NoticeBus? = nil) {
@@ -371,6 +536,53 @@ final class ClientSyncStore: ObservableObject {
         pendingMutations = cache.mutations()
         conflicts = cache.conflicts()
         persistenceFailure = nil
+        pendingMutations.removeAll { isDeleted($0.identity) }
+        conflicts.removeAll { isDeleted($0.identity) }
+        for index in pendingMutations.indices where !pendingMutations[index].identity.isResolved {
+            pendingMutations[index].failure = PendingMutationFailure(kind: .permanent, statusCode: nil,
+                code: "sync_scope_unresolved", message: "旧设置记录的作用域无法确认，请回到对应设置页重新保存；本机内容仍保留。", recordedAt: Date())
+        }
+        _ = persistPending()
+        _ = persistConflicts()
+        refreshRetainedChapterDraftAvailability()
+    }
+
+    func refreshRetainedChapterDraftAvailability() {
+        do { hasRetainedChapterDrafts = !(try retainedDraftCache.retainedDraftFiles(chapterIDs: cache.deletedChapterIDs)).isEmpty }
+        catch { hasRetainedChapterDrafts = true }
+    }
+
+    /// This reads the existing local files only. It cannot recreate an old
+    /// resource, enqueue a save, or consult a model.
+    func retainedChapterDrafts() throws -> [RetainedChapterDraft] {
+        do {
+            let books = cache.books()
+            let drafts = try retainedDraftCache.retainedDraftFiles(chapterIDs: cache.deletedChapterIDs).map { draft, snapshot in
+                let title = draft.bookTitle ?? draft.bookID.flatMap { id in books.first { $0.id == id }?.title }
+                return RetainedChapterDraft(chapterID: draft.chapterId, bookID: draft.bookID,
+                    bookTitle: title.flatMap { $0.isEmpty ? nil : $0 } ?? "原书信息不可用",
+                    chapterTitle: draft.title.isEmpty ? "原章标题不可用" : draft.title,
+                    chapterIndex: draft.chapterIndex, draftText: draft.draftText,
+                    userPrompt: draft.userPrompt, authorNote: draft.authorNote, updatedAt: draft.updatedAt,
+                    removalSnapshot: snapshot)
+            }
+            hasRetainedChapterDrafts = !drafts.isEmpty
+            return drafts
+        } catch {
+            hasRetainedChapterDrafts = true
+            throw error
+        }
+    }
+
+    /// Explicit completion uses the exact file the author viewed. Copying,
+    /// closing the sheet, or another chapter's save never calls this method.
+    func removeRetainedChapterDraft(_ draft: RetainedChapterDraft) throws {
+        guard cache.isDeleted(kind: .chapter, id: draft.chapterID),
+              draft.removalSnapshot.chapterID == draft.chapterID else {
+            throw RetainedDraftError(message: "这份稿件不再符合本机保留稿身份；未移除任何内容，请刷新后核对。")
+        }
+        try retainedDraftCache.removeRetained(draft.removalSnapshot)
+        refreshRetainedChapterDraftAvailability()
     }
 
     var pendingCount: Int { pendingMutations.count }
@@ -385,17 +597,101 @@ final class ClientSyncStore: ObservableObject {
     var failedMutations: [PendingMutation] { pendingMutations.filter { $0.failure != nil } }
     var failedMutationCount: Int { failedMutations.count }
 
-    func state(for kind: SyncResourceKind, id: String) -> ClientSyncState {
+    func state(for kind: SyncResourceKind, id: String, bookID: String? = nil) -> ClientSyncState {
+        let identity = SyncResourceIdentity(kind: kind, id: id, bookID: bookID)
         if hasPersistentSyncFailure { return .persistenceFailed }
-        if conflicts.contains(where: { $0.resourceKind == kind && $0.resourceID == id }) { return .conflict }
-        if pendingMutations.contains(where: { $0.resourceKind == kind && $0.resourceID == id && $0.failure != nil }) { return .failed(1) }
-        let pending = pendingMutations.filter { $0.resourceKind == kind && $0.resourceID == id }.count
+        if conflicts.contains(where: { $0.identity == identity }) { return .conflict }
+        if pendingMutations.contains(where: { $0.identity == identity && $0.failure != nil }) { return .failed(1) }
+        let pending = pendingMutations.filter { $0.identity == identity }.count
         if pending > 0 { return .pending(pending) }
         return isOnline ? .synced : .offline
     }
 
     func markOnline() { isOnline = true }
     func markOffline() { isOnline = false }
+
+    func isDeleted(_ identity: SyncResourceIdentity) -> Bool {
+        cache.isDeleted(kind: identity.kind, id: identity.id)
+            || identity.bookID.map { cache.isDeleted(kind: .book, id: $0) } == true
+    }
+
+    /// A confirmed deletion permanently revokes all outstanding callbacks for
+    /// this exact resource. Queue records are removed only after server success.
+    func confirmDeletion(kind: SyncResourceKind, id: String) {
+        let identity = SyncResourceIdentity(kind: kind, id: id)
+        deletionPersistenceFailed = !cache.markDeleted(identity)
+        if deletionPersistenceFailed {
+            notices?.publish("服务器已删除该资源，但本机未能保存删除标记；请保留当前页面，释放存储空间后重试。", critical: true, tone: .error)
+        }
+        let lineages = Set(pendingMutations.filter { $0.identity == identity }.map(\.lineageID))
+            .union(conflicts.filter { $0.identity == identity }.compactMap(\.lineageID))
+        pendingMutations.removeAll { $0.identity == identity || (kind == .book && $0.identity.bookID == id) }
+        conflicts.removeAll { $0.identity == identity || (kind == .book && $0.identity.bookID == id) }
+        directMutations = directMutations.filter { $0.value.mutation.identity != identity && !(kind == .book && $0.value.mutation.identity.bookID == id) }
+        latestIntentIDs.removeValue(forKey: identity.key)
+        acknowledgedLineages = acknowledgedLineages.filter { !lineages.contains($0.key) }
+        _ = persistPending()
+        _ = persistConflicts()
+        refreshRetainedChapterDraftAvailability()
+    }
+
+    /// Use the same post-delete cleanup for direct requests and conflict retries.
+    func confirmResourceDeletion(kind: SyncResourceKind, id: String) {
+        let books = cache.books()
+        if kind == .book {
+            for chapter in cache.chapters(bookID: id) {
+                confirmResourceDeletion(kind: .chapter, id: chapter.id)
+            }
+            for character in cache.characters(bookID: id) {
+                for event in character.events { confirmDeletion(kind: .characterEvent, id: event.id) }
+                confirmDeletion(kind: .character, id: character.id)
+            }
+            cache.saveCharacters([], bookID: id)
+            confirmDeletion(kind: kind, id: id)
+            cache.saveBooks(books.filter { $0.id != id })
+            return
+        }
+        let chapterBookID = kind == .chapter ? cache.chapter(id: id)?.bookId : nil
+        if kind == .character {
+            for book in books {
+                for character in cache.characters(bookID: book.id) where character.id == id {
+                    for event in character.events { confirmDeletion(kind: .characterEvent, id: event.id) }
+                }
+            }
+        }
+        confirmDeletion(kind: kind, id: id)
+        if kind == .chapter {
+            cache.removeChapter(id: id, bookID: chapterBookID)
+            for book in books where book.id != chapterBookID {
+                let rows = cache.chapters(bookID: book.id)
+                if rows.contains(where: { $0.id == id }) {
+                    cache.saveChapters(rows.filter { $0.id != id }, bookID: book.id)
+                }
+            }
+        }
+        if kind == .character || kind == .characterEvent {
+            for book in books {
+                let rows = cache.characters(bookID: book.id)
+                let containsDeleted = rows.contains { character in
+                    kind == .character ? character.id == id : character.events.contains { $0.id == id }
+                }
+                if containsDeleted { cache.saveCharacters(rows, bookID: book.id) }
+            }
+        }
+    }
+
+    func visibleBooks() -> [Book] { cache.books().map(overlayBook) }
+    func overlayBook(_ book: Book) -> Book { overlay(book, kind: .book, id: book.id) }
+
+    func resourceLabel(for conflict: ContentConflict) -> String {
+        let mutation = PendingMutation(
+            id: conflict.mutationID ?? conflict.id, resourceKind: conflict.resourceKind, resourceID: conflict.resourceID,
+            path: conflict.path, method: conflict.method, readPath: conflict.readPath, readStrategy: conflict.readStrategy,
+            baseRevision: conflict.submittedRevision, payload: conflict.localPayload, baseSnapshot: conflict.baseSnapshot,
+            createdAt: conflict.createdAt, lineageID: conflict.lineageID
+        )
+        return conflict.identity.isResolved ? resourceLabel(for: mutation) : conflict.resourceLabel
+    }
 
     func resourceLabel(for mutation: PendingMutation) -> String {
         let booksByID = Dictionary(uniqueKeysWithValues: cache.books().map { ($0.id, $0.title) })
@@ -405,7 +701,7 @@ final class ClientSyncStore: ObservableObject {
         }
         let base = Self.jsonObject(from: mutation.baseSnapshot) ?? [:]
         let object = base.merging(Self.jsonObject(from: mutation.payload) ?? [:]) { _, newer in newer }
-        let bookID = object["book_id"] as? String
+        let bookID = mutation.identity.bookID ?? object["book_id"] as? String
         return mutation.resourceLabel(bookTitle: bookID.flatMap { booksByID[$0] })
     }
 
@@ -421,6 +717,8 @@ final class ClientSyncStore: ObservableObject {
         payload: some Encodable,
         baseSnapshot: some Encodable
     ) -> Bool {
+        let identity = SyncResourceIdentity(kind: kind, id: id, path: path)
+        guard !isDeleted(identity) else { return false }
         guard let payloadData = try? JSONEncoder.lino.encode(AnyEncodable(payload)),
               let baseData = try? JSONEncoder.lino.encode(AnyEncodable(baseSnapshot)) else {
             persistenceFailure = "本机未能准备待同步内容，请保留此页面并重试。"
@@ -429,7 +727,8 @@ final class ClientSyncStore: ObservableObject {
         // A later local save supersedes an unsent earlier save for the same
         // resource. Keep the original base so a conflict still compares the
         // server snapshot against the true editing baseline.
-        if let index = pendingMutations.lastIndex(where: { $0.resourceKind == kind && $0.resourceID == id }) {
+        if let index = pendingMutations.lastIndex(where: { $0.identity == identity }) {
+            pendingMutations[index].id = UUID()
             pendingMutations[index].payload = payloadData
             pendingMutations[index].path = path
             pendingMutations[index].method = method
@@ -439,14 +738,61 @@ final class ClientSyncStore: ObservableObject {
             // payload. Preserve the original conflict baseline but discard the
             // stale refusal diagnosis.
             pendingMutations[index].failure = nil
+            latestIntentIDs[identity.key] = pendingMutations[index].id
             return persistPending()
         }
-        pendingMutations.append(PendingMutation(
+        let active = directMutations.values.first(where: {
+            $0.mutation.identity == identity
+                && latestIntentIDs[identity.key] == $0.mutation.id
+                && $0.mutation.baseRevision == baseRevision
+        })
+        let mutation = PendingMutation(
             id: UUID(), resourceKind: kind, resourceID: id, path: path, method: method,
             readPath: readPath ?? path, readStrategy: readStrategy,
-            baseRevision: baseRevision, payload: payloadData, baseSnapshot: baseData, createdAt: Date()
-        ))
+            baseRevision: baseRevision, payload: payloadData, baseSnapshot: baseData, createdAt: Date(),
+            lineageID: active?.mutation.lineageID
+        )
+        pendingMutations.append(mutation)
+        latestIntentIDs[identity.key] = mutation.id
         return persistPending()
+    }
+
+    func beginDirectMutation(
+        kind: SyncResourceKind, id: String, path: String, method: String,
+        baseRevision: Int, payload: some Encodable, baseSnapshot: some Encodable
+    ) -> DirectMutationReceipt? {
+        let identity = SyncResourceIdentity(kind: kind, id: id, path: path)
+        guard !isDeleted(identity) else { return nil }
+        guard let payloadData = try? JSONEncoder.lino.encode(AnyEncodable(payload)),
+              let baseData = try? JSONEncoder.lino.encode(AnyEncodable(baseSnapshot)) else { return nil }
+        let pending = pendingMutations.last { $0.identity == identity }
+        let active = directMutations.values.first {
+            $0.mutation.identity == identity
+                && latestIntentIDs[identity.key] == $0.mutation.id
+                && $0.mutation.baseRevision == baseRevision
+        }
+        let mutation = PendingMutation(
+            id: UUID(), resourceKind: kind, resourceID: id, path: path, method: method,
+            readPath: path, readStrategy: .direct, baseRevision: baseRevision,
+            payload: payloadData, baseSnapshot: baseData, createdAt: Date(),
+            lineageID: pending?.lineageID ?? active?.mutation.lineageID
+        )
+        let receipt = DirectMutationReceipt(mutation: mutation, coveredMutationID: pending?.id)
+        directMutations[mutation.id] = receipt
+        latestIntentIDs[identity.key] = mutation.id
+        return receipt
+    }
+
+    func finishDirectMutation(_ receipt: DirectMutationReceipt?) {
+        if let receipt { directMutations.removeValue(forKey: receipt.mutation.id) }
+        pruneAcknowledgements()
+    }
+
+    private func pruneAcknowledgements() {
+        let live = Set(pendingMutations.map(\.lineageID))
+            .union(conflicts.compactMap(\.lineageID))
+            .union(directMutations.values.map { $0.mutation.lineageID })
+        acknowledgedLineages = acknowledgedLineages.filter { live.contains($0.key) }
     }
 
     /// A direct edit that the server rejected still becomes a durable sync
@@ -464,29 +810,132 @@ final class ClientSyncStore: ObservableObject {
         readStrategy: ConflictReadStrategy = .direct,
         baseRevision: Int,
         payload: some Encodable,
-        baseSnapshot: some Encodable
+        baseSnapshot: some Encodable,
+        receipt: DirectMutationReceipt? = nil
     ) -> Bool {
+        let identity = SyncResourceIdentity(kind: kind, id: id, path: path)
+        guard !isDeleted(identity) else { return false }
+        if let receipt {
+            let mutation = receipt.mutation
+            guard latestIntentIDs[identity.key] == mutation.id else {
+                // A late refusal belongs to the submitted version. The newer
+                // author payload must keep its own failure/success lifecycle.
+                return !pendingPersistenceFailed
+            }
+            storePending(mutation)
+            guard persistPending() else { return false }
+            recordFailure(error, for: mutation.id)
+            return !pendingPersistenceFailed
+        }
         guard enqueue(
             kind: kind, id: id, path: path, method: method,
             readPath: readPath, readStrategy: readStrategy,
             baseRevision: baseRevision, payload: payload, baseSnapshot: baseSnapshot
         ) else { return false }
         guard let mutation = pendingMutations.last(where: {
-            $0.resourceKind == kind && $0.resourceID == id
+            $0.identity == identity
         }) else { return false }
         recordFailure(error, for: mutation.id)
         return !pendingPersistenceFailed
     }
 
-    /// Called after a successful direct save so stale queue records cannot
-    /// replay over the freshly returned server content.
-    func acknowledge(kind: SyncResourceKind, id: String) {
-        pendingMutations.removeAll { $0.resourceKind == kind && $0.resourceID == id }
-        persistPending()
+    func acknowledge(_ receipt: DirectMutationReceipt?, response: some Encodable) {
+        guard let receipt, let data = try? JSONEncoder.lino.encode(AnyEncodable(response)) else { return }
+        acknowledge(receipt.mutation, response: data, coveredID: receipt.coveredMutationID)
     }
 
-    func conflict(for kind: SyncResourceKind, id: String) -> ContentConflict? {
-        conflicts.first { $0.resourceKind == kind && $0.resourceID == id }
+    private func acknowledge(_ sent: PendingMutation, response: Data, coveredID: UUID? = nil) {
+        guard !isDeleted(sent.identity) else { return }
+        let canonical = (try? isolateCurrentResource(response, for: sent)) ?? response
+        acknowledgedLineages[sent.lineageID] = canonical
+        pendingMutations.removeAll { $0.id == sent.id || $0.id == coveredID }
+        if let index = pendingMutations.firstIndex(where: {
+            $0.identity == sent.identity
+                && $0.lineageID == sent.lineageID && $0.baseRevision == sent.baseRevision
+        }), let revision = (Self.jsonObject(from: response)?["content_revision"] as? NSNumber)?.intValue {
+            // This server response acknowledges an ancestor in this exact
+            // local editing chain. Advance only the base, never its payload.
+            pendingMutations[index].baseRevision = revision
+            pendingMutations[index].baseSnapshot = response
+        }
+        if let conflict = conflicts.first(where: {
+            $0.identity == sent.identity
+                && $0.lineageID == sent.lineageID && Self.sameSnapshot($0.serverSnapshot, canonical)
+        }), let revision = (Self.jsonObject(from: response)?["content_revision"] as? NSNumber)?.intValue {
+            // A newer request raced our ancestor's committed write and saw
+            // its revision as a 409. The read snapshot proves it was our own
+            // response, so retain/rebase the newest payload without requiring
+            // a fictitious third-party comparison.
+            if !pendingMutations.contains(where: { $0.identity == sent.identity }) {
+                pendingMutations.append(PendingMutation(
+                    id: conflict.mutationID ?? UUID(), resourceKind: conflict.resourceKind, resourceID: conflict.resourceID,
+                    path: conflict.path, method: conflict.method, readPath: conflict.readPath, readStrategy: conflict.readStrategy,
+                    baseRevision: revision, payload: conflict.localPayload, baseSnapshot: response, createdAt: conflict.createdAt,
+                    lineageID: sent.lineageID
+                ))
+            }
+            guard persistPending() else { return }
+            conflicts.removeAll { $0.id == conflict.id }
+            _ = persistConflicts()
+        }
+        _ = persistPending()
+        pruneAcknowledgements()
+    }
+
+    private static func sameSnapshot(_ lhs: Data, _ rhs: Data) -> Bool {
+        guard let left = try? JSONDecoder.lino.decode(JSONValue.self, from: lhs),
+              let right = try? JSONDecoder.lino.decode(JSONValue.self, from: rhs) else { return false }
+        return left == right
+    }
+
+    private func storePending(_ mutation: PendingMutation) {
+        guard !isDeleted(mutation.identity) else { return }
+        if let index = pendingMutations.lastIndex(where: {
+            $0.identity == mutation.identity
+        }) {
+            var replacement = mutation
+            replacement.lineageID = pendingMutations[index].lineageID
+            replacement.baseRevision = pendingMutations[index].baseRevision
+            replacement.baseSnapshot = pendingMutations[index].baseSnapshot
+            pendingMutations[index] = replacement
+        } else {
+            pendingMutations.append(mutation)
+        }
+    }
+
+    func conflict(for kind: SyncResourceKind, id: String, bookID: String? = nil) -> ContentConflict? {
+        let identity = SyncResourceIdentity(kind: kind, id: id, bookID: bookID)
+        return conflicts.first { $0.identity == identity }
+    }
+
+    /// The disk snapshot remains a server baseline. Recover author edits by
+    /// overlaying durable pending/conflict payloads only when presenting them.
+    func visibleCharacters(bookID: String) -> [Character] {
+        overlayCharacters(cache.characters(bookID: bookID))
+    }
+
+    func overlayCharacters(_ values: [Character]) -> [Character] {
+        values.map { value in
+            var character = overlay(value, kind: .character, id: value.id)
+            character.events = character.events.map { overlay($0, kind: .characterEvent, id: $0.id) }
+            return character
+        }
+    }
+
+    func overlayChapter(_ value: Chapter) -> Chapter { overlay(value, kind: .chapter, id: value.id) }
+
+    private func overlay<T: Codable>(_ value: T, kind: SyncResourceKind, id: String) -> T {
+        let identity = SyncResourceIdentity(kind: kind, id: id)
+        let pending = pendingMutations.last { $0.identity == identity }
+        let conflict = conflicts.last { $0.identity == identity }
+        let payload = pending?.payload ?? conflict?.localPayload
+        guard let payload, let data = try? JSONEncoder.lino.encode(value),
+              let base = Self.jsonObject(from: data), let patch = Self.jsonObject(from: payload) else { return value }
+        var object = base.merging(patch) { _, newer in newer }
+        object["content_revision"] = pending?.baseRevision ?? conflict?.submittedRevision
+        guard let merged = try? JSONSerialization.data(withJSONObject: object),
+              let decoded = try? JSONDecoder.lino.decode(T.self, from: merged) else { return value }
+        return decoded
     }
 
     /// Direct saves use this after their first conditional request returns a
@@ -503,35 +952,42 @@ final class ClientSyncStore: ObservableObject {
         payload: some Encodable,
         baseSnapshot: some Encodable,
         requiresSecretReentry: Bool = false,
+        receipt: DirectMutationReceipt? = nil,
         error: APIError,
         api: APIClient
     ) async {
+        let identity = SyncResourceIdentity(kind: kind, id: id, path: path)
+        guard !isDeleted(identity) else { return }
         guard case let .writeConflict(_, _, submitted, current) = error,
               let payloadData = try? JSONEncoder.lino.encode(AnyEncodable(payload)),
               let baseData = try? JSONEncoder.lino.encode(AnyEncodable(baseSnapshot)) else { return }
-        let mutation = PendingMutation(
+        if let receipt, latestIntentIDs[identity.key] != receipt.mutation.id { return }
+        let mutation = receipt?.mutation ?? PendingMutation(
             id: UUID(), resourceKind: kind, resourceID: id, path: path, method: method,
             readPath: readPath ?? path, readStrategy: readStrategy,
             baseRevision: baseRevision, payload: payloadData, baseSnapshot: baseData, createdAt: Date()
         )
+        if receipt != nil { storePending(mutation); _ = persistPending() }
         let promotion = await promoteConflict(
             mutation,
             submittedRevision: submitted,
             currentRevision: current,
             requiresSecretReentry: requiresSecretReentry,
+            requiresPendingOwnership: receipt != nil,
             api: api
         )
         switch promotion {
-        case .promoted:
+        case .promoted(let promotedID):
+            pendingMutations.removeAll { $0.id == promotedID }
+            _ = persistPending()
+            return
+        case .superseded:
+            return
+        case .rebased:
             return
         case .failed(let observationError) where !requiresSecretReentry:
-            if let index = pendingMutations.lastIndex(where: {
-                $0.resourceKind == mutation.resourceKind && $0.resourceID == mutation.resourceID
-            }) {
-                pendingMutations[index] = mutation
-            } else {
-                pendingMutations.append(mutation)
-            }
+            if let receipt, latestIntentIDs[identity.key] != receipt.mutation.id { return }
+            storePending(mutation)
             guard persistPending() else { return }
             recordFailure(observationError, for: mutation.id)
         case .failed(let observationError):
@@ -548,7 +1004,8 @@ final class ClientSyncStore: ObservableObject {
     /// platform UI must confirm before calling it; this method only clears the
     /// local queued copy after that explicit decision.
     func keepServer(_ conflict: ContentConflict) {
-        pendingMutations.removeAll { $0.resourceKind == conflict.resourceKind && $0.resourceID == conflict.resourceID }
+        latestIntentIDs[conflict.identity.key] = UUID()
+        pendingMutations.removeAll { $0.identity == conflict.identity }
         conflicts.removeAll { $0.id == conflict.id }
         persistPending()
         persistConflicts()
@@ -569,7 +1026,7 @@ final class ClientSyncStore: ObservableObject {
     /// disjoint JSON fields.
     @discardableResult
     func keepLocal(_ conflict: ContentConflict) -> Bool {
-        guard !conflict.requiresSecretReentry else { return false }
+        guard conflict.identity.isResolved, !isDeleted(conflict.identity), !conflict.requiresSecretReentry else { return false }
         let mutation = PendingMutation(
             id: UUID(), resourceKind: conflict.resourceKind, resourceID: conflict.resourceID,
             path: conflict.path, method: conflict.method,
@@ -578,12 +1035,13 @@ final class ClientSyncStore: ObservableObject {
             payload: conflict.localPayload, baseSnapshot: conflict.serverSnapshot, createdAt: Date()
         )
         if let index = pendingMutations.lastIndex(where: {
-            $0.resourceKind == mutation.resourceKind && $0.resourceID == mutation.resourceID
+            $0.identity == mutation.identity
         }) {
             pendingMutations[index] = mutation
         } else {
             pendingMutations.append(mutation)
         }
+        latestIntentIDs[mutation.identity.key] = mutation.id
         // Persist the replacement before deleting the durable conflict. If the
         // second file cannot be updated, both records remain visible and the
         // author's local value is still recoverable after a restart.
@@ -617,12 +1075,13 @@ final class ClientSyncStore: ObservableObject {
             do {
                 let payload = try RawJSONPayload(data: mutation.payload)
                 let response = try await api.rawRequest(
-                    mutation.path, method: mutation.method, body: payload, ifMatch: mutation.baseRevision
+                    mutation.path, method: mutation.method, body: payload, ifMatch: mutation.baseRevision,
+                    allowZeroRevision: mutation.identity.bookID != nil && mutation.baseRevision == 0
                 )
+                guard !isDeleted(mutation.identity) else { continue }
                 try applySuccessfulResponse(response, for: mutation)
-                applied.append(AppliedSyncMutation(resourceKind: mutation.resourceKind, resourceID: mutation.resourceID))
-                pendingMutations.remove(at: index)
-                persistPending()
+                applied.append(AppliedSyncMutation(resourceKind: mutation.resourceKind, resourceID: mutation.resourceID, scope: mutation.identity.scope))
+                acknowledge(mutation, response: response)
                 markOnline()
             } catch let conflict as APIError {
                 guard case let .writeConflict(_, _, submitted, current) = conflict else {
@@ -632,11 +1091,17 @@ final class ClientSyncStore: ObservableObject {
                     continue
                 }
                 switch await promoteConflict(
-                    mutation, submittedRevision: submitted, currentRevision: current, api: api
+                    mutation, submittedRevision: submitted, currentRevision: current, requiresPendingOwnership: true, api: api
                 ) {
-                case .promoted:
-                    pendingMutations.remove(at: index)
-                    persistPending()
+                case .promoted(let promotedID):
+                    pendingMutations.removeAll { $0.id == promotedID }
+                    _ = persistPending()
+                case .superseded:
+                    // The author has a newer direct request in flight. Its
+                    // result owns the resource; stop this flush for now.
+                    return applied
+                case .rebased:
+                    continue
                 case .failed(let observationError):
                     recordFailure(observationError, for: mutation.id)
                     let kind = failureKind(for: observationError)
@@ -685,8 +1150,9 @@ final class ClientSyncStore: ObservableObject {
 
     @discardableResult
     func acceptAutomaticMerge(_ mutation: PendingMutation, replacing conflict: ContentConflict) -> Bool {
+        guard !isDeleted(mutation.identity) else { return false }
         if let index = pendingMutations.lastIndex(where: {
-            $0.resourceKind == mutation.resourceKind && $0.resourceID == mutation.resourceID
+            $0.identity == mutation.identity
         }) {
             pendingMutations[index] = mutation
         } else {
@@ -709,7 +1175,9 @@ final class ClientSyncStore: ObservableObject {
     }
 
     private enum ConflictPromotionResult {
-        case promoted
+        case promoted(UUID)
+        case superseded
+        case rebased
         case failed(Error)
     }
 
@@ -718,26 +1186,62 @@ final class ClientSyncStore: ObservableObject {
         submittedRevision: Int,
         currentRevision: Int,
         requiresSecretReentry: Bool = false,
+        requiresPendingOwnership: Bool = false,
         api: APIClient
     ) async -> ConflictPromotionResult {
-        let previousConflicts = conflicts
         do {
+            guard !isDeleted(mutation.identity) else { return .superseded }
+            guard mutation.identity.isResolved else {
+                return .failed(APIError.http(409, "旧设置记录的作用域无法确认，请回到对应设置页重新保存；本机内容仍保留。"))
+            }
             let response = try await api.rawRequest(mutation.readPath)
+            guard !isDeleted(mutation.identity) else { return .superseded }
             let server = try isolateCurrentResource(response, for: mutation)
+            let key = mutation.identity.key
+            if let latest = latestIntentIDs[key], latest != mutation.id,
+               directMutations[latest] != nil { return .superseded }
+            let latest = pendingMutations.last {
+                $0.identity == mutation.identity
+            }
+            if requiresPendingOwnership, latest == nil, directMutations[mutation.id] == nil { return .superseded }
+            // A conflict from an obsolete or explicitly replaced chain has
+            // no authority over the author's current mutation.
+            if let latest, latest.lineageID != mutation.lineageID { return .superseded }
+            let local = latest ?? mutation
+            if let ownResponse = acknowledgedLineages[local.lineageID], Self.sameSnapshot(ownResponse, server),
+               let revision = (Self.jsonObject(from: server)?["content_revision"] as? NSNumber)?.intValue,
+               local.baseRevision <= revision,
+               let index = pendingMutations.firstIndex(where: { $0.id == local.id }) {
+                // The ancestor can finish before this 409 even enters the
+                // queue. Its exact acknowledged snapshot proves the new
+                // pending version may inherit this base, regardless of the
+                // order in which the two responses reached the Store.
+                pendingMutations[index].baseRevision = revision
+                pendingMutations[index].baseSnapshot = server
+                guard persistPending() else {
+                    return .failed(APIError.http(500, "本机未能保存重基后的待同步内容"))
+                }
+                return .rebased
+            }
+            let previousConflicts = conflicts
+            conflicts.removeAll { $0.identity == local.identity }
             conflicts.append(ContentConflict(
-                id: UUID(), resourceKind: mutation.resourceKind, resourceID: mutation.resourceID,
-                submittedRevision: submittedRevision, currentRevision: currentRevision,
-                path: mutation.path, method: mutation.method,
-                readPath: mutation.readPath, readStrategy: mutation.readStrategy,
-                baseSnapshot: mutation.baseSnapshot, localPayload: mutation.payload,
+                id: UUID(), resourceKind: local.resourceKind, resourceID: local.resourceID,
+                submittedRevision: local.baseRevision,
+                currentRevision: (Self.jsonObject(from: server)?["content_revision"] as? NSNumber)?.intValue ?? currentRevision,
+                path: local.path, method: local.method,
+                readPath: local.readPath, readStrategy: local.readStrategy,
+                baseSnapshot: local.baseSnapshot, localPayload: local.payload,
                 serverSnapshot: server, requiresSecretReentry: requiresSecretReentry, createdAt: Date()
             ))
+            conflicts[conflicts.count - 1].mutationID = local.id
+            conflicts[conflicts.count - 1].lineageID = local.lineageID
             guard persistConflicts() else {
                 conflicts = previousConflicts
                 return .failed(APIError.http(500, "本机未能保存冲突比较内容"))
             }
             markOnline()
-            return .promoted
+            return .promoted(local.id)
         } catch {
             if case APIError.transport = error { markOffline() }
             return .failed(error)
@@ -750,12 +1254,15 @@ final class ClientSyncStore: ObservableObject {
     /// never discarded merely because an intermediary returned HTTP success.
     private func applySuccessfulResponse(_ data: Data, for mutation: PendingMutation) throws {
         if data.isEmpty {
-            // The current API uses empty bodies only for DELETE. No queued
-            // mutation currently relies on this branch, but retaining the
-            // endpoint contract prevents a future 204 deletion from being
-            // falsely marked malformed.
+            // A conflict retry is a real deletion and owns identical cleanup.
             guard mutation.method.uppercased() == "DELETE" else {
                 throw invalidSuccessfulResponse()
+            }
+            switch mutation.resourceKind {
+            case .book, .chapter, .character, .characterEvent, .llmProfile:
+                confirmResourceDeletion(kind: mutation.resourceKind, id: mutation.resourceID)
+            case .agentPersona, .modelBinding:
+                break // Overrides can be recreated under the same scoped identity.
             }
             return
         }
@@ -801,10 +1308,7 @@ final class ClientSyncStore: ObservableObject {
                 cache.saveCharacters(values, bookID: event.bookId)
             }
         case .agentPersona, .modelBinding, .llmProfile:
-            // These kinds are not queued today because their payloads may
-            // contain credentials. If a future caller adds them, it must also
-            // add a resource-specific public response validator here.
-            throw invalidSuccessfulResponse()
+            _ = try settingsResource(data, for: mutation, writeResult: true)
         }
     }
 
@@ -841,26 +1345,9 @@ final class ClientSyncStore: ObservableObject {
                 let value = try JSONDecoder.lino.decode(CharacterEvent.self, from: data)
                 guard value.id == mutation.resourceID else { throw invalidConflictRead() }
                 return try JSONEncoder.lino.encode(value)
-            case .agentPersona:
-                if let value = try? JSONDecoder.lino.decode(AgentPersona.self, from: data), value.agentRole == mutation.resourceID {
-                    return try JSONEncoder.lino.encode(value)
-                }
-                if let value = try? JSONDecoder.lino.decode(BookAgentPersona.self, from: data), value.agentRole == mutation.resourceID {
-                    return try JSONEncoder.lino.encode(value)
-                }
-                throw invalidConflictRead()
-            case .modelBinding:
-                if let value = try? JSONDecoder.lino.decode(AgentBinding.self, from: data), value.agentRole == mutation.resourceID {
-                    return try JSONEncoder.lino.encode(value)
-                }
-                if let value = try? JSONDecoder.lino.decode(BookAgentModelBinding.self, from: data), value.agentRole == mutation.resourceID {
-                    return try JSONEncoder.lino.encode(value)
-                }
-                throw invalidConflictRead()
-            case .llmProfile:
-                let value = try JSONDecoder.lino.decode(LLMProfile.self, from: data)
-                guard value.id == mutation.resourceID else { throw invalidConflictRead() }
-                return try JSONEncoder.lino.encode(value)
+            case .agentPersona, .modelBinding, .llmProfile:
+                return try settingsResource(data, for: mutation)
+
             }
         case .characterEventInCharacter:
             let character = try JSONDecoder.lino.decode(Character.self, from: data)
@@ -873,31 +1360,72 @@ final class ClientSyncStore: ObservableObject {
             guard let value = values.first(where: { $0.agentRole == mutation.resourceID }) else {
                 throw APIError.http(404, "Agent 人格已不存在")
             }
-            return try JSONEncoder.lino.encode(value)
+            return try settingsResource(JSONEncoder.lino.encode(value), for: mutation)
         case .bookPersonas:
             let values = try JSONDecoder.lino.decode([BookAgentPersona].self, from: data)
             guard let value = values.first(where: { $0.agentRole == mutation.resourceID }) else {
                 throw APIError.http(404, "本书人格已不存在")
             }
-            return try JSONEncoder.lino.encode(value)
+            return try settingsResource(JSONEncoder.lino.encode(value), for: mutation)
         case .profiles:
             let values = try JSONDecoder.lino.decode([LLMProfile].self, from: data)
             guard let value = values.first(where: { $0.id == mutation.resourceID }) else {
                 throw APIError.http(404, "模型 Profile 已不存在")
             }
-            return try JSONEncoder.lino.encode(value)
+            return try settingsResource(JSONEncoder.lino.encode(value), for: mutation)
         case .globalModelBindings:
             let values = try JSONDecoder.lino.decode([AgentBinding].self, from: data)
             guard let value = values.first(where: { $0.agentRole == mutation.resourceID }) else {
                 throw APIError.http(404, "全局模型设置已不存在")
             }
-            return try JSONEncoder.lino.encode(value)
+            return try settingsResource(JSONEncoder.lino.encode(value), for: mutation)
         case .bookModelBindings:
             let values = try JSONDecoder.lino.decode([BookAgentModelBinding].self, from: data)
             guard let value = values.first(where: { $0.agentRole == mutation.resourceID }) else {
                 throw APIError.http(404, "本书模型设置已不存在")
             }
-            return try JSONEncoder.lino.encode(value)
+            return try settingsResource(JSONEncoder.lino.encode(value), for: mutation)
+        }
+    }
+
+    private func settingsResource(_ data: Data, for mutation: PendingMutation, writeResult: Bool = false) throws -> Data {
+        guard mutation.identity.isResolved, let object = Self.jsonObject(from: data) else { throw invalidConflictRead() }
+        if mutation.resourceKind == .agentPersona || mutation.resourceKind == .modelBinding {
+            let readIdentity = SyncResourceIdentity(kind: mutation.resourceKind, id: mutation.resourceID, path: mutation.readPath)
+            guard readIdentity == mutation.identity else { throw invalidConflictRead() }
+        }
+        if let returnedBook = object["book_id"] as? String, returnedBook != mutation.identity.bookID { throw invalidConflictRead() }
+        let revision = (object["content_revision"] as? NSNumber)?.intValue
+        if writeResult, revision == nil || revision! < max(1, mutation.baseRevision) { throw invalidSuccessfulResponse() }
+        switch mutation.resourceKind {
+        case .agentPersona:
+            guard object["agent_role"] as? String == mutation.resourceID else { throw invalidConflictRead() }
+            if mutation.identity.bookID != nil {
+                guard object["source"] != nil, object["global_persona"] is String,
+                      object["effective_persona"] is String else { throw invalidConflictRead() }
+                let value = try JSONDecoder.lino.decode(BookAgentPersona.self, from: data)
+                if writeResult, value.source != "book" || value.bookPersona == nil { throw invalidSuccessfulResponse() }
+                return try JSONEncoder.lino.encode(value)
+            }
+            guard object["source"] == nil, object["editable_persona"] is String || object["system_prompt"] is String,
+                  revision != nil else { throw invalidConflictRead() }
+            return try JSONEncoder.lino.encode(JSONDecoder.lino.decode(AgentPersona.self, from: data))
+        case .modelBinding:
+            guard object["agent_role"] as? String == mutation.resourceID else { throw invalidConflictRead() }
+            if mutation.identity.bookID != nil {
+                guard object["source"] != nil, object.keys.contains("book_binding"),
+                      object.keys.contains("effective_binding") else { throw invalidConflictRead() }
+                let value = try JSONDecoder.lino.decode(BookAgentModelBinding.self, from: data)
+                if writeResult, value.source != "book" || value.bookBinding == nil { throw invalidSuccessfulResponse() }
+                return try JSONEncoder.lino.encode(value)
+            }
+            guard object["source"] == nil, object.keys.contains("llm_profile_id"), revision != nil else { throw invalidConflictRead() }
+            return try JSONEncoder.lino.encode(JSONDecoder.lino.decode(AgentBinding.self, from: data))
+        case .llmProfile:
+            guard object["id"] as? String == mutation.resourceID, object["name"] is String,
+                  object["base_url"] is String, object["model_name"] is String, revision != nil else { throw invalidConflictRead() }
+            return try JSONEncoder.lino.encode(JSONDecoder.lino.decode(LLMProfile.self, from: data))
+        default: throw invalidConflictRead()
         }
     }
 
@@ -918,9 +1446,12 @@ final class ClientSyncStore: ObservableObject {
 
     private func nextFlushableMutationIndex() -> Int? {
         for (index, mutation) in pendingMutations.enumerated() {
+            if directMutations.values.contains(where: {
+                $0.mutation.identity == mutation.identity
+            }) { continue }
             if mutation.failure?.kind == .permanent { continue }
             if pendingMutations[..<index].contains(where: {
-                $0.resourceKind == mutation.resourceKind && $0.resourceID == mutation.resourceID
+                $0.identity == mutation.identity
             }) { continue }
             return index
         }
@@ -928,6 +1459,7 @@ final class ClientSyncStore: ObservableObject {
     }
 
     private func recordFailure(_ error: Error, for mutationID: UUID) {
+        if case APIError.transport = error { markOffline() }
         guard let index = pendingMutations.firstIndex(where: { $0.id == mutationID }) else { return }
         let presented = LinoErrorPresenter.present(error: error)
         let kind = failureKind(for: error)
@@ -941,7 +1473,6 @@ final class ClientSyncStore: ObservableObject {
             recordedAt: attemptStartedAt
         )
         _ = persistPending()
-        if case APIError.transport = error { markOffline() }
         let mutation = pendingMutations[index]
         notices?.publish(
             "\(resourceLabel(for: mutation))同步未完成：\(presented.message)",
@@ -993,7 +1524,9 @@ final class ClientSyncStore: ObservableObject {
     }
 
     private func updatePersistenceFailure() {
-        if pendingPersistenceFailed || conflictPersistenceFailed {
+        if deletionPersistenceFailed {
+            persistenceFailure = "本机未能安全保存删除标记；请保留当前页面，释放存储空间后重试。"
+        } else if pendingPersistenceFailed || conflictPersistenceFailed {
             persistenceFailure = "本机未能安全保存待同步内容；请保留当前页面，释放存储空间后重试。"
         } else {
             persistenceFailure = nil

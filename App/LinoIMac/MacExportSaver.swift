@@ -12,8 +12,14 @@ enum MacExportSaver {
     /// intentionally use a native save/open panel rather than the ordinary
     /// manuscript exporter, because an import always creates a new book.
     @MainActor
-    static func exportProject(_ book: Book, session: AppSession, bookshelf: BookshelfStore) async {
-        if let data = await bookshelf.exportProject(book) {
+    @discardableResult
+    static func exportProject(_ book: Book, session: AppSession, bookshelf: BookshelfStore, editor: ChapterEditorStore) async -> Bool {
+        do {
+            try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+            let receipt = try bookshelf.prepareExport(bookID: book.id, selection: .project)
+            guard let data = await bookshelf.exportProject(book) else { return false }
+            try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+            try bookshelf.validateExport(receipt)
             let panel = NSSavePanel()
             panel.nameFieldStringValue = "\(safeFilename(book.title)).ictwbook"
             panel.canCreateDirectories = true
@@ -21,13 +27,15 @@ enum MacExportSaver {
             panel.allowedContentTypes = [.ictwProjectPackage]
             panel.title = "备份完整项目"
             panel.prompt = "备份"
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            do {
-                try data.write(to: url, options: .atomic)
-                session.notices.publish("项目备份已写入文件。")
-            } catch {
-                session.notices.publish("写入文件失败：\(error.localizedDescription)")
-            }
+            guard panel.runModal() == .OK, let url = panel.url else { return false }
+            try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+            try bookshelf.validateExport(receipt)
+            try data.write(to: url, options: .atomic)
+            session.notices.publish("项目备份已写入文件。")
+            return true
+        } catch {
+            session.notices.publish(error)
+            return false
         }
     }
 
@@ -52,25 +60,39 @@ enum MacExportSaver {
     }
 
     @MainActor
+    @discardableResult
     static func exportComposed(
-        book: Book, session: AppSession, bookshelf: BookshelfStore,
+        book: Book, session: AppSession, bookshelf: BookshelfStore, editor: ChapterEditorStore,
         scope: ExportScope, currentChapterID: String?, format: ExportFormat,
         includeWorld: Bool, includeCharacters: Bool, separateChapters: Bool
-    ) async {
+    ) async -> Bool {
         guard scope != .current || currentChapterID != nil else {
             session.notices.publish("请先选择一章，再选择“本章”导出。")
-            return
+            return false
         }
-        guard let data = await bookshelf.exportData(book) else { return }
-        let selected = V2DeskExportComposer.chapters(for: scope, in: data, currentID: currentChapterID)
-        guard !selected.isEmpty else { session.notices.publish("所选范围没有可导出的正文。"); return }
-        let files = V2DeskExportComposer.compose(data: data, chapters: selected, format: format, includeWorld: includeWorld, includeCharacters: includeCharacters, separateChapters: separateChapters)
-        save(files: files, session: session, panelTitle: "导出正文")
+        do {
+            try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+            let selection = ExportSelection.prose(scope: scope, currentChapterID: currentChapterID, includeWorldview: includeWorld, includeCharacters: includeCharacters)
+            let receipt = try bookshelf.prepareExport(bookID: book.id, selection: selection)
+            guard let data = await bookshelf.exportData(book, selection: selection) else { return false }
+            try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+            try bookshelf.validateExport(receipt)
+            let selected = V2DeskExportComposer.chapters(for: scope, in: data, currentID: currentChapterID)
+            guard !selected.isEmpty else { session.notices.publish("所选范围没有可导出的正文。"); return false }
+            let files = V2DeskExportComposer.compose(data: data, chapters: selected, format: format, includeWorld: includeWorld, includeCharacters: includeCharacters, separateChapters: separateChapters)
+            return save(files: files, session: session, panelTitle: "导出正文") {
+                try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+                try bookshelf.validateExport(receipt)
+            }
+        } catch {
+            session.notices.publish(error)
+            return false
+        }
     }
     /// 拉取全书导出文本并弹出存盘面板。失败经 `NoticeBus` 弹 Toast。
     @MainActor
-    static func exportBook(_ book: Book, session: AppSession) async {
-        await export(book, session: session, path: "export.txt", suffix: "", panelTitle: "导出全书")
+    static func exportBook(_ book: Book, session: AppSession, bookshelf: BookshelfStore, editor: ChapterEditorStore) async {
+        await exportComposed(book: book, session: session, bookshelf: bookshelf, editor: editor, scope: .all, currentChapterID: nil, format: .plainText, includeWorld: true, includeCharacters: true, separateChapters: false)
     }
 
     /// 导出 Extractor 记忆（大事记/摘要/人物动态字段与故事线），同一存盘通道。
@@ -108,8 +130,8 @@ enum MacExportSaver {
     }
 
     @MainActor
-    private static func save(files: [ExportFile], session: AppSession, panelTitle: String) {
-        guard !files.isEmpty else { return }
+    private static func save(files: [ExportFile], session: AppSession, panelTitle: String, beforeWrite: () throws -> Void) -> Bool {
+        guard !files.isEmpty else { return false }
         if files.count > 1 {
             let panel = NSOpenPanel()
             panel.canChooseDirectories = true
@@ -118,8 +140,9 @@ enum MacExportSaver {
             panel.allowsMultipleSelection = false
             panel.title = "选择导出文件夹"
             panel.prompt = "导出到此处"
-            guard panel.runModal() == .OK, let directory = panel.url else { return }
+            guard panel.runModal() == .OK, let directory = panel.url else { return false }
             do {
+                try beforeWrite()
                 // Do not silently overwrite a sibling file after a directory
                 // choice; the author can choose another folder or rename it.
                 if files.contains(where: { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0.filename).path) }) {
@@ -129,8 +152,9 @@ enum MacExportSaver {
                     guard let data = file.text.data(using: .utf8) else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
                     try data.write(to: directory.appendingPathComponent(file.filename), options: .atomic)
                 }
-            } catch { session.notices.publish("写入文件失败：\(error.localizedDescription)") }
-            return
+                return true
+            } catch is CancellationError { return false }
+            catch { session.notices.publish(error); return false }
         }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = files[0].filename
@@ -141,11 +165,14 @@ enum MacExportSaver {
             : [.plainText]
         panel.title = panelTitle
         panel.prompt = "导出"
-        guard panel.runModal() == .OK, let firstURL = panel.url else { return }
+        guard panel.runModal() == .OK, let firstURL = panel.url else { return false }
         do {
+            try beforeWrite()
             guard let data = files[0].text.data(using: .utf8) else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
             try data.write(to: firstURL, options: .atomic)
-        } catch { session.notices.publish("写入文件失败：\(error.localizedDescription)") }
+            return true
+        } catch is CancellationError { return false }
+        catch { session.notices.publish(error); return false }
     }
 
     private static func safeFilename(_ value: String) -> String {

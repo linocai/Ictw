@@ -26,8 +26,18 @@ enum APIError: LocalizedError, Equatable {
 }
 
 struct APIClient {
+    static let defaultRequestTimeout: TimeInterval = 60
+    /// Two bounded 180-second model rounds plus 60 seconds network allowance.
+    static let inspirationRequestTimeout: TimeInterval = 420
     let baseURL: String
     let token: String
+    let session: URLSession
+
+    init(baseURL: String, token: String, session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.token = token
+        self.session = session
+    }
 
     var apiRoot: String {
         baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/v1"
@@ -38,9 +48,10 @@ struct APIClient {
         method: String = "GET",
         body: (any Encodable & Sendable)? = nil,
         ifMatch contentRevision: Int? = nil,
-        allowZeroRevision: Bool = false
+        allowZeroRevision: Bool = false,
+        timeout: TimeInterval = APIClient.defaultRequestTimeout
     ) async throws -> T {
-        let data = try await rawRequest(path, method: method, body: body, ifMatch: contentRevision, allowZeroRevision: allowZeroRevision)
+        let data = try await rawRequest(path, method: method, body: body, ifMatch: contentRevision, allowZeroRevision: allowZeroRevision, timeout: timeout)
         return try JSONDecoder.lino.decode(T.self, from: data)
     }
 
@@ -50,11 +61,12 @@ struct APIClient {
         method: String = "GET",
         body: (any Encodable & Sendable)? = nil,
         ifMatch contentRevision: Int? = nil,
-        allowZeroRevision: Bool = false
+        allowZeroRevision: Bool = false,
+        timeout: TimeInterval = APIClient.defaultRequestTimeout
     ) async throws -> Data {
-        let request = try preparedRequest(path, method: method, body: body, ifMatch: contentRevision, allowZeroRevision: allowZeroRevision)
+        let request = try preparedRequest(path, method: method, body: body, ifMatch: contentRevision, allowZeroRevision: allowZeroRevision, timeout: timeout)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { return data }
             if !(200..<300).contains(http.statusCode) {
                 if http.statusCode == 409, let conflict = Self.writeConflict(from: data) {
@@ -89,11 +101,13 @@ struct APIClient {
         method: String = "GET",
         body: (any Encodable & Sendable)? = nil,
         ifMatch contentRevision: Int? = nil,
-        allowZeroRevision: Bool = false
+        allowZeroRevision: Bool = false,
+        timeout: TimeInterval = APIClient.defaultRequestTimeout
     ) throws -> URLRequest {
         guard !baseURL.isEmpty, !token.isEmpty else { throw APIError.notConfigured }
         guard let url = URL(string: apiRoot + path) else { throw APIError.badURL }
         var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -178,11 +192,11 @@ struct APIClient {
     }
 
     func retryCandidateChecker(
-        chapterId: String, sourceJobId: String, contentRevision: Int
+        chapterId: String, sourceJobId: String, contentRevision: Int, requestID: String? = nil
     ) async throws -> WriteJobStatus {
         try await request(
             "/chapters/\(chapterId)/checker/retry", method: "POST",
-            body: CheckerRetryPayload(source_job_id: sourceJobId), ifMatch: contentRevision
+            body: CheckerRetryPayload(source_job_id: sourceJobId, request_id: requestID), ifMatch: contentRevision
         )
     }
 
@@ -307,6 +321,7 @@ private struct CheckerRunPayload: Encodable, Sendable {
 
 private struct CheckerRetryPayload: Encodable, Sendable {
     let source_job_id: String
+    let request_id: String?
 }
 
 struct AnyEncodable: Encodable, @unchecked Sendable {

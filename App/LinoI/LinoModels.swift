@@ -352,6 +352,9 @@ struct ChapterArchiveDiagnostic: Codable, Hashable, Sendable, Identifiable {
         spanIds = try c.decodeIfPresent([String].self, forKey: .spanIds) ?? []
         variants = try c.decodeIfPresent([Variant].self, forKey: .variants) ?? []
         message = try c.decodeIfPresent(String.self, forKey: .message) ?? "这部分状态暂时无法确定。"
+        if code == "archive_validation_failed" {
+            message = LinoErrorPresenter.archiveValidationReason(message)
+        }
         recovery = try c.decodeIfPresent(String.self, forKey: .recovery) ?? "可重新整理这一章的记忆。"
     }
 }
@@ -370,6 +373,19 @@ struct ChapterArchiveLatestAttempt: Codable, Hashable, Sendable {
         case errorCode = "error_code"
         case errorMessage = "error_message"
         case finishedAt = "finished_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        revisionId = try c.decodeIfPresent(String.self, forKey: .revisionId)
+        revision = try c.decodeIfPresent(Int.self, forKey: .revision)
+        status = try c.decode(String.self, forKey: .status)
+        errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        if errorCode == "archive_validation_failed" {
+            errorMessage = LinoErrorPresenter.archiveValidationReason(errorMessage)
+        }
+        finishedAt = try c.decodeIfPresent(String.self, forKey: .finishedAt)
     }
 }
 
@@ -442,6 +458,9 @@ struct ChapterArchive: Codable, Hashable, Sendable {
         stateDeltaCount = try c.decodeIfPresent(Int.self, forKey: .stateDeltaCount) ?? 0
         errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
         errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        if errorCode == "archive_validation_failed" {
+            errorMessage = LinoErrorPresenter.archiveValidationReason(errorMessage)
+        }
         canRetry = try c.decodeIfPresent(Bool.self, forKey: .canRetry) ?? false
         latestAttemptStatus = try c.decodeIfPresent(String.self, forKey: .latestAttemptStatus)
         inactivePreview = try c.decodeIfPresent(ChapterArchiveInactivePreview.self, forKey: .inactivePreview)
@@ -1527,7 +1546,9 @@ struct WriteJobStatus: Decodable, Sendable {
             return message
         }
         if ["extract_failed", "archive_validation_failed", "archive_input_changed"].contains(errorCode) {
-            let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let message = errorCode == "archive_validation_failed"
+                ? LinoErrorPresenter.archiveValidationReason(errorMessage)
+                : (errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
             guard !message.isEmpty else { return nil }
             return "正文已接受；\(message)。可直接重新归档，无需再次检查 Bible"
         }
@@ -2397,6 +2418,7 @@ private struct CachedChapterTaskOutcome: Codable {
     /// Retry may fail while resolving configuration before it creates a new
     /// JobRun, so this opaque server handle must survive the local recovery.
     let candidateCheckerRetrySourceJobID: String?
+    let checkerRetryRequestID: String?
 }
 
 struct ChapterTaskOutcome: Equatable, Sendable {
@@ -2408,6 +2430,7 @@ struct ChapterTaskOutcome: Equatable, Sendable {
     let isPreJobCheckerFailure: Bool
     let supersededJobID: String?
     let candidateCheckerRetrySourceJobID: String?
+    let checkerRetryRequestID: String?
 }
 
 /// Keeps an unsuccessful task explanation available after a client restart.
@@ -2459,7 +2482,8 @@ enum ChapterTaskOutcomeStore {
             checkerTarget: record.checkerTarget,
             isPreJobCheckerFailure: record.isPreJobCheckerFailure ?? false,
             supersededJobID: record.supersededJobID,
-            candidateCheckerRetrySourceJobID: record.candidateCheckerRetrySourceJobID
+            candidateCheckerRetrySourceJobID: record.candidateCheckerRetrySourceJobID,
+            checkerRetryRequestID: record.checkerRetryRequestID
         )
     }
 
@@ -2473,6 +2497,7 @@ enum ChapterTaskOutcomeStore {
         isPreJobCheckerFailure: Bool = false,
         supersededJobID: String? = nil,
         candidateCheckerRetrySourceJobID: String? = nil,
+        checkerRetryRequestID: String? = nil,
         defaults: UserDefaults? = nil
     ) {
         let defaults = defaults ?? DebugRuntimeConfiguration.defaults ?? .standard
@@ -2493,7 +2518,8 @@ enum ChapterTaskOutcomeStore {
                 checkerTarget: checkerTarget,
                 isPreJobCheckerFailure: isPreJobCheckerFailure,
                 supersededJobID: supersededJobID,
-                candidateCheckerRetrySourceJobID: candidateCheckerRetrySourceJobID
+                candidateCheckerRetrySourceJobID: candidateCheckerRetrySourceJobID,
+                checkerRetryRequestID: checkerRetryRequestID
             )
         case .cancelled(let message, let stage):
             record = CachedChapterTaskOutcome(
@@ -2510,7 +2536,8 @@ enum ChapterTaskOutcomeStore {
                 checkerTarget: checkerTarget,
                 isPreJobCheckerFailure: isPreJobCheckerFailure,
                 supersededJobID: supersededJobID,
-                candidateCheckerRetrySourceJobID: candidateCheckerRetrySourceJobID
+                candidateCheckerRetrySourceJobID: candidateCheckerRetrySourceJobID,
+                checkerRetryRequestID: checkerRetryRequestID
             )
         default:
             return

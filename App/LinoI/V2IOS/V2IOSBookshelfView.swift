@@ -3,6 +3,10 @@ import SwiftUI
 struct V2IOSBookshelfView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @State private var showingNewBook = false
     @State private var showingSettings = false
     @State private var showingSearch = false
@@ -20,6 +24,7 @@ struct V2IOSBookshelfView: View {
                 } else {
                     ForEach(bookshelf.books) { book in
                         Button {
+                            guard V2IOSBookNavigation.prepare(editor: editor, workspace: workspace, characters: characters, inspiration: inspiration) else { return }
                             Task { await bookshelf.open(book) }
                         } label: {
                             V2IOSBookShelfRow(book: book, isCurrent: session.currentBook?.id == book.id)
@@ -156,7 +161,12 @@ private struct V2IOSFirstStartView: View {
 
 private struct V2IOSNewBookSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @State private var title = ""
     @State private var world = ""
     @State private var creating = false
@@ -167,11 +177,12 @@ private struct V2IOSNewBookSheet: View {
             HStack {
                 Text("新建一本").font(V2DeskType.prose(20, weight: .semibold))
                 Spacer()
-                Button("取消") { dismiss() }.frame(minHeight: 44).buttonStyle(.plain)
+                Button("取消") { dismiss() }.frame(minHeight: 44).buttonStyle(.plain).disabled(creating)
             }
             VStack(alignment: .leading, spacing: 8) {
                 V2IOSSectionLabel(title: "书名")
                 TextField("书名", text: $title)
+                    .disabled(creating)
                     .textFieldStyle(.plain)
                     .padding(13)
                     .v2IOSPaper()
@@ -179,6 +190,7 @@ private struct V2IOSNewBookSheet: View {
             VStack(alignment: .leading, spacing: 8) {
                 V2IOSSectionLabel(title: "世界观")
                 TextEditor(text: $world)
+                    .disabled(creating)
                     .font(V2DeskType.prose(15))
                     .frame(minHeight: 124)
                     .padding(8)
@@ -194,20 +206,24 @@ private struct V2IOSNewBookSheet: View {
                     }
             }
             V2IOSPrimaryButton(title: creating ? "正在创建" : "创建", disabled: creating) {
+                guard editor.persistLocalDraftIfNeeded() else { return }
+                let submittedTitle = title.v2IOSTrimmed.isEmpty ? "未命名书籍" : title.v2IOSTrimmed
+                let submittedWorld = world
                 creating = true
                 Task {
                     // One request carries both fields, so an empty book title
                     // can no longer be overwritten by a follow-up PATCH, and a
                     // failed create keeps the sheet open with the input intact.
-                    let resolvedTitle = title.v2IOSTrimmed.isEmpty ? "未命名书籍" : title.v2IOSTrimmed
-                    let created = await bookshelf.createBook(title: resolvedTitle, world: world)
+                    let created = await bookshelf.createBook(title: submittedTitle, world: submittedWorld)
                     creating = false
-                    guard created != nil else { return }
+                    guard let created, session.currentBook?.id == created.id else { return }
+                    guard V2IOSBookNavigation.prepare(editor: editor, workspace: workspace, characters: characters, inspiration: inspiration) else { return }
                     dismiss()
                 }
             }
         }
         .padding(20)
         .v2IOSPage()
+        .interactiveDismissDisabled(creating)
     }
 }

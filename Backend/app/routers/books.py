@@ -40,6 +40,10 @@ from app.services.project_packages import (
 )
 from app.services.search_index import rebuild_book_search_index, snippet_for_query
 
+from app.services.content_revisions import (
+    begin_sqlite_write_cas, next_book_override_revision, retain_book_override_revision,
+)
+
 router = APIRouter(tags=["books"])
 
 
@@ -190,6 +194,7 @@ def put_book_persona(
     db: Session = Depends(get_db),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> dict[str, object]:
+    begin_sqlite_write_cas(db)
     _require_book(db, book_id)
     if agent_role not in AGENT_ROLES:
         from fastapi import HTTPException
@@ -205,7 +210,8 @@ def put_book_persona(
         submitted = require_absent_revision(if_match)
         try:
             with db.begin_nested():
-                override = BookAgentPersona(book_id=book_id, agent_role=agent_role, editable_persona=payload.value)
+                override = BookAgentPersona(book_id=book_id, agent_role=agent_role, editable_persona=payload.value,
+                    content_revision=next_book_override_revision(db, book_id, "persona", agent_role))
                 db.add(override)
                 db.flush()
         except IntegrityError:
@@ -240,6 +246,7 @@ def delete_book_persona(
     book_id: str, agent_role: str, db: Session = Depends(get_db),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> Response:
+    begin_sqlite_write_cas(db)
     _require_book(db, book_id)
     if agent_role not in AGENT_ROLES:
         from fastapi import HTTPException
@@ -255,6 +262,7 @@ def delete_book_persona(
         require_matching_revision(
             override, if_match, resource_type="book_agent_persona", resource_id=override.id, db=db
         )
+        retain_book_override_revision(db, book_id, "persona", agent_role, override.content_revision)
         db.delete(override)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -346,10 +354,10 @@ def patch_book(
         setattr(book, key, value)
     if updates:
         bump_content_revision(book)
-    invalidated = invalidate_writer_inputs(db, chapters_for_book(db, book.id)) if "world_setting" in updates else []
+    invalidated_writer_jobs = invalidate_writer_inputs(db, chapters_for_book(db, book.id)) if "world_setting" in updates else []
     rebuild_book_search_index(db, book.id)
     db.commit()
-    cancel_local_writer_jobs(invalidated)
+    cancel_local_writer_jobs(invalidated_writer_jobs)
     db.refresh(book)
     return book_read(db, book)
 
@@ -544,6 +552,7 @@ def put_book_model_binding(
     db: Session = Depends(get_db),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> dict[str, object]:
+    begin_sqlite_write_cas(db)
     _require_book(db, book_id)
     if agent_role not in AGENT_ROLES:
         raise HTTPException(status_code=404, detail="agent role not found")
@@ -555,7 +564,8 @@ def put_book_model_binding(
         submitted = require_absent_revision(if_match)
         try:
             with db.begin_nested():
-                override = BookAgentModelBinding(book_id=book_id, agent_role=agent_role, **values)
+                override = BookAgentModelBinding(book_id=book_id, agent_role=agent_role, **values,
+                    content_revision=next_book_override_revision(db, book_id, "model_binding", agent_role))
                 db.add(override)
                 db.flush()
         except IntegrityError:
@@ -594,6 +604,7 @@ def delete_book_model_binding(
     db: Session = Depends(get_db),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> Response:
+    begin_sqlite_write_cas(db)
     _require_book(db, book_id)
     if agent_role not in AGENT_ROLES:
         raise HTTPException(status_code=404, detail="agent role not found")
@@ -604,6 +615,7 @@ def delete_book_model_binding(
         require_matching_revision(
             override, if_match, resource_type="book_agent_model_binding", resource_id=override.id, db=db
         )
+        retain_book_override_revision(db, book_id, "model_binding", agent_role, override.content_revision)
         db.delete(override)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

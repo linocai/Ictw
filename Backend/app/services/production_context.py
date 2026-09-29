@@ -531,6 +531,40 @@ def freeze_selector_input(
     }
 
 
+def rewrite_reference_key(db: Session, chapter: Chapter, candidates: list[MemoryBlock]) -> str:
+    """Bind reusable selection to author inputs and exact available sources, never draft prose."""
+    from app.services.personas import get_persona
+    return _sha256(_stable_json({
+        "version": 1,
+        "selector_input": freeze_selector_input(db, chapter, candidates),
+        "world": chapter.book.world_setting,
+        "source_ids": sorted(block.id for block in candidates),
+        "selector_persona": get_persona(db, "memory_selector", book_id=chapter.book_id),
+        "budget": MEMORY_BUDGET_CHARS,
+    }))
+
+
+def reusable_write_memory(db: Session, chapter: Chapter, key: str) -> dict[str, Any] | None:
+    """Reuse only the latest prepared write; never search past changed inputs."""
+    from app.models import JobRun
+    run = db.scalars(select(JobRun).where(
+        JobRun.chapter_id == chapter.id, JobRun.kind == "write",
+        JobRun.input_snapshot.is_not(None),
+    ).order_by(JobRun.created_at.desc(), JobRun.id.desc()).limit(1)).first()
+    if run is None or not isinstance(run.input_snapshot, dict):
+        return None
+    if run.input_snapshot.get("rewrite_reference_key") != key or not isinstance(run.memory_context, dict):
+        return None
+    try:
+        # Revalidate stored references and selection before skipping the model.
+        prepared = prepare_selected_write_input(db, chapter, memory_manifest=run.memory_context)
+    except (ValueError, TypeError, KeyError):
+        return None
+    if prepared["reference_context"] != run.input_snapshot.get("reference_context"):
+        return None
+    return json.loads(_stable_json(run.memory_context))
+
+
 def is_frozen_selector_input_current(
     db: Session,
     chapter: Chapter,
@@ -855,7 +889,7 @@ def _limitations(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
                     "uncertainties": uncertainties,
                 })
             continue
-        if (item.legacy_archive_eligible or item.archive_input_fingerprint is None) and item.index in available_indices:
+        if (item.legacy_archive_eligible) and item.index in available_indices:
             continue
         reason = {
             "pending": "该章记忆整理尚未完成",

@@ -22,10 +22,10 @@ def make_story():
         other = Character(book_id=book.id, name="远客", fixed_profile="不应传入的未选人物卡")
         db.add_all([lin, jiang, other])
         db.flush()
-        prior = Chapter(book_id=book.id, index=1, status="finalized", long_summary="林夕已经归还钥匙。",
+        prior = Chapter(book_id=book.id, index=1, status="finalized", legacy_archive_eligible=True, long_summary="林夕已经归还钥匙。",
                         draft_text="林夕与江川在屋檐下等雨停。")
         current = Chapter(book_id=book.id, index=2, title="等雨", user_prompt="林夕与江川在屋檐下等雨停，随后一起回家。")
-        future = Chapter(book_id=book.id, index=3, status="finalized", long_summary="未来秘密不得泄露")
+        future = Chapter(book_id=book.id, index=3, status="finalized", legacy_archive_eligible=True, long_summary="未来秘密不得泄露")
         db.add_all([prior, current, future])
         db.flush()
         current.character_links.extend([ChapterCharacter(character_id=lin.id), ChapterCharacter(character_id=jiang.id)])

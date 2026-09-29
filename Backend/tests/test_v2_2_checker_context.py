@@ -48,11 +48,11 @@ def _story(*, duplicate_name: bool = False) -> tuple[str, str, str]:
             db.add(Character(book_id=book.id, name="夏天", fixed_profile="同名人物。"))
         db.flush()
         prior = Chapter(
-            book_id=book.id, index=1, status="finalized", long_summary="林夕已归还钥匙。",
+            book_id=book.id, index=1, status="finalized", legacy_archive_eligible=True, long_summary="林夕已归还钥匙。",
             draft_text="林夕在雨中归还钥匙。",
         )
         current = Chapter(book_id=book.id, index=2, title="等雨", user_prompt="林夕在雨后回家。")
-        future = Chapter(book_id=book.id, index=3, status="finalized", long_summary="后章秘密。")
+        future = Chapter(book_id=book.id, index=3, status="finalized", legacy_archive_eligible=True, long_summary="后章秘密。")
         db.add_all([prior, current, future])
         db.flush()
         current.character_links.append(ChapterCharacter(character_id=selected.id))

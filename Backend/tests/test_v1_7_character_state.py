@@ -163,6 +163,7 @@ def test_character_rename_and_delete_reprojects_relationship(client, auth_header
     try:
         orm_chapter = db.get(Chapter, chapter["id"])
         orm_chapter.status = "finalized"
+        orm_chapter.legacy_archive_eligible = True
         left_id, right_id = sorted((left["id"], right["id"]))
         db.add(CharacterStateChange(
             book_id=book["id"], chapter_id=chapter["id"], character_id=left_id,

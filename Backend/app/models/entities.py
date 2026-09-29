@@ -432,6 +432,15 @@ class BookAgentPersona(Base):
     book = relationship("Book", back_populates="agent_personas")
 
 
+class BookOverrideRevision(Base):
+    """Retain the last deleted override revision to prevent delete/recreate ABA."""
+    __tablename__ = "book_override_revisions"
+    book_id: Mapped[str] = mapped_column(String(36), ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), primary_key=True)
+    agent_role: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class LLMProfile(Base):
     __tablename__ = "llm_profiles"
 

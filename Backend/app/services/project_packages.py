@@ -11,7 +11,7 @@ import hashlib
 import io
 import json
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -28,6 +28,8 @@ from app.models import (
     ChapterArchiveStateDelta,
     ChapterCharacter,
     Character,
+    CharacterEvent,
+    CharacterStateChange,
     LLMProfile,
 )
 from app.services.archive_v2 import (
@@ -43,11 +45,12 @@ from app.services.archive_v2 import (
 from app.services.character_state_projection import PERSISTENT_SLOTS, SNAPSHOT_SLOTS, rebuild_book_projection
 from app.services.context import normalize_text
 from app.services.personas import AGENT_ROLES
+from app.persona_contract import EDITABLE_PERSONA_MAX_LENGTH
 from app.services.search_index import rebuild_book_search_index
 
 
 PROJECT_MEDIA_TYPE = "application/vnd.ictw.project+zip"
-PROJECT_FORMAT_VERSION = 2
+PROJECT_FORMAT_VERSION = 3
 PROJECT_ENTRY_NAMES = (
     "book.json",
     "characters.json",
@@ -86,8 +89,11 @@ def _json_load(raw: bytes, *, entry_name: str) -> Any:
         raise ProjectPackageError(f"{entry_name} is not valid UTF-8 JSON") from exc
 
 
-def _string(value: object, *, field: str, maximum: int = 200_000, allow_empty: bool = True) -> str:
-    if not isinstance(value, str) or len(value) > maximum or (not allow_empty and not value.strip()):
+def _string(value: object, *, field: str, maximum: int | None = 200_000, allow_empty: bool = True) -> str:
+    if (
+        not isinstance(value, str) or (maximum is not None and len(value) > maximum)
+        or (not allow_empty and not value.strip())
+    ):
         raise ProjectPackageError(f"invalid {field}")
     return value
 
@@ -269,6 +275,66 @@ def _remap_archive_issue(
     return result
 
 
+def _legacy_memory(db: Session, chapter: Chapter) -> dict[str, Any]:
+    return {
+        "events": [{"character_id": e.character_id, "event_type": e.event_type, "event_text": e.event_text}
+                   for e in db.scalars(select(CharacterEvent).where(CharacterEvent.chapter_id == chapter.id)
+                                       .order_by(CharacterEvent.created_at, CharacterEvent.id)).all()],
+        "states": [{key: getattr(row, key) for key in (
+            "character_id", "other_character_id", "scope", "slot", "operation", "value", "evidence", "batch_id")}
+                   for row in db.scalars(select(CharacterStateChange).where(CharacterStateChange.chapter_id == chapter.id)
+                                         .order_by(CharacterStateChange.created_at, CharacterStateChange.id)).all()],
+    }
+
+
+def _validate_legacy_memory(value: Any, *, chapter: dict[str, Any], character_ids: set[str]) -> None:
+    if value is None:
+        return
+    if chapter["status"] != "finalized":
+        raise ProjectPackageError("only finalized chapters may carry legacy memory")
+    value = _mapping(value, field="legacy memory", exact_keys={"events", "states"})
+    events = _list(value["events"], field="legacy events")
+    states = _list(value["states"], field="legacy states")
+    if max(len(events), len(states)) > 20_000:
+        raise ProjectPackageError("too many legacy memory records")
+    for event in events:
+        row = _mapping(event, field="legacy event", exact_keys={"character_id", "event_type", "event_text"})
+        if _string(row["character_id"], field="legacy event character") not in character_ids:
+            raise ProjectPackageError("legacy event references unknown character")
+        _string(row["event_type"], field="legacy event type", maximum=200)
+        _string(row["event_text"], field="legacy event text")
+    keys = set()
+    for state in states:
+        row = _mapping(state, field="legacy state", exact_keys={
+            "character_id", "other_character_id", "scope", "slot", "operation", "value", "evidence", "batch_id"})
+        owner = _string(row["character_id"], field="legacy state owner")
+        other = row["other_character_id"]
+        if owner not in character_ids or (other is not None and (not isinstance(other, str) or other not in character_ids)):
+            raise ProjectPackageError("legacy state references unknown character")
+        scope = _string(row["scope"], field="legacy state scope")
+        slot = _string(row["slot"], field="legacy state slot")
+        batch = _string(row["batch_id"], field="legacy state batch")
+        evidence = _string(row["evidence"], field="legacy state evidence", allow_empty=False)
+        if not evidence.strip():
+            raise ProjectPackageError("legacy state evidence is blank")
+        if row["operation"] == "set":
+            if not _string(row["value"], field="legacy state value", allow_empty=False).strip():
+                raise ProjectPackageError("legacy state value is blank")
+        elif row["operation"] != "clear" or row["value"] is not None:
+            raise ProjectPackageError("invalid legacy state operation")
+        if scope == "snapshot" and slot in SNAPSHOT_SLOTS and other is None and batch:
+            key = (owner, scope, slot, batch)
+        elif scope == "persistent" and slot in PERSISTENT_SLOTS and other is None and not batch:
+            key = (owner, scope, slot, batch)
+        elif scope == "relationship" and slot == "relationship" and other is not None and other != owner and not batch:
+            key = (*sorted((owner, other)), scope, slot)
+        else:
+            raise ProjectPackageError("invalid legacy state shape")
+        if key in keys:
+            raise ProjectPackageError("duplicate legacy state slot")
+        keys.add(key)
+
+
 def _package_entries(db: Session, book: Book) -> dict[str, bytes]:
     chapters = db.scalars(
         select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.index, Chapter.id)
@@ -427,6 +493,7 @@ def _package_entries(db: Session, book: Book) -> dict[str, bytes]:
                     "status": chapter.status,
                     "source": chapter.source,
                     "character_ids": links_by_chapter.get(chapter.id, []),
+                    "legacy_memory": _legacy_memory(db, chapter) if health[chapter.id]["archive_schema"] == "legacy" else None,
                 }
                 for chapter in chapters
             ]
@@ -469,6 +536,9 @@ def export_project_package(db: Session, book: Book) -> bytes:
     package = buffer.getvalue()
     if len(package) > _MAX_PACKAGE_BYTES:
         raise ProjectPackageError("project package exceeds size limit")
+    # A successful backup must pass the same pure safety and record checks as
+    # recovery. Do not perform an import (or create a book) to prove this.
+    _validated_records(_read_project_package(package))
     return package
 
 
@@ -505,7 +575,7 @@ def _read_project_package(payload: bytes) -> dict[str, Any]:
         manifest["format"] != "ictwbook"
         or not isinstance(manifest["format_version"], int)
         or isinstance(manifest["format_version"], bool)
-        or manifest["format_version"] not in {1, PROJECT_FORMAT_VERSION}
+        or manifest["format_version"] not in {1, 2, PROJECT_FORMAT_VERSION}
     ):
         raise ProjectPackageError("unsupported project package format")
     _string(manifest["created_at"], field="manifest creation time", maximum=100, allow_empty=False)
@@ -528,7 +598,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
     if (
         not isinstance(package_format, int)
         or isinstance(package_format, bool)
-        or package_format not in {1, PROJECT_FORMAT_VERSION}
+        or package_format not in {1, 2, PROJECT_FORMAT_VERSION}
     ):
         raise ProjectPackageError("unsupported project package format")
     book = _mapping(decoded["book.json"], field="book", exact_keys={"title", "world_setting"})
@@ -563,7 +633,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
                 "id", "index", "title", "user_prompt", "target_word_count", "author_note", "draft_text",
                 "headline", "long_summary", "state_changes", "unresolved_items", "atomic_memories",
                 "exempted_character_names", "status", "source", "character_ids",
-            },
+            } | ({"legacy_memory"} if package_format >= 3 else set()),
         )
         source_id = _string(row["id"], field="chapter id", maximum=200, allow_empty=False)
         index = _int(row["index"], field="chapter index", minimum=1)
@@ -573,7 +643,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
         chapter_indexes.add(index)
         chapters_by_source[source_id] = row
         for name in ("title", "user_prompt", "author_note", "draft_text", "headline", "long_summary", "status", "source"):
-            _string(row[name], field=f"chapter {name}")
+            _string(row[name], field=f"chapter {name}", maximum=None if name == "draft_text" else 200_000)
         _int(row["target_word_count"], field="target word count", minimum=1)
         for name in ("state_changes", "unresolved_items", "atomic_memories", "exempted_character_names", "character_ids"):
             _list(row[name], field=f"chapter {name}")
@@ -585,6 +655,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
         _safe_json(row["unresolved_items"], field="chapter unresolved_items")
         _safe_json(row["atomic_memories"], field="chapter atomic_memories")
         _safe_json(row["exempted_character_names"], field="chapter exempted names")
+        _validate_legacy_memory(row.get("legacy_memory"), chapter=row, character_ids=character_ids)
     persona_roles: set[str] = set()
     for item in personas:
         row = _mapping(item, field="persona", exact_keys={"agent_role", "editable_persona"})
@@ -592,7 +663,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
         if role not in AGENT_ROLES or role in persona_roles:
             raise ProjectPackageError("duplicate persona role")
         persona_roles.add(role)
-        _string(row["editable_persona"], field="editable persona", maximum=8_000, allow_empty=False)
+        _string(row["editable_persona"], field="editable persona", maximum=EDITABLE_PERSONA_MAX_LENGTH, allow_empty=False)
     binding_roles: set[str] = set()
     for item in bindings:
         row = _mapping(
@@ -615,15 +686,17 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
     archive_chapters: set[str] = set()
     for item in archives:
         archive_keys = {"chapter_id", "summary", "facts", "deltas"}
-        if package_format == PROJECT_FORMAT_VERSION:
+        if package_format >= 2:
             archive_keys |= {"contract_version", "state_uncertainties", "diagnostics"}
         row = _mapping(item, field="archive", exact_keys=archive_keys)
         chapter_id = _string(row["chapter_id"], field="archive chapter", maximum=200, allow_empty=False)
         if chapter_id not in chapter_ids or chapter_id in archive_chapters:
             raise ProjectPackageError("duplicate or unknown archive chapter")
         archive_chapters.add(chapter_id)
+        if chapters_by_source[chapter_id].get("legacy_memory") is not None:
+            raise ProjectPackageError("chapter cannot have both legacy and v2 memory")
         contract_version = LEGACY_ARCHIVE_CONTRACT_VERSION
-        if package_format == PROJECT_FORMAT_VERSION:
+        if package_format >= 2:
             contract_version = _string(
                 row["contract_version"], field="archive contract version", maximum=32, allow_empty=False
             )
@@ -758,7 +831,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
             if slot_key in delta_slot_keys:
                 raise ProjectPackageError("duplicate archive state delta slot")
             delta_slot_keys.add(slot_key)
-        if package_format == PROJECT_FORMAT_VERSION:
+        if package_format >= 2:
             _validate_archive_issues(
                 row["state_uncertainties"],
                 field="archive state uncertainties",
@@ -838,7 +911,7 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
                 exempted_character_names=item["exempted_character_names"],
                 status=status,
                 archive_status="stale",
-                legacy_archive_eligible=False,
+                legacy_archive_eligible=item.get("legacy_memory") is not None,
                 source=item["source"],
             )
             db.add(chapter)
@@ -846,6 +919,30 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
             chapters_by_source[item["id"]] = chapter
             for character_id in item["character_ids"]:
                 db.add(ChapterCharacter(chapter_id=chapter.id, character_id=character_ids[character_id]))
+        db.flush()
+        legacy_time = datetime.now(timezone.utc)
+        for item in records["chapters"]:
+            legacy = item.get("legacy_memory")
+            if legacy is None:
+                continue
+            chapter = chapters_by_source[item["id"]]
+            chapter.archive_status = "legacy"
+            for offset, event in enumerate(legacy["events"]):
+                db.add(CharacterEvent(book_id=book.id, chapter_id=chapter.id,
+                    character_id=character_ids[event["character_id"]], event_type=event["event_type"],
+                    event_text=event["event_text"], created_at=legacy_time + timedelta(microseconds=offset)))
+            for offset, state in enumerate(legacy["states"]):
+                values = dict(state)
+                values["character_id"] = character_ids[values["character_id"]]
+                if values["other_character_id"] is not None:
+                    values["other_character_id"] = character_ids[values["other_character_id"]]
+                db.add(CharacterStateChange(book_id=book.id, chapter_id=chapter.id, **values,
+                    created_at=legacy_time + timedelta(microseconds=offset)))
+        if records["package_format"] < 3:
+            archived = {item["chapter_id"] for item in records["archives"]}
+            if any(item["status"] == "finalized" and item["id"] not in archived for item in records["chapters"]):
+                warnings.append({"code": "legacy_memory_not_in_old_package", "message":
+                    "此旧版本备份不含部分已接受章节的完整旧记忆；正文已恢复，这些章节需检查归档状态。"})
         db.flush()
         for item in records["personas"]:
             db.add(
@@ -885,7 +982,7 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
             }
             remapped_uncertainties = []
             remapped_diagnostics = []
-            if records["package_format"] == PROJECT_FORMAT_VERSION:
+            if records["package_format"] >= 2:
                 remapped_uncertainties = canonicalize_archive_diagnostics(
                     [
                         _remap_archive_issue(
@@ -915,7 +1012,7 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
                 model_name=None,
                 contract_version=(
                     item["contract_version"]
-                    if records["package_format"] == PROJECT_FORMAT_VERSION
+                    if records["package_format"] >= 2
                     else LEGACY_ARCHIVE_CONTRACT_VERSION
                 ),
                 state_uncertainties=remapped_uncertainties,

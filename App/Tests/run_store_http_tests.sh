@@ -55,6 +55,7 @@ xcrun swiftc -swift-version 6 -D DEBUG -parse-as-library \
   "$app_dir/LinoI/LinoModels.swift" "$app_dir/LinoI/LinoAPI.swift" \
   "$app_dir/LinoI/ChapterDraftCache.swift" "$app_dir/LinoI/ClientSyncStore.swift" \
   "$app_dir/LinoI/InspirationCreator.swift" "$app_dir/LinoI/V2Shared/V2DeskPresentation.swift" \
+  "$app_dir/LinoI/V2Shared/V2DeskTokens.swift" "$app_dir/LinoI/V2Shared/V2DeskStatusViews.swift" \
   "$app_dir/LinoI/LinoTheme.swift" "$app_dir/LinoI/LinoErrorPresenter.swift" \
   "$app_dir/LinoI/NoticeBus.swift" "$app_dir/LinoI/LinoStores.swift" \
   "$test_dir/V211StoreHTTPTests.swift" -o "$test_root/tests"

@@ -438,7 +438,7 @@ def test_invalid_v2_archive_does_not_revoke_accepted_prose_or_feed_selector(
     current = client.get(f"/api/v1/chapters/{chapter['id']}", headers=auth_headers).json()
     assert current["status"] == "finalized"
     assert current["archive"]["status"] == "partial"
-    assert "source span" in current["archive"]["error_message"]
+    assert "正文中不存在的证据位置" in current["archive"]["error_message"]
     assert bad.calls == 1
 
     import app.routers.chapters as chapters_router

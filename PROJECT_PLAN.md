@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-**v2.3.0（Build 64，已发布）**：iOS、macOS与Backend统一版本，修复本轮生产SOP Review的8项问题，让检查协议、错误说明、原文复查和历史记忆传递可靠衔接；[本轮施工与验收记录](archive/plans/v2.3.0-sop-reliability-plan.md)。
+**v2.3.2（Build71，快修）**：修复Build70再次全量Review确认的11项问题（含全部10项P2），保护记忆导入、异常响应判断、设置并发、删除与离线正文、双端编辑输入；代码、自动验证及定向独立复查完成，承接未发布Build65–70。[当前版本记录](archive/plans/v2.3.2-build70-sop-plan.md)。
 
 ## 关键决定
 
@@ -16,23 +16,35 @@
 - 保留用户已定三句创作边界与空Bible跳过规则；不按文字顺序猜最终状态、不增加隐形模型重试。
 - 生成稿检查与当前正文复查分别恢复；检查服务失败明确说明尚无结论，不引导作者无故重写整章。
 - 相同历史内容重新归档不打断写作；多人事实与关系身份完整传递，但历史不会扩大本章人物授权。
+- 异步操作必须属于原书籍、章节及同次编辑上下文；旧响应不能覆盖新编辑。全局与不同书的设置、冲突和草稿各自独立；有效历史的展示与写作取材保持一致。
+- 设置失败和离开编辑项不得静默丢输入；导出必须说明并解决遗漏本机修改的阻碍，草稿可独立保存，无需生成、检查或接受。可成功导出的项目包必须可恢复；真实冲突和人物授权不放松。
+- Bible指导保持作者可编辑，不变成隐藏硬协议；异常断流不能当完整稿，完整重写仍最多一次。
 
 ## 当前状态
 
-- **v2.3.0（Build64）于2026-09-25完成一条龙发布**：Backend与已安装Mac均为`59ba659`；main和不可变标签`v2.3.0-build64`已推送，[Release](https://github.com/linocai/Ictw/releases/tag/v2.3.0-build64)已发布；[发布证据](archive/operations/2026-09-25-build64-deployment.json)。
-- 本轮8项SOP问题及独立复查追加项均已闭环；Backend365 passed/12 skipped、客户端状态与44项HTTP测试通过，双端OS27 Debug及签名Release构建通过。
-- 后端停服备份、恢复演练、无变更迁移及内外网健康通过；正文、任务、归档与密钥保持不变，只有Mac页面验收产生书籍打开时间更新。
-- Mac已换装并正常运行Build64，成稿、已有草稿编辑及失败原因/恢复入口可用；保留Build62回退副本，未触发生成、接受或重新归档。
-- iOS Build64签名产物与Xcode配置就绪，不生成IPA，最终安装由用户操作；真机页面尚未验收，iPhone Air当前不可用，待现场核验。
-- 本地/远端发布暂存与恢复演练库均已核验清理；保留当前交付、符号、iOS安装产物及已验证回退集。
+- Build71已完成11项快修及关联复查补修：旧记忆项目包、错误终态/流内错误、删除重建版本冲突、旧设置响应、删除级联与离线正文、快捷键及iOS编辑保护。[实施与证据](archive/plans/v2.3.2-build70-sop-plan.md#build71-快修2026-09-29)。
+- 后端560项、Store/HTTP92项、界面方法/策略140项及状态回归通过，OS27双端App构建通过；原生快捷键及iOS页面未实测，Build70因锁屏未完成的Mac导出/保留稿页面验收仍待补齐。
+- Build69此前17项及旧复查证据保留；其后13项由Build70承接修复。当前结论仅覆盖冻结源码与已执行验证，不代替未覆盖的原生页面或生产验收。[Build69记录](archive/plans/v2.3.1-build69-reliability-plan.md)。
+- 本轮未部署、换装、提交、推送或创建标签。两路定向独立复查无遗留finding；可重建测试产物已核验清理，保留已验证的开工源码恢复包及旧原生验收恢复材料，后续原生验收须重建最新App。
+- **v2.3.0（Build64）于2026-09-25完成一条龙发布**：Backend与已安装Mac均为`59ba659`；main与不可变标签`v2.3.0-build64`已推送，[Release](https://github.com/linocai/Ictw/releases/tag/v2.3.0-build64)已发布；[发布证据](archive/operations/2026-09-25-build64-deployment.json)。
+- Mac安装版本仍为Build64，本轮仅使用合成数据、隔离构建与禁用模型的测试服务。真实章节和线上模型未操作。
+- iOS由用户通过Xcode安装，不生成IPA；真机页面未验收。本轮只读设备支持审计iPhone18Pro通过；iPhone Air现场不可用，未清其支持缓存。
 
 ## 后续升级方向
 
-- Build64已发布；后续问题按实际使用情况继续处理。
+- Build71待补齐原生页面验收并授权发布；届时从实际生产Build64覆盖累计改动，执行新增0015迁移，同步已存Writer/Checker人格、更新ICTW代理期限并重建派生搜索索引。生产和已安装Mac仍为Build64。
 - 补做iOS最终页面验收；用户通过Xcode完成真机安装。
 - 旧失败归档由作者在对应章节主动重试；不自动批量重提。
 
 ## 里程碑索引
+
+- v2.3.2（Build71，未发布）：Build70原13项及再次Review的11项均已修复，关联补修及本地验证完成，原生页面验收边界见记录；[版本记录](archive/plans/v2.3.2-build70-sop-plan.md)。
+- v2.3.1（Build69，未发布）：17项整体Review及当时复查边界本地修复验收完成，新发现13项纳入Build70；[版本记录](archive/plans/v2.3.1-build69-reliability-plan.md)。
+- v2.3.0（Build68）：整体SOP复审5项快修，作者编辑保护与检查/归档恢复；[版本记录](archive/plans/v2.3.0-sop-reliability-plan.md#build68快修)。
+
+- v2.3.0（Build67）：重写资料稳定复用、Bible人格提示词补充与姓名协议冲突快修；[版本记录](archive/plans/v2.3.0-sop-reliability-plan.md#build67快修)。
+- v2.3.0（Build66）：SOP复审6项及复验边界快修，承接未发布Build65；[版本记录](archive/plans/v2.3.0-sop-reliability-plan.md#build66快修)。
+- v2.3.0（Build65）：发布后独立复审7项快修，已并入Build66；[版本记录](archive/plans/v2.3.0-sop-reliability-plan.md#build65快修)。
 
 - v2.3.0（Build64）：Checker、复查恢复、章节所有权与历史记忆衔接修复已发布，双端统一版本；[施工记录](archive/plans/v2.3.0-sop-reliability-plan.md)、[发布证据](archive/operations/2026-09-25-build64-deployment.json)。
 

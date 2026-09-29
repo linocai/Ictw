@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -14,7 +16,6 @@ from app.models import (
     ChapterArchiveStateDelta,
     Character,
     CharacterEvent,
-    CharacterStateChange,
 )
 from app.schemas.character import (
     CharacterCreate,
@@ -25,10 +26,10 @@ from app.schemas.character import (
     CharacterRead,
 )
 from app.services.context import CHARACTER_EVENT_MAX_CHARS, truncate_to_nonspace
-from app.services.character_state_projection import rebuild_book_projection
+from app.services.character_state_projection import projected_book_state, rebuild_book_projection
 from app.services.write_ownership import cancel_local_writer_jobs, chapters_for_character, invalidate_writer_inputs
 from app.services.archive_v2 import (
-    active_archive_revision,
+    archive_health_summaries,
     invalidate_archive_if_input_changed,
     invalidate_downstream_archives,
 )
@@ -53,7 +54,44 @@ def _character_event_read(event: CharacterEvent) -> CharacterEventRead:
     )
 
 
-def _character_read(db: Session, character: Character) -> CharacterRead:
+@dataclass(frozen=True)
+class _CharacterMemoryRead:
+    legacy_chapter_ids: set[str]
+    active_revision_ids: set[str]
+    fields: dict[str, dict[str, str]]
+    updated_indexes: dict[str, int]
+
+
+def _character_memory_read(db: Session, book_id: str) -> _CharacterMemoryRead:
+    chapters = db.scalars(
+        select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.index, Chapter.id)
+    ).all()
+    health = archive_health_summaries(db, list(chapters))
+    legacy_chapter_ids = {
+        chapter.id for chapter in chapters if health[chapter.id]["archive_schema"] == "legacy"
+    }
+    active_revision_ids = {
+        chapter.active_archive_revision_id
+        for chapter in chapters if health[chapter.id]["archive_schema"] == "v2"
+        and chapter.active_archive_revision_id is not None
+    }
+    fields, effective_rows = projected_book_state(db, book_id)
+    chapter_indexes = {chapter.id: chapter.index for chapter in chapters}
+    updated_indexes: dict[str, int] = {}
+    for row in effective_rows:
+        chapter_id = row.revision.chapter_id if isinstance(row, ChapterArchiveStateDelta) else row.chapter_id
+        index = chapter_indexes[chapter_id]
+        for character_id in (row.character_id, row.other_character_id):
+            if character_id is not None:
+                updated_indexes[character_id] = max(updated_indexes.get(character_id, 0), index)
+    return _CharacterMemoryRead(legacy_chapter_ids, active_revision_ids, fields, updated_indexes)
+
+
+def _character_read(
+    db: Session, character: Character, *, memory: _CharacterMemoryRead | None = None,
+) -> CharacterRead:
+    if memory is None:
+        memory = _character_memory_read(db, character.book_id)
     events = db.scalars(
         select(CharacterEvent)
         .join(Chapter, CharacterEvent.chapter_id == Chapter.id)
@@ -61,46 +99,15 @@ def _character_read(db: Session, character: Character) -> CharacterRead:
         .order_by(Chapter.index)
     ).all()
     data = CharacterRead.model_validate(character)
-    data.dynamic_fields_updated_chapter_index = db.scalar(
-        select(func.max(Chapter.index))
-        .join(CharacterStateChange, CharacterStateChange.chapter_id == Chapter.id)
-        .where(
-            CharacterStateChange.book_id == character.book_id,
-            CharacterStateChange.is_effective.is_(True),
-            or_(CharacterStateChange.character_id == character.id, CharacterStateChange.other_character_id == character.id),
-        )
-    )
-    v2_updated_index = db.scalar(
-        select(func.max(Chapter.index))
-        .join(ChapterArchiveRevision, ChapterArchiveRevision.chapter_id == Chapter.id)
-        .join(ChapterArchiveStateDelta, ChapterArchiveStateDelta.revision_id == ChapterArchiveRevision.id)
-        .where(
-            ChapterArchiveRevision.is_active.is_(True),
-            ChapterArchiveRevision.status == "complete",
-            ChapterArchiveStateDelta.is_effective.is_(True),
-            or_(
-                ChapterArchiveStateDelta.character_id == character.id,
-                ChapterArchiveStateDelta.other_character_id == character.id,
-            ),
-        )
-    )
-    if v2_updated_index is not None:
-        data.dynamic_fields_updated_chapter_index = max(
-            data.dynamic_fields_updated_chapter_index or 0, v2_updated_index
-        )
+    # Materialized flags can outlive a source whose fingerprint has changed.
+    # Replay valid sources for reads as well as writes, without altering audit.
+    data.dynamic_fields = memory.fields.get(character.id, {})
+    data.dynamic_fields_updated_chapter_index = memory.updated_indexes.get(character.id)
     data.events = []
-    # One memory source per chapter: a chapter that carries an active v2
-    # revision must not also surface its legacy events here. export_memories
-    # already filters this way; the character detail endpoint used to show
-    # both, so the same chapter could contradict itself on screen.
-    legacy_superseded = {
-        chapter_id
-        for chapter_id in {event.chapter_id for event in events}
-        if (chapter := db.get(Chapter, chapter_id)) is not None
-        and active_archive_revision(db, chapter) is not None
-    }
+    # Live storylines use the same verified source per chapter as Selector.
+    # Ineligible legacy rows remain available through the direct audit API.
     for event in events:
-        if event.chapter_id in legacy_superseded:
+        if event.chapter_id not in memory.legacy_chapter_ids:
             continue
         data.events.append(
             CharacterEventRead(
@@ -128,6 +135,7 @@ def _character_read(db: Session, character: Character) -> CharacterRead:
         )
         .where(
             ChapterArchiveFactParticipant.character_id == character.id,
+            ChapterArchiveRevision.id.in_(memory.active_revision_ids),
             ChapterArchiveRevision.is_active.is_(True),
             ChapterArchiveRevision.status == "complete",
             Chapter.active_archive_revision_id == ChapterArchiveRevision.id,
@@ -157,7 +165,8 @@ def _character_read(db: Session, character: Character) -> CharacterRead:
 @router.get("/books/{book_id}/characters", response_model=list[CharacterRead])
 def list_characters(book_id: str, db: Session = Depends(get_db)) -> list[CharacterRead]:
     rows = db.scalars(select(Character).where(Character.book_id == book_id).order_by(Character.created_at)).all()
-    return [_character_read(db, row) for row in rows]
+    memory = _character_memory_read(db, book_id) if rows else None
+    return [_character_read(db, row, memory=memory) for row in rows]
 
 
 @router.post("/books/{book_id}/characters", response_model=CharacterRead, status_code=status.HTTP_201_CREATED)
@@ -220,12 +229,12 @@ def patch_character(
     if character.name != old_name:
         db.flush()
         rebuild_book_projection(db, character.book_id)
-    invalidated = invalidate_writer_inputs(db, chapters_for_character(db, character.id)) if writer_input_changed else []
+    invalidated_writer_jobs = invalidate_writer_inputs(db, chapters_for_character(db, character.id)) if writer_input_changed else []
     if payload.model_fields_set:
         bump_content_revision(character)
         rebuild_book_search_index(db, character.book_id)
     db.commit()
-    cancel_local_writer_jobs(invalidated)
+    cancel_local_writer_jobs(invalidated_writer_jobs)
     db.refresh(character)
     return _character_read(db, character)
 
@@ -243,7 +252,7 @@ def delete_character(
         affected_chapters = sorted(
             (link.chapter for link in character.chapter_links), key=lambda chapter: chapter.index
         )
-        invalidated = invalidate_writer_inputs(db, affected_chapters)
+        invalidated_writer_jobs = invalidate_writer_inputs(db, affected_chapters)
         for chapter in affected_chapters:
             invalidate_archive_if_input_changed(db, chapter, force=True)
             bump_content_revision(chapter)
@@ -260,7 +269,7 @@ def delete_character(
         rebuild_book_projection(db, book_id)
         rebuild_book_search_index(db, book_id)
         db.commit()
-        cancel_local_writer_jobs(invalidated)
+        cancel_local_writer_jobs(invalidated_writer_jobs)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -275,6 +284,7 @@ def patch_character_event(
     require_matching_revision(event, if_match, resource_type="character_event", resource_id=event.id, db=db)
     event.event_text = truncate_to_nonspace(payload.event_text, CHARACTER_EVENT_MAX_CHARS)
     bump_content_revision(event)
+    db.flush()
     rebuild_book_search_index(db, event.book_id)
     db.commit()
     db.refresh(event)
@@ -300,6 +310,7 @@ def delete_character_event(
         require_matching_revision(event, if_match, resource_type="character_event", resource_id=event.id, db=db)
         book_id = event.book_id
         db.delete(event)
+        db.flush()
         rebuild_book_search_index(db, book_id)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

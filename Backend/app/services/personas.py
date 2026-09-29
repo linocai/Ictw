@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from app.models import AgentModelBinding, AgentPersona, BookAgentPersona
 
 
+from app.persona_contract import BIBLE_FOCUS_PERSONAS, with_bible_focus
+
+
 DEFAULT_PERSONAS: dict[str, str] = {
     "memory_selector": (
         "你是严谨的小说记忆编辑。只压缩有明确来源的既有历史事实，为本章写作提供"
@@ -35,6 +38,10 @@ DEFAULT_PERSONAS: dict[str, str] = {
         "在用户给出的推进边界以内自然收束，不跳过人物关系或长期主线的中间阶段；不用固定大纲或场景编号填满篇幅。"
     ),
 }
+
+
+for _role in BIBLE_FOCUS_PERSONAS:
+    DEFAULT_PERSONAS[_role] = with_bible_focus(_role, DEFAULT_PERSONAS[_role])
 
 
 LEGACY_EXTRACTOR_PERSONAS = {
@@ -109,7 +116,9 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
         "Bible 为空或仅含空白时，跳过是否符合本章写作要求的检查，不能仅因此报告问题或判为 suspect、violation。"
         "其余基于已提供资料及正文的事实一致性、人物授权检查照常；此时 bible_evidence 留空，"
         "其他问题在 reason 中说明对应资料证据，不得补造 Bible。"
-        "每次还必须按程序局部片段分组返回 name_uses：每项含 hit_ids、classification、reason 和可选 character_id；"
+        "每次还必须按程序局部片段分组返回 name_uses：每项含 group_id、classification、reason 和可选 character_id；"
+        "group_id 必须原样使用程序给出的 g1、g2 等编号，每组恰好一次，不返回 hit_ids。"
+        "character_id 若提供，必须原样取自该组候选人物 ID；ordinary_word 必须省略 character_id，不能填写空字符串或姓名。"
         "classification 只能是 character、ordinary_word 或 uncertain。不要把不同局部片段或候选组一概归类。ordinary_word 不视为人物；人物授权问题由程序按分类和已选人物确定，可省略重复的身份 issue，"
         "不得凭此授权人物。"
     ),

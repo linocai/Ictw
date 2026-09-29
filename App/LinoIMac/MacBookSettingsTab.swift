@@ -9,6 +9,7 @@ struct MacBookSettingsTab: View {
     @EnvironmentObject private var bookshelf: BookshelfStore
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var editor: ChapterEditorStore
     let currentChapterID: String?
 
     @State private var title = ""
@@ -104,7 +105,7 @@ struct MacBookSettingsTab: View {
                     guard let book = session.currentBook else { return }
                     isExporting = true
                     await MacExportSaver.exportComposed(
-                        book: book, session: session, bookshelf: bookshelf,
+                        book: book, session: session, bookshelf: bookshelf, editor: editor,
                         scope: exportScope, currentChapterID: currentChapterID,
                         format: exportFormat, includeWorld: exportWorld, includeCharacters: exportCharacters,
                         separateChapters: exportSeparateChapters

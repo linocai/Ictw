@@ -44,7 +44,7 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
             title="前章",
             long_summary="上一章摘要",
             headline="上一章大事",
-            status="finalized",
+            status="finalized", legacy_archive_eligible=True,
         )
         chapter = Chapter(
             book_id=book.id,
@@ -104,11 +104,11 @@ def test_memory_candidates_scope_and_budget_packing(client, auth_headers):
             index=1,
             headline="可用大事",
             long_summary="可用摘要",
-            status="finalized",
+            status="finalized", legacy_archive_eligible=True,
         )
         unfinished = Chapter(book_id=first_book.id, index=2, headline="未完成", status="draft")
         current = Chapter(book_id=first_book.id, index=3, user_prompt="行动")
-        foreign = Chapter(book_id=second_book.id, index=1, headline="跨书", status="finalized")
+        foreign = Chapter(book_id=second_book.id, index=1, headline="跨书", status="finalized", legacy_archive_eligible=True)
         db.add_all([finalized, unfinished, current, foreign])
         db.commit()
         db.refresh(current)
@@ -137,7 +137,7 @@ def test_memory_candidates_emit_one_canonical_summary_per_chapter(client, auth_h
             index=1,
             headline="旧版大事记",
             long_summary="新版摘要",
-            status="finalized",
+            status="finalized", legacy_archive_eligible=True,
         )
         current = Chapter(book_id=book.id, index=2, user_prompt="继续")
         db.add_all([prior, current])
@@ -163,7 +163,7 @@ def test_memory_candidates_use_headline_only_when_canonical_summary_is_empty(cli
         book = Book(title="书")
         db.add(book)
         db.flush()
-        prior = Chapter(book_id=book.id, index=1, headline="兼容大事记", status="finalized")
+        prior = Chapter(book_id=book.id, index=1, headline="兼容大事记", status="finalized", legacy_archive_eligible=True)
         current = Chapter(book_id=book.id, index=2, user_prompt="继续")
         db.add_all([prior, current])
         db.commit()
@@ -183,11 +183,11 @@ def test_previous_ending_uses_only_adjacent_finalized_chapter_and_preserves_sour
         book = Book(title="书")
         db.add(book)
         db.flush()
-        old = Chapter(book_id=book.id, index=1, status="finalized", draft_text="更早章节结尾")
+        old = Chapter(book_id=book.id, index=1, status="finalized", legacy_archive_eligible=True, draft_text="更早章节结尾")
         adjacent = Chapter(
             book_id=book.id,
             index=2,
-            status="finalized",
+            status="finalized", legacy_archive_eligible=True,
             draft_text="第一段原文\n第二段原文\n最后一段原文",
         )
         current = Chapter(book_id=book.id, index=3, user_prompt="承接开场")
@@ -222,7 +222,7 @@ def test_previous_ending_is_capped_and_invalid_start_falls_back_deterministicall
         previous = Chapter(
             book_id=book.id,
             index=1,
-            status="finalized",
+            status="finalized", legacy_archive_eligible=True,
             draft_text="甲" * 500 + "\n" + "乙" * 500,
         )
         current = Chapter(book_id=book.id, index=2, user_prompt="继续")

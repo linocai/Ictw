@@ -15,7 +15,7 @@ from app.agents.checker import CheckerAgent
 from app.agents.extractor import ExtractorContractError
 from app.agents.memory_selector import MemorySelection, MemorySelectorAgent
 from app.agents.writer import WriterAgent
-from app.llm.base import LLMError, safe_block_reason, safe_finish_reason, safe_upstream_reason
+from app.llm.base import LLMError, LLMStreamIncompleteError, safe_block_reason, safe_finish_reason, safe_upstream_reason
 from app.models import Chapter, ChapterArchiveRevision, ChapterDraftCandidate, JobRun
 from app.models.entities import utc_now
 from app.services.audit import record_llm_call
@@ -38,6 +38,7 @@ from app.services.archive_v2 import (
     ArchiveFingerprintMismatch,
     ArchiveV2ValidationError,
     activate_archive_revision,
+    archive_input_fingerprint,
     invalidate_downstream_archives,
     mark_revision_extracting,
     mark_revision_failed,
@@ -61,8 +62,8 @@ from app.services.production_context import (
 from app.services.search_index import rebuild_book_search_index
 from app.services.character_state_projection import rebuild_book_projection
 from app.services.write_ownership import (
+    InvalidatedWriterJob,
     cancel_local_writer_jobs,
-    invalidate_writer_inputs,
 )
 
 
@@ -103,6 +104,8 @@ class WriteJob:
         checker_draft_fingerprint: str = "",
         checker_user_message: str = "",
         selector_input_snapshot: dict[str, Any] | None = None,
+        reused_memory_manifest: dict[str, Any] | None = None,
+        rewrite_reference_key: str | None = None,
     ) -> None:
         self.chapter_id = chapter_id
         self.job_id = job_id
@@ -128,6 +131,8 @@ class WriteJob:
         self.checker_draft_fingerprint = checker_draft_fingerprint
         self.checker_user_message = checker_user_message
         self.selector_input_snapshot = selector_input_snapshot or {}
+        self.reused_memory_manifest = reused_memory_manifest
+        self.rewrite_reference_key = rewrite_reference_key
         self.cancel_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.discard_on_cancel = False
@@ -209,6 +214,13 @@ class WriteJobRegistry:
                 job.phase = "cancelled"
                 job._terminal = True
                 return True
+
+    def cancel_by_id(self, chapter_id: str, job_id: str, *, discard: bool = False) -> bool:
+        """Cancel one frozen task identity, even if a later owner was admitted."""
+        job = self.get(chapter_id)
+        if job is None or job.job_id != job_id:
+            return False
+        return self.cancel(job, discard=discard)
 
     def finish_if_current(self, job: WriteJob, persist: Callable[[], None], *, phase: str) -> bool:
         """Persist a terminal result only while this job exclusively owns the chapter.
@@ -313,11 +325,16 @@ def fail_unlaunched_job(
             return False
         chapter = db.get(Chapter, job.chapter_id)
         if job.kind == "write" and chapter is not None and job.chapter_write_generation is not None:
+            latest_job_id = select(JobRun.id).where(
+                JobRun.chapter_id == job.chapter_id,
+            ).order_by(JobRun.created_at.desc(), JobRun.id.desc()).limit(1).scalar_subquery()
             db.execute(
                 update(Chapter)
                 .where(
                     Chapter.id == chapter.id,
                     Chapter.write_generation == job.chapter_write_generation,
+                    Chapter.status == "writing",
+                    latest_job_id == job.job_id,
                 )
                 .values(
                     draft_text=job.baseline_text,
@@ -548,6 +565,31 @@ def _valid_checker_result(raw: Any, fingerprint: str, *, bible_required: bool = 
 
 
 def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
+    """Unexpected worker failures must not leave a live chapter reservation."""
+    try:
+        _run_checker_attempt(job, sf)
+    except Exception as exc:
+        logger.warning("checker_execution_failed job_id=%s exception_type=%s", job.job_id, type(exc).__name__)
+        snapshot = job.checker_snapshot
+        code = "checker_retry_failed" if snapshot.get("draft", {}).get("source") == "candidate" else "checker_failed"
+        unavailable = {
+            "status": "unavailable", "error_code": code,
+            "error_message": "检查未能完成，正文已保留，请重新检查",
+            "draft_fingerprint": job.checker_draft_fingerprint,
+            "input_fingerprint": snapshot.get("input_fingerprint", ""),
+            "check_attempt_id": job.job_id,
+        }
+        try:
+            record_job_phase(
+                sf, job.job_id, "failed", error_code=code, checker_result=unavailable,
+                error_message="检查未能完成，正文已保留，请重新检查",
+                error_context={"agent_role": "checker"},
+            )
+        finally:
+            job.mark_terminal("failed")
+
+
+def _run_checker_attempt(job: WriteJob, sf: sessionmaker[Session]) -> None:
     """Run one frozen Checker attempt without repeating Writer/Selector work.
 
     The route has already persisted the immutable check attempt and constructed
@@ -577,6 +619,15 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             "error_message": checker_failure_message(exc),
             "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or "")},
             "_validation_diagnostics": checker_failure_diagnostics(exc),
+        }
+    except Exception as exc:
+        logger.warning("checker_execution_failed job_id=%s exception_type=%s", job.job_id, type(exc).__name__)
+        result = {
+            "status": "unavailable", "draft_fingerprint": fingerprint,
+            "input_fingerprint": snapshot.get("input_fingerprint", ""),
+            "check_attempt_id": job.job_id, "error_code": "checker_failed" if visible_draft else "checker_retry_failed",
+            "error_message": "检查未能完成，正文已保留，请重新检查",
+            "error_context": {"agent_role": "checker"},
         }
 
     # Result payloads are also consumed directly by the job read-model.  Use
@@ -622,7 +673,9 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 return False
 
             candidate.checker_result = result
-            if result.get("verdict") == "passed":
+            if result.get("verdict") == "passed" or (
+                visible_draft and result.get("verdict") in {"suspect", "violation"}
+            ):
                 if visible_draft:
                     # A manual reread is informational.  It never changes
                     # accepted/finalized state, revision, search index, or
@@ -732,7 +785,10 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     # results. A cancelled/replaced check cannot publish after its replacement
     # transaction rolls back; finalizing also excludes a late local cancel.
     if not write_registry.finish_if_current(
-        job, persist_result, phase="done" if result.get("verdict") == "passed" else "failed",
+        job, persist_result, phase="done" if (
+            result.get("verdict") == "passed"
+            or (visible_draft and result.get("verdict") in {"suspect", "violation"})
+        ) else "failed",
     ):
         record_job_phase(sf, job.job_id, "cancelled", error_code="checker_input_changed",
                          error_message="检查任务已被替换或取消，旧结论未应用")
@@ -774,6 +830,8 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             "previous_ending": previous_ending,
             "selection_mode": "deterministic_no_selector",
         }
+        if job.reused_memory_manifest is not None:
+            manifest = job.reused_memory_manifest
         # No session/transaction is retained while either model is executing.
         # Selector receives the pure prompt frozen by the route; refresh all
         # database state after it returns before building Writer input.
@@ -851,6 +909,18 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 return
             job.mark_terminal("failed")
             return
+        from app.services.production_context import rewrite_reference_key
+        if job.rewrite_reference_key and rewrite_reference_key(db, chapter, job.memory_candidates) != job.rewrite_reference_key:
+            if not _restore_baseline(
+                db, job, phase="failed", error_code="production_input_changed",
+                error_message="生成前参考资料已变化，原正文已保留；请重新生成",
+            ):
+                _mark_chapter_changed(sf, job)
+                job.mark_terminal("cancelled")
+                return
+            job.mark_terminal("failed")
+            return
+        prepared_checker_snapshot["rewrite_reference_key"] = job.rewrite_reference_key
         reference_context = prepared_checker_snapshot["reference_context"]
         message = writer_user_message(
             chapter.book, chapter, bible=job.bible_snapshot, reference_context=reference_context,
@@ -866,14 +936,33 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         db.commit()
         last_candidate: ChapterDraftCandidate | None = None
         for attempt in (1, 2):
+            if _should_stop(job):
+                if not _restore_baseline(
+                    db, job, phase="cancelled", error_code="write_cancelled", error_message="写作任务已取消"
+                ):
+                    _mark_chapter_changed(sf, job)
+                job.mark_terminal("cancelled")
+                return
             record_job_phase(sf, job.job_id, "writing", attempt=attempt)
-            text = _run_writer(job, sf, message)
+            incomplete: LLMStreamIncompleteError | None = None
+            try:
+                text = _run_writer(job, sf, message)
+            except LLMStreamIncompleteError as exc:
+                # Only a readable, unterminated stream shares the existing
+                # full-rewrite budget. Transport errors and safety failures
+                # remain failures; this is never an inner retry loop.
+                incomplete = exc
+                text = ""
             if _should_stop(job):
                 if not _restore_baseline(
                     db, job, phase="cancelled", error_code="write_cancelled", error_message="写作任务已取消"
                 ):
                     _mark_chapter_changed(sf, job)
                 job.mark_terminal(); return
+            if incomplete is not None:
+                if attempt == 1:
+                    continue
+                raise incomplete
             _normal_finish_or_raise(job, "writer", job.writer)
             violations = draft_violations(db, chapter, text, job.writer.finish_reason if job.writer else None)
             last_candidate = _persist_candidate(db, job, chapter, text, attempt, violations)
@@ -965,6 +1054,15 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 "error_message": checker_failure_message(exc),
                 "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or "")},
                 "_validation_diagnostics": checker_failure_diagnostics(exc),
+            }
+        except Exception as exc:
+            logger.warning("checker_execution_failed job_id=%s exception_type=%s", job.job_id, type(exc).__name__)
+            checker_result = {
+                "status": "unavailable", "draft_fingerprint": fingerprint,
+                "input_fingerprint": checker_snapshot["input_fingerprint"],
+                "check_attempt_id": job.job_id, "error_code": "checker_retry_failed",
+                "error_message": "检查未能完成，生成稿已保留，可单独重试检查",
+                "error_context": {"agent_role": "checker"},
             }
         checker_result["context_limitations"] = _public_context_limitations(
             checker_snapshot.get("context_limitations")
@@ -1154,29 +1252,59 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     db = sf()
     client: Any | None = None
     try:
+        # Serialize the startup proof and pending -> extracting write with
+        # reopen/import, including a worker launched after invalidation.
+        _begin_final_checker_cas(db)
         chapter = db.get(Chapter, job.chapter_id)
         revision = db.get(ChapterArchiveRevision, job.archive_revision_id) if job.archive_revision_id else None
         if chapter is None or revision is None:
-            record_job_phase(
-                sf,
+            _apply_job_phase(
+                db,
                 job.job_id,
                 "failed",
                 error_code="chapter_missing",
                 error_message="章节或归档任务不存在",
             )
+            db.commit()
             job.mark_terminal("failed")
             return
         run = db.get(JobRun, job.job_id)
+        latest_id = db.scalar(select(ChapterArchiveRevision.id).where(
+            ChapterArchiveRevision.chapter_id == job.chapter_id,
+        ).order_by(ChapterArchiveRevision.revision.desc()).limit(1))
         # A different process may have reopened the chapter before this worker
         # acquired its session.  The durable run/revision lifecycle, not this
         # process's registry, decides whether an Extractor call is still valid.
         if (
             run is None
-            or run.phase in TERMINAL_PHASES
+            or run.phase not in {"pending", "extracting"}
+            or run.kind != "extract"
+            or run.chapter_id != chapter.id
+            or run.archive_revision_id != revision.id
             or chapter.status != "finalized"
             or revision.status not in {"pending", "extracting"}
+            or revision.chapter_id != chapter.id
+            or latest_id != revision.id
+            or revision.input_fingerprint != archive_input_fingerprint(
+                chapter, contract_version=revision.contract_version,
+            )
         ):
-            db.rollback()
+            # A prior chapter can change after registration but before this
+            # worker starts. End its frozen unfinished revision as well as
+            # the run, or the public archive remains permanently pending.
+            if revision.chapter_id == chapter.id and revision.status in {"pending", "extracting"}:
+                revision.status = "stale"
+                revision.is_active = False
+                revision.error_code = "archive_input_changed"
+                revision.error_message = "归档输入已变更，旧结果未应用"
+                revision.finished_at = utc_now()
+                if chapter.status == "finalized" and latest_id == revision.id:
+                    chapter.archive_status = "stale"
+                    bump_content_revision(chapter)
+            db.flush()
+            _apply_job_phase(db, job.job_id, "cancelled", error_code="archive_input_changed",
+                             error_message="归档任务已失效，旧结果未应用")
+            db.commit()
             job.mark_terminal("cancelled")
             return
         mark_revision_extracting(revision, chapter)
@@ -1198,19 +1326,11 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         validated = validate_archive_output(chapter, output)
         if _should_stop(job):
             db.rollback()
-            chapter = db.get(Chapter, job.chapter_id)
-            revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
-            if chapter is not None and revision is not None and revision.status in {"pending", "extracting"}:
-                mark_revision_failed(
-                    revision,
-                    chapter,
-                    error_code="archive_cancelled",
-                    error_message="归档任务已取消",
-                )
-                db.commit()
+            # The route that ended/replaced this exact task owns its durable
+            # invalidation. A late worker must not change a newer public state.
             return
 
-        invalidated_writer_chapters: list[str] = []
+        invalidated_writer_chapters: list[InvalidatedWriterJob] = []
 
         def persist_complete() -> None:
             nonlocal invalidated_writer_chapters
@@ -1266,128 +1386,91 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         else:
             cancel_local_writer_jobs(invalidated_writer_chapters)
     except LLMError as exc:
-        db.rollback()
-        _log_archive_failure(
-            job,
-            stage="upstream",
-            error_code=exc.code,
-            client=client,
-            error_context=_error_context(exc),
-        )
-        chapter = db.get(Chapter, job.chapter_id)
-        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
-        if chapter is not None and revision is not None:
-            mark_revision_failed(revision, chapter, error_code=exc.code, error_message=str(exc))
-            bump_content_revision(chapter)
-            db.flush()
-            _apply_job_phase(
-                db,
-                job.job_id,
-                "failed",
-                attempt=1,
-                error_code=exc.code,
-                error_message=str(exc),
-                error_context=_error_context(exc),
-            )
-            db.commit()
-        job.mark_terminal("failed")
+        _log_archive_failure(job, stage="upstream", error_code=exc.code,
+                             client=client, error_context=_error_context(exc))
+        _finish_archive_failure(db, job, error_code=exc.code, message=str(exc),
+                                error_context=_error_context(exc))
     except ArchiveFingerprintMismatch as exc:
-        db.rollback()
-        _log_archive_failure(
-            job,
-            stage="activation",
-            error_code="archive_input_changed",
-            reason="archive input fingerprint changed",
-            client=client,
-        )
-        chapter = db.get(Chapter, job.chapter_id)
-        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
-        if chapter is not None and revision is not None:
-            revision.status = "stale"
-            revision.error_code = "archive_input_changed"
-            revision.error_message = str(exc)
-            revision.finished_at = utc_now()
-            # Mirrors activate_archive_revision: a stale attempt must not strip
-            # the chapter of its surviving memory source. Clearing
-            # legacy_archive_eligible here erased legacy chapters outright
-            # whenever a manual retry raced an edit to an earlier chapter.
-            chapter.archive_status = "stale"
-            bump_content_revision(chapter)
-            db.flush()
-            _apply_job_phase(
-                db,
-                job.job_id,
-                "failed",
-                attempt=1,
-                error_code="archive_input_changed",
-                error_message=str(exc),
-            )
-            rebuild_book_projection(db, chapter.book_id)
-            rebuild_book_search_index(db, chapter.book_id)
-            db.commit()
-        job.mark_terminal("failed")
+        _log_archive_failure(job, stage="activation", error_code="archive_input_changed",
+                             reason="archive input fingerprint changed", client=client)
+        _finish_archive_failure(db, job, error_code="archive_input_changed",
+                                message=str(exc), failure_kind="stale")
     except (ArchiveV2ValidationError, ExtractorContractError) as exc:
-        db.rollback()
-        chapter = db.get(Chapter, job.chapter_id)
-        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
         reason = str(exc)
-        _log_archive_failure(
-            job,
-            stage="archive_validation",
-            error_code="archive_validation_failed",
-            reason=reason,
-            client=client,
+        _log_archive_failure(job, stage="archive_validation", error_code="archive_validation_failed",
+                             reason=reason, client=client)
+        summary = output.get("summary", "") if "output" in locals() and isinstance(output, dict) else ""
+        _finish_archive_failure(
+            db, job, error_code="archive_validation_failed",
+            message=f"归档未通过确定性校验：{archive_validation_message(reason)}",
+            failure_kind="partial", reason=reason, summary=summary,
+            diagnostics=getattr(exc, "diagnostics", None),
+            error_context={"stage": "archive_validation", "attempts": 1, "reason": reason},
         )
-        if chapter is not None and revision is not None:
-            summary = output.get("summary", "") if "output" in locals() and isinstance(output, dict) else ""
-            mark_revision_partial(
-                revision,
-                chapter,
-                reason=reason,
-                summary=summary,
-                diagnostics=getattr(exc, "diagnostics", None),
-            )
-            bump_content_revision(chapter)
-            db.flush()
-            _apply_job_phase(
-                db,
-                job.job_id,
-                "failed",
-                attempt=1,
-                error_code="archive_validation_failed",
-                error_message=f"归档未通过确定性校验：{archive_validation_message(reason)}",
-                error_context={"stage": "archive_validation", "attempts": 1, "reason": reason},
-            )
-            db.commit()
-        job.mark_terminal("failed")
     except Exception as exc:
-        db.rollback()
-        _log_archive_failure(
-            job,
-            stage="persistence",
-            error_code="extract_failed",
-            client=client,
-            exception_type=type(exc).__name__,
-        )
-        chapter = db.get(Chapter, job.chapter_id)
-        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
-        if chapter is not None and revision is not None:
-            message = "归档任务执行失败"
-            mark_revision_failed(revision, chapter, error_code="extract_failed", error_message=message)
-            bump_content_revision(chapter)
-            db.flush()
-            _apply_job_phase(
-                db,
-                job.job_id,
-                "failed",
-                attempt=1,
-                error_code="extract_failed",
-                error_message=message,
-            )
-            db.commit()
-        job.mark_terminal("failed")
+        _log_archive_failure(job, stage="persistence", error_code="extract_failed",
+                             client=client, exception_type=type(exc).__name__)
+        _finish_archive_failure(db, job, error_code="extract_failed", message="归档任务执行失败")
     finally:
         db.close()
+
+
+def _finish_archive_failure(
+    db: Session, job: WriteJob, *, error_code: str, message: str,
+    failure_kind: str = "failed", reason: str = "", summary: str = "",
+    diagnostics: list[dict] | None = None, error_context: dict | None = None,
+) -> None:
+    """A late failure has exactly the same ownership requirements as success."""
+    db.rollback()
+
+    def persist() -> bool:
+        _begin_final_checker_cas(db)
+        run = db.get(JobRun, job.job_id)
+        chapter = db.get(Chapter, job.chapter_id)
+        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
+        latest_id = db.scalar(select(ChapterArchiveRevision.id).where(
+            ChapterArchiveRevision.chapter_id == job.chapter_id,
+        ).order_by(ChapterArchiveRevision.revision.desc()).limit(1))
+        if not (
+            run is not None and run.phase in {"pending", "extracting"}
+            and run.archive_revision_id == job.archive_revision_id
+            and chapter is not None and chapter.status == "finalized"
+            and revision is not None and revision.chapter_id == chapter.id
+            and revision.status in {"pending", "extracting"} and latest_id == revision.id
+        ):
+            # A reopen/cancel/new revision already owns the public state.
+            _apply_job_phase(db, job.job_id, "cancelled", error_code="archive_input_changed",
+                             error_message="归档任务已失效，旧结果未应用")
+            db.commit()
+            job.mark_terminal("cancelled")
+            return False
+        if failure_kind == "partial":
+            mark_revision_partial(revision, chapter, reason=reason, summary=summary, diagnostics=diagnostics)
+        elif failure_kind == "stale":
+            revision.status = "stale"
+            revision.error_code = error_code
+            revision.error_message = message
+            revision.finished_at = utc_now()
+            chapter.archive_status = "stale"
+            rebuild_book_projection(db, chapter.book_id)
+            rebuild_book_search_index(db, chapter.book_id)
+        else:
+            mark_revision_failed(revision, chapter, error_code=error_code, error_message=message)
+        bump_content_revision(chapter)
+        db.flush()
+        if not _apply_job_phase(db, job.job_id, "failed", attempt=1, error_code=error_code,
+                                error_message=message, error_context=error_context):
+            db.rollback()
+            return False
+        db.commit()
+        return True
+
+    try:
+        if not write_registry.finish_if_current(job, persist, phase="failed"):
+            db.rollback()
+    finally:
+        if not job.is_terminal:
+            job.mark_terminal("failed")
 
 
 def _extractor_user_reason(reason: str) -> str:
@@ -1504,11 +1587,16 @@ def _restore_baseline(db: Session, job: WriteJob, *, phase: str | None = None, *
     """Restore only if this job still owns the persisted chapter generation."""
     if job.chapter_write_generation is None:
         return False
+    latest_job_id = select(JobRun.id).where(
+        JobRun.chapter_id == job.chapter_id,
+    ).order_by(JobRun.created_at.desc(), JobRun.id.desc()).limit(1).scalar_subquery()
     result = db.execute(
         update(Chapter)
         .where(
             Chapter.id == job.chapter_id,
             Chapter.write_generation == job.chapter_write_generation,
+            Chapter.status == "writing",
+            latest_job_id == job.job_id,
         )
         .values(
             draft_text=job.baseline_text,

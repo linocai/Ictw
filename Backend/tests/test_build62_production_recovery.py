@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 import app.db as db_module
 import app.routers.chapters as routes
 import app.services.archive_v2 as archives
-import app.services.content_revisions as revisions
 import app.services.write_jobs as jobs
 from app.llm.factory import get_checker_client, get_extractor_client, get_writer_client
 from app.models import Chapter, ChapterArchiveRevision, ChapterDraftCandidate, JobRun
@@ -58,7 +57,10 @@ def test_archive_final_proof_serializes_concurrent_edit(
     worker = local()
     original_activate = jobs.activate_archive_revision
     original_fingerprint = archives.archive_input_fingerprint
-    original_cas = revisions.begin_sqlite_write_cas
+    # PATCH/reopen now reserve SQLite before their first chapter proof read.
+    # Observe that real admission point rather than the later If-Match helper,
+    # which cannot be reached until this first reservation has succeeded.
+    original_cas = routes._begin_short_write_cas
 
     def activate(*args, **kwargs):
         worker.activating = True
@@ -81,7 +83,7 @@ def test_archive_final_proof_serializes_concurrent_edit(
 
     monkeypatch.setattr(jobs, "activate_archive_revision", activate)
     monkeypatch.setattr(archives, "archive_input_fingerprint", fingerprint)
-    monkeypatch.setattr(revisions, "begin_sqlite_write_cas", competing_cas)
+    monkeypatch.setattr(routes, "_begin_short_write_cas", competing_cas)
     accepted = accept(client, auth_headers, target["id"])
     assert proof.wait(5)
     edited = first if edit_prior else target

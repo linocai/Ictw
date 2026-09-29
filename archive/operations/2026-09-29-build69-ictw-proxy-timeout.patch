@@ -1,0 +1,9 @@
+--- a/data/nginx/custom/http_top.conf
++++ b/data/nginx/custom/http_top.conf
+@@ -34,4 +34,4 @@
+         proxy_connect_timeout 10s;
+-        proxy_read_timeout 90s;
+-        proxy_send_timeout 90s;
++        proxy_read_timeout 420s;
++        proxy_send_timeout 420s;
+     }

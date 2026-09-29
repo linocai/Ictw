@@ -352,6 +352,10 @@ def apply_extractor_output(db: Session, chapter: Chapter, output: dict[str, Any]
     chapter.unresolved_items = validated.archive_values["unresolved_items"]
     chapter.atomic_memories = validated.archive_values["atomic_memories"]
     chapter.status = "finalized"
+    # This compatibility writer has fully validated legacy output. Grant the
+    # same explicit eligibility as migrated legacy archives, never infer it
+    # from an absent v2 fingerprint at read time.
+    chapter.legacy_archive_eligible = True
     db.flush()
     rebuild_book_projection(db, chapter.book_id)
     updated = sorted({change.character_id for change in validated.state_changes} | {change.other_character_id for change in validated.state_changes if change.other_character_id})

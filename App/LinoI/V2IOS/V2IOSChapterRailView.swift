@@ -3,6 +3,8 @@ import SwiftUI
 struct V2IOSChapterRailView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var sync: ClientSyncStore
@@ -43,13 +45,18 @@ struct V2IOSChapterRailView: View {
         }
         .task(id: session.currentBook?.id) {
             guard let book = session.currentBook else { return }
+            let contextID = session.bookContextID
             await workspace.load(bookId: book.id)
+            guard !Task.isCancelled, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
             await characters.load(bookId: book.id)
+            guard !Task.isCancelled, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
             await agents.load()
         }
         .refreshable {
             guard let book = session.currentBook else { return }
+            let contextID = session.bookContextID
             await workspace.load(bookId: book.id)
+            guard !Task.isCancelled, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
             await characters.load(bookId: book.id)
         }
         .sheet(isPresented: $showingWorld) { V2IOSWorldEditorView().presentationCornerRadius(V2DeskMetric.sheetCornerRadius) }
@@ -76,7 +83,10 @@ struct V2IOSChapterRailView: View {
 
     private var header: some View {
         HStack(spacing: 7) {
-            V2IOSBackButton(action: session.closeBook, label: "返回书架")
+            V2IOSBackButton(action: {
+                guard V2IOSBookNavigation.prepare(editor: editor, workspace: workspace, characters: characters, inspiration: inspiration) else { return }
+                session.closeBook()
+            }, label: "返回书架")
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.currentBook?.title.v2IOSTrimmed.isEmpty == false ? session.currentBook!.title : "未命名书籍")
                     .font(V2DeskType.prose(18, weight: .semibold)).lineLimit(1)

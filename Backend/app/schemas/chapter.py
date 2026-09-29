@@ -225,6 +225,7 @@ class CheckerRunRequest(BaseModel):
 
 class CheckerRetryRequest(BaseModel):
     source_job_id: str = Field(min_length=1, max_length=36)
+    request_id: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 class ProductionContextLimitationRead(BaseModel):

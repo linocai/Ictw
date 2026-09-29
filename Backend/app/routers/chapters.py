@@ -129,6 +129,14 @@ def get_lazy_extractor_resolver(request: Request) -> Callable[[Session, str], ob
     return lambda session, chapter_id: get_extractor_client(chapter_id=chapter_id, db=session)
 
 
+def get_lazy_checker_resolver(request: Request) -> Callable[[Session, str], object]:
+    """Existing retry receipts remain readable after model configuration changes."""
+    override = request.app.dependency_overrides.get(get_checker_client)
+    if override is not None:
+        return lambda _db, _chapter_id: override()
+    return lambda session, chapter_id: get_checker_client(chapter_id=chapter_id, db=session)
+
+
 def get_lazy_memory_selector_resolver(request: Request) -> Callable[[Session, str], object]:
     """Avoid requiring any Selector configuration when history is empty."""
     override = request.app.dependency_overrides.get(get_memory_selector_client)
@@ -348,6 +356,7 @@ def _candidate_checker_input_current(
     draft = snapshot.get("draft")
     return bool(
         isinstance(draft, dict)
+        and draft.get("source") == "candidate"
         and candidate.checker_input_snapshot == snapshot
         and candidate.checker_input_fingerprint == snapshot.get("input_fingerprint")
         and hashlib.sha256(candidate.draft_text.encode()).hexdigest() == draft.get("sha256")
@@ -738,6 +747,27 @@ def create_inspirations(
     )
 
 
+def _cancel_local_job_ids(chapter_id: str, job_ids: list[str]) -> None:
+    for job_id in job_ids:
+        write_registry.cancel_by_id(chapter_id, job_id, discard=True)
+
+
+def _reopen_archive_lifecycle(db: Session, chapter: Chapter, previous_fingerprint: str) -> list[str]:
+    """Apply the same archive invalidation transaction to every reopen path."""
+    job_ids = stale_archives_for_reopen(db, chapter)
+    chapter.status = "draft_ready"
+    invalidate_archive_if_input_changed(
+        db, chapter, previous_fingerprint=previous_fingerprint, force=True,
+    )
+    invalidated_downstream = invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
+    for downstream_id in invalidated_downstream:
+        downstream = db.get(Chapter, downstream_id)
+        if downstream is not None:
+            bump_content_revision(downstream)
+    rebuild_book_projection(db, chapter.book_id)
+    return job_ids
+
+
 @router.patch("/chapters/{chapter_id}", response_model=ChapterRead)
 def patch_chapter(
     chapter_id: str,
@@ -745,6 +775,7 @@ def patch_chapter(
     db: Session = Depends(get_db),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> ChapterRead:
+    _begin_short_write_cas(db)
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
@@ -799,16 +830,16 @@ def patch_chapter(
     # the fields in the frozen Checker input (or its name authorization), so
     # treat a finalized edit as a reopen and require a current check again.
     reopened_by_input_edit = was_finalized and check_inputs_changed
+    archive_job_ids: list[str] = []
     if reopened_by_input_edit:
-        chapter.status = "draft_ready"
-        stale_archives_for_reopen(db, chapter)
+        archive_job_ids = _reopen_archive_lifecycle(db, chapter, previous_archive_fingerprint)
+    writer_job_ids: list[str] = []
     if payload.model_fields_set:
-        invalidated = invalidate_writer_inputs(db, [chapter])
-    archive_invalidated = invalidate_archive_if_input_changed(
+        writer_job_ids = [job.job_id for job in invalidate_writer_inputs(db, [chapter])]
+    archive_invalidated = not reopened_by_input_edit and invalidate_archive_if_input_changed(
         db, chapter, previous_fingerprint=previous_archive_fingerprint,
-        force=reopened_by_input_edit,
     )
-    if archive_invalidated or reopened_by_input_edit:
+    if archive_invalidated:
         invalidated_downstream = invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
         for downstream_id in invalidated_downstream:
             downstream = db.get(Chapter, downstream_id)
@@ -819,12 +850,7 @@ def patch_chapter(
         bump_content_revision(chapter)
     rebuild_book_search_index(db, chapter.book_id)
     db.commit()
-    if payload.model_fields_set:
-        cancel_local_writer_jobs(invalidated)
-    if reopened_by_input_edit:
-        live_job = write_registry.get_live(chapter.id)
-        if live_job is not None and live_job.kind == "extract":
-            write_registry.cancel(live_job, discard=True)
+    _cancel_local_job_ids(chapter.id, writer_job_ids + archive_job_ids)
     db.refresh(chapter)
     return _chapter_read(chapter)
 
@@ -900,12 +926,12 @@ def delete_chapter(
     # this follows the same shape as `import_chapter`: advance the persistent
     # generation inside this transaction, prompt the local registry only after
     # it commits.
-    invalidated = invalidate_writer_inputs(db, following)
+    invalidated_writer_jobs = invalidate_writer_inputs(db, following)
     invalidate_downstream_archives(db, book_id, after_index=old_index - 1)
     rebuild_book_projection(db, book_id)
     rebuild_book_search_index(db, book_id)
     db.commit()
-    cancel_local_writer_jobs(invalidated)
+    cancel_local_writer_jobs(invalidated_writer_jobs)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -916,6 +942,7 @@ def import_chapter(
     db: Session = Depends(get_db),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> ChapterRead:
+    _begin_short_write_cas(db)
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
@@ -923,7 +950,6 @@ def import_chapter(
     previous_archive_fingerprint = archive_input_fingerprint(chapter)
     chapter.draft_text = payload.draft_text
     chapter.source = "imported"
-    chapter.status = "draft_ready"
     for key in ("title", "user_prompt", "target_word_count"):
         value = getattr(payload, key)
         if value is not None:
@@ -932,21 +958,12 @@ def import_chapter(
         _apply_author_note(chapter, payload.author_note)
     if payload.character_links is not None:
         _replace_links(db, chapter, payload.character_links)
-    invalidated = invalidate_writer_inputs(db, [chapter])
-    archive_invalidated = invalidate_archive_if_input_changed(
-        db, chapter, previous_fingerprint=previous_archive_fingerprint
-    )
-    if archive_invalidated:
-        invalidated_downstream = invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
-        for downstream_id in invalidated_downstream:
-            downstream = db.get(Chapter, downstream_id)
-            if downstream is not None:
-                bump_content_revision(downstream)
-        rebuild_book_projection(db, chapter.book_id)
+    writer_job_ids = [job.job_id for job in invalidate_writer_inputs(db, [chapter])]
+    archive_job_ids = _reopen_archive_lifecycle(db, chapter, previous_archive_fingerprint)
     bump_content_revision(chapter)
     rebuild_book_search_index(db, chapter.book_id)
     db.commit()
-    cancel_local_writer_jobs(invalidated)
+    _cancel_local_job_ids(chapter.id, writer_job_ids + archive_job_ids)
     db.refresh(chapter)
     return _chapter_read(chapter)
 
@@ -996,7 +1013,11 @@ def write_chapter(
     bible_sha256 = hashlib.sha256(bible_snapshot.encode()).hexdigest()
     # A previous-ending excerpt is deterministic context, not a historical
     # choice. Do not parse/call an otherwise unused Selector binding for it.
-    needs_selector = any(block.memory_type != "previous_ending" for block in candidates)
+    from app.services.production_context import rewrite_reference_key, reusable_write_memory
+
+    reference_key = rewrite_reference_key(db, chapter, candidates)
+    reused_memory = reusable_write_memory(db, chapter, reference_key)
+    needs_selector = reused_memory is None and any(block.memory_type != "previous_ending" for block in candidates)
     memory_selector_client = memory_selector_resolver(db, chapter.id) if needs_selector else None
     selector_message = ""
     selector_input_snapshot: dict[str, object] | None = None
@@ -1020,7 +1041,7 @@ def write_chapter(
         bible_sha256=bible_sha256,
         chapter_write_generation=chapter.write_generation,
         model_binding_snapshot={
-            "memory_selector": _model_snapshot(memory_selector_client) if memory_selector_client is not None else {"skipped": "no_memory_candidates"},
+            "memory_selector": _model_snapshot(memory_selector_client) if memory_selector_client is not None else {"skipped": "reused_reference" if reused_memory is not None else "no_memory_candidates"},
             "writer": _model_snapshot(writer_client),
             "checker": _model_snapshot(checker_client),
         },
@@ -1044,6 +1065,8 @@ def write_chapter(
         bible_sha256=bible_sha256,
         chapter_write_generation=chapter.write_generation,
         selector_input_snapshot=selector_input_snapshot,
+        reused_memory_manifest=reused_memory,
+        rewrite_reference_key=reference_key,
     )
     try:
         # Complete fallible input/configuration preparation before replacing
@@ -1154,43 +1177,59 @@ def chapter_job(chapter_id: str, db: Session = Depends(get_db)) -> WriteJobStatu
 @router.post("/chapters/{chapter_id}/write/cancel", response_model=ChapterRead)
 def cancel_write(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRead:
     job = write_registry.get_live(chapter_id)
+    job_id = job.job_id if job is not None else ""
+    kind = job.kind if job is not None else ""
+    generation = job.chapter_write_generation if job is not None else None
+    archive_revision_id = job.archive_revision_id if job is not None else ""
+    cancelled = False
     if job is not None:
-        write_registry.cancel(job, discard=True)
+        cancelled = write_registry.cancel(job, discard=True)
         if job.thread is not None:
             job.thread.join(timeout=8)
     db.expire_all()
+    _begin_short_write_cas(db)
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
-    if job is not None and job.kind == "write":
-        invalidated = invalidate_writer_inputs(db, [chapter])
+    run = db.get(JobRun, job_id) if cancelled and job_id else None
+    target_current = run is not None and run.chapter_id == chapter_id and run.kind == kind
+    latest_job_id = db.scalar(select(JobRun.id).where(
+        JobRun.chapter_id == chapter_id,
+    ).order_by(JobRun.created_at.desc(), JobRun.id.desc()).limit(1))
+    owns_chapter = target_current and latest_job_id == job_id
+    # The cancelled handle is terminal before join starts, so another request
+    # can already own this chapter. Only the frozen Writer generation may be
+    # invalidated; never perform a chapter-wide cancellation after the wait.
+    if owns_chapter and kind == "write" and generation is not None and chapter.write_generation == generation:
+        chapter.write_generation += 1
+        if chapter.status == "writing":
+            chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
         bump_content_revision(chapter)
-        db.commit()
-        db.refresh(chapter)
-        cancel_local_writer_jobs(invalidated)
-    if job is not None and job.kind == "extract" and job.archive_revision_id:
-        revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
-        if revision is not None and revision.status in {"pending", "extracting"}:
+    if target_current and kind == "extract" and archive_revision_id:
+        revision = db.get(ChapterArchiveRevision, archive_revision_id)
+        if (revision is not None and revision.chapter_id == chapter_id
+                and run.archive_revision_id == archive_revision_id
+                and revision.status in {"pending", "extracting"}):
             revision.status = "failed"
             revision.error_code = "archive_cancelled"
             revision.error_message = "归档任务已取消"
             revision.finished_at = utc_now()
-            chapter.archive_status = "complete" if chapter.active_archive_revision_id else "failed"
-            bump_content_revision(chapter)
-            db.commit()
-            db.refresh(chapter)
-    # A `check` job observes visible prose only.  In particular, cancelling a
-    # check on finalized prose must not reopen it or disturb its archive.
-    if chapter.status in ("writing", "extracting"):
-        chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
-        bump_content_revision(chapter)
-        db.commit()
-        db.refresh(chapter)
+            latest_revision_id = db.scalar(select(ChapterArchiveRevision.id).where(
+                ChapterArchiveRevision.chapter_id == chapter_id,
+            ).order_by(ChapterArchiveRevision.revision.desc()).limit(1))
+            if owns_chapter and latest_revision_id == archive_revision_id and chapter.status == "finalized":
+                chapter.archive_status = "complete" if chapter.active_archive_revision_id else "failed"
+                bump_content_revision(chapter)
+    # Check cancellation never changes visible prose or acceptance. The exact
+    # target's audit terminal is independent of whoever now owns the chapter.
     # Record the terminal row only after the chapter has reached its restored
     # baseline. This ordering makes outcome_current deterministic even when the
     # worker did not finish within the bounded join above.
-    if job is not None:
-        record_job_phase(SessionLocal, job.job_id, "cancelled")
+    db.flush()
+    if target_current:
+        _apply_job_phase(db, job_id, "cancelled")
+    db.commit()
+    db.refresh(chapter)
     return _chapter_read(chapter)
 
 
@@ -1348,7 +1387,7 @@ def rerun_checker(
         phase="checking",
         attempt=_next_checker_attempt(db, candidate.id),
         candidate_id=candidate.id,
-        parent_job_id=candidate.job_id,
+        parent_job_id=None,
         input_snapshot=snapshot,
         input_fingerprint=snapshot["input_fingerprint"],
         context_limitations=snapshot["context_limitations"],
@@ -1695,18 +1734,31 @@ def retry_failed_writer_checker(
     chapter_id: str,
     payload: CheckerRetryRequest,
     db: Session = Depends(get_db),
-    _revision_checked: None = Depends(_require_task_revision),
-    checker_client=Depends(get_checker_client),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    checker_resolver: Callable[[Session, str], object] = Depends(get_lazy_checker_resolver),
 ) -> WriteJobStatus:
     """Retry only a failed Checker against the retained Writer candidate."""
     from app.services.context import checker_user_message
 
+    # Serialize admission even for clients without If-Match. A replay must
+    # be resolved before revision/eligibility checks: its first attempt may
+    # already have promoted the draft and advanced both values.
+    _begin_short_write_cas(db)
     chapter = db.get(Chapter, chapter_id)
+    if chapter is not None and payload.request_id:
+        previous = db.get(JobRun, payload.request_id)
+        if previous is not None:
+            if previous.chapter_id != chapter_id or previous.kind != "check" or previous.parent_job_id != payload.source_job_id:
+                raise HTTPException(status_code=409, detail={"code": "checker_request_mismatch", "message": "该复查请求标识已用于其他任务"})
+            return _job_status_from_run(chapter, previous, _visible_checker_result(db, chapter), db)
     source = db.get(JobRun, payload.source_job_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     if source is None or source.chapter_id != chapter.id or source.kind != "write":
         raise HTTPException(status_code=404, detail={"code": "checker_source_not_found", "message": "未找到可重试的写作检查任务"})
+    require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
+    if write_registry.get_live(chapter.id) is not None:
+        raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
     resolved_source, candidate, latest = _retry_source_and_latest_attempt(db, source)
     if resolved_source is None or candidate is None or latest is None or not _is_retryable_checker_attempt(latest):
         raise HTTPException(status_code=409, detail={"code": "checker_retry_not_available", "message": "当前候选的最新 Checker 结论不可单独重试"})
@@ -1717,9 +1769,10 @@ def retry_failed_writer_checker(
         raise HTTPException(status_code=409, detail={"code": "checker_retry_input_changed", "message": "原写作候选或其冻结输入已变化，不能只重试检查"})
     if write_registry.get_live(chapter.id) is not None:
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
+    checker_client = checker_resolver(db, chapter.id)
     _claim_chapter_operation(db, chapter)
 
-    retry_id = uuid_str()
+    retry_id = payload.request_id or uuid_str()
     persona = get_persona(db, "checker", book_id=chapter.book_id)
     checker_message = checker_user_message(
         chapter, candidate.draft_text, snapshot["bible"],
@@ -1819,6 +1872,9 @@ def _mark_archive_start_failed(job_id: str, code: str, message: str, context: di
     """Finish a committed pending archive attempt without touching prose."""
     session = SessionLocal()
     try:
+        # Reserve before the first proof read: a reopen or newer archive must
+        # not commit between our ownership check and failure write-back.
+        _begin_short_write_cas(session)
         run = session.get(JobRun, job_id)
         if run is None:
             raise RuntimeError("registered archive job disappeared")
@@ -1826,7 +1882,16 @@ def _mark_archive_start_failed(job_id: str, code: str, message: str, context: di
         revision = session.get(ChapterArchiveRevision, run.archive_revision_id)
         if chapter is None or revision is None:
             raise RuntimeError("registered archive data disappeared")
-        if run.phase not in {"pending", "extracting"}:
+        latest_id = session.scalar(select(ChapterArchiveRevision.id).where(
+            ChapterArchiveRevision.chapter_id == chapter.id,
+        ).order_by(ChapterArchiveRevision.revision.desc()).limit(1))
+        if not (
+            run.phase in {"pending", "extracting"}
+            and chapter.status == "finalized"
+            and revision.chapter_id == chapter.id
+            and revision.status in {"pending", "extracting"}
+            and latest_id == revision.id
+        ):
             return chapter, run
         from app.services.archive_v2 import mark_revision_failed
 
@@ -1948,8 +2013,27 @@ def _start_archive_job(
         )
         reserved_job = job
         write_registry.reserve(job)
+        # The acceptance commit precedes slow configuration resolution. A
+        # reopen/import may have ended this attempt meanwhile; do not trust
+        # expire_on_commit=False objects from the acceptance Session.
+        _begin_short_write_cas(db)
+        db.expire_all()
         persisted = db.get(JobRun, job_id)
-        if persisted is None or persisted.phase != "pending":
+        current_chapter = db.get(Chapter, job.chapter_id)
+        current_revision = db.get(ChapterArchiveRevision, job.archive_revision_id)
+        latest_id = db.scalar(select(ChapterArchiveRevision.id).where(
+            ChapterArchiveRevision.chapter_id == job.chapter_id,
+        ).order_by(ChapterArchiveRevision.revision.desc()).limit(1))
+        if not (
+            persisted is not None and persisted.phase == "pending"
+            and persisted.archive_revision_id == job.archive_revision_id
+            and current_chapter is not None and current_chapter.status == "finalized"
+            and current_revision is not None and current_revision.status == "pending"
+            and current_revision.chapter_id == job.chapter_id and latest_id == current_revision.id
+            and current_revision.input_fingerprint == archive_input_fingerprint(
+                current_chapter, contract_version=current_revision.contract_version,
+            )
+        ):
             raise RuntimeError("archive registration is no longer current")
         persisted.phase = "extracting"
         persisted.model_binding_snapshot = {"extractor": _model_snapshot(extractor_client)}
@@ -2034,6 +2118,7 @@ def _accept_chapter_after_reservation(
             current_snapshot = snapshot
         current_check_evidence = bool(
             snapshot_current
+            and result.get("verdict") in {"passed", "suspect", "violation"}
             and result.get("input_fingerprint") == snapshot.get("input_fingerprint")
             and result.get("check_attempt_id") == candidate.latest_checker_attempt_id
             and result.get("draft_fingerprint") == candidate.draft_fingerprint
@@ -2055,6 +2140,11 @@ def _accept_chapter_after_reservation(
             if isinstance(item, dict) and item.get("classification") == "ordinary_word"
         }
         identity_resolved = resolved_ids == hit_ids and len(name_uses) == len(hit_ids)
+        if any(
+            isinstance(issue, dict) and issue.get("kind") in {"unselected_character", "ambiguous_character"}
+            for issue in result.get("issues", [])
+        ):
+            identity_resolved = False
     if current_check_evidence and not identity_resolved:
         raise HTTPException(
             status_code=409,
@@ -2183,17 +2273,31 @@ def retry_chapter_archive(
     chapter_id: str,
     payload: ArchiveRetryRequest = ArchiveRetryRequest(),
     db: Session = Depends(get_db),
-    _revision_checked: None = Depends(_require_task_revision),
+    if_match: str | None = Header(default=None, alias="If-Match"),
     extractor_resolver: Callable[[Session, str], object] = Depends(get_lazy_extractor_resolver),
 ) -> WriteJobStatus:
+    # The in-flight check and max(revision)+1 insert share one reservation.
+    _begin_short_write_cas(db)
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     if chapter.status != "finalized":
+        require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
         raise HTTPException(
             status_code=409,
             detail={"code": "chapter_not_finalized", "message": "正文尚未接受，不能单独重试归档"},
         )
+    running = db.scalars(select(JobRun).where(
+        JobRun.chapter_id == chapter_id, JobRun.kind == "extract",
+        JobRun.phase.in_(("pending", "extracting")),
+    ).order_by(JobRun.created_at.desc(), JobRun.id.desc())).first()
+    if running is not None:
+        result = _job_status_from_run(chapter, running, db=db)
+        if result.phase == "pending":
+            result.phase = "extracting"
+        result.chapter = _chapter_read(chapter)
+        return result
+    require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
     from app.services.production_context import production_readiness
     readiness = production_readiness(db, chapter)
     recovery = readiness["recommended_recovery"]
@@ -2317,28 +2421,17 @@ def reopen_chapter(
     db: Session = Depends(get_db),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> ChapterRead:
+    _begin_short_write_cas(db)
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
     previous_archive_fingerprint = archive_input_fingerprint(chapter)
-    stale_archives_for_reopen(db, chapter)
-    chapter.status = "draft_ready"
-    # Reopening invalidates v2 selection, but legacy rows remain auditable.
-    invalidate_archive_if_input_changed(
-        db, chapter, previous_fingerprint=previous_archive_fingerprint, force=True
-    )
-    invalidated_downstream = invalidate_downstream_archives(db, chapter.book_id, after_index=chapter.index)
-    for downstream_id in invalidated_downstream:
-        downstream = db.get(Chapter, downstream_id)
-        if downstream is not None:
-            bump_content_revision(downstream)
-    rebuild_book_projection(db, chapter.book_id)
+    writer_job_ids = [job.job_id for job in invalidate_writer_inputs(db, [chapter])]
+    archive_job_ids = _reopen_archive_lifecycle(db, chapter, previous_archive_fingerprint)
     bump_content_revision(chapter)
     rebuild_book_search_index(db, chapter.book_id)
     db.commit()
-    live_job = write_registry.get_live(chapter.id)
-    if live_job is not None and live_job.kind == "extract":
-        write_registry.cancel(live_job, discard=True)
+    _cancel_local_job_ids(chapter.id, writer_job_ids + archive_job_ids)
     db.refresh(chapter)
     return _chapter_read(chapter)

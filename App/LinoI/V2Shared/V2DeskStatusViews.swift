@@ -173,6 +173,17 @@ enum V2DeskConflictRefresh {
         characters: CharactersStore,
         agents: AgentSettingsStore
     ) async {
+        if let currentID = session.currentBook?.id,
+           editor.sync.cache.isDeleted(kind: .book, id: currentID) {
+            guard editor.resetBookContext() else { return }
+            workspace.resetBookContext()
+            characters.resetBookContext()
+            session.closeBook()
+            await bookshelf.load()
+            return
+        }
+        let startingBookID = session.currentBook?.id
+        let startingContext = session.bookContextID
         guard !applied.isEmpty else { return }
         let bookIDs = Set(applied.filter { $0.resourceKind == .book }.map(\.resourceID))
         let chapterIDs = Set(applied.filter { $0.resourceKind == .chapter }.map(\.resourceID))
@@ -186,6 +197,8 @@ enum V2DeskConflictRefresh {
         if !bookIDs.isEmpty {
             let currentID = session.currentBook?.id
             await bookshelf.load()
+            guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                  !Task.isCancelled else { return }
             if let currentID, bookIDs.contains(currentID),
                let refreshed = bookshelf.books.first(where: { $0.id == currentID }) {
                 session.currentBook = refreshed
@@ -193,20 +206,32 @@ enum V2DeskConflictRefresh {
         }
         if let bookID = session.currentBook?.id, !chapterIDs.isEmpty {
             await workspace.refreshChapters(bookId: bookID)
+            guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                  !Task.isCancelled else { return }
             if let currentID = editor.currentChapter?.id,
                chapterIDs.contains(currentID),
                let summary = workspace.chapters.first(where: { $0.id == currentID }) {
                 await editor.load(summary)
+                guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                      !Task.isCancelled else { return }
             }
         }
         if refreshesCharacters, let bookID = session.currentBook?.id {
             await characters.load(bookId: bookID)
+            guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                  !Task.isCancelled else { return }
         }
         if refreshesAgents {
             await agents.load()
+            guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                  !Task.isCancelled else { return }
             if let bookID = session.currentBook?.id {
                 _ = await agents.loadBookPersonas(bookID: bookID)
+                guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                      !Task.isCancelled else { return }
                 _ = await agents.loadBookModelBindings(bookID: bookID)
+                guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                      !Task.isCancelled else { return }
             }
         }
     }
@@ -220,29 +245,59 @@ enum V2DeskConflictRefresh {
         characters: CharactersStore,
         agents: AgentSettingsStore
     ) async {
+        if let currentID = session.currentBook?.id,
+           editor.sync.cache.isDeleted(kind: .book, id: currentID) {
+            guard editor.resetBookContext() else { return }
+            workspace.resetBookContext()
+            characters.resetBookContext()
+            session.closeBook()
+            await bookshelf.load()
+            return
+        }
+        let startingBookID = session.currentBook?.id
+        let startingContext = session.bookContextID
         switch conflict.resourceKind {
         case .book:
             let wasCurrentBook = session.currentBook?.id == conflict.resourceID
             await bookshelf.load()
+            guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                  !Task.isCancelled else { return }
             if wasCurrentBook,
                let refreshedBook = bookshelf.books.first(where: { $0.id == conflict.resourceID }) {
                 session.currentBook = refreshedBook
                 await workspace.refreshChapters(bookId: refreshedBook.id)
+                guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                      !Task.isCancelled else { return }
             }
         case .chapter:
             guard let bookID = session.currentBook?.id else { return }
             await workspace.refreshChapters(bookId: bookID)
+            guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                  !Task.isCancelled else { return }
+            let resolved = editor.sync.conflict(for: .chapter, id: conflict.resourceID) == nil
+                && !editor.sync.pendingMutations.contains { $0.resourceKind == .chapter && $0.resourceID == conflict.resourceID }
+            if resolved { editor.discardInactiveDraft(after: conflict) }
             if editor.currentChapter?.id == conflict.resourceID,
                let summary = workspace.chapters.first(where: { $0.id == conflict.resourceID }) {
-                await editor.load(summary)
+                await editor.load(summary, replacingLocalPayload: resolved ? conflict.localPayload : nil)
+                guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                      !Task.isCancelled else { return }
             }
         case .character, .characterEvent:
             if let bookID = session.currentBook?.id { await characters.load(bookId: bookID) }
+            guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                  !Task.isCancelled else { return }
         case .agentPersona, .modelBinding, .llmProfile:
             await agents.load()
+            guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                  !Task.isCancelled else { return }
             if let bookID = session.currentBook?.id {
                 _ = await agents.loadBookPersonas(bookID: bookID)
+                guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                      !Task.isCancelled else { return }
                 _ = await agents.loadBookModelBindings(bookID: bookID)
+                guard session.bookContextID == startingContext, session.currentBook?.id == startingBookID,
+                      !Task.isCancelled else { return }
             }
         }
     }

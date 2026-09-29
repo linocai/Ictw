@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.models import Book, BookAgentPersona
+from app.persona_contract import EDITABLE_PERSONA_MAX_LENGTH
 from app.services.personas import AGENT_ROLES, PROGRAM_PROTOCOLS, get_persona
 
 
@@ -40,7 +41,7 @@ def test_book_persona_override_inherits_and_resolves_all_roles(client, auth_head
     too_long = client.put(
         f"/api/v1/books/{book_id}/agent-personas/writer",
         headers=auth_headers,
-        json={"editable_persona": "x" * 8001},
+        json={"editable_persona": "x" * (EDITABLE_PERSONA_MAX_LENGTH + 1)},
     )
     assert too_long.status_code == 422
 

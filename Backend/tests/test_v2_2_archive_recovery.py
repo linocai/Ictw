@@ -456,6 +456,11 @@ def _repack(entries: dict[str, bytes]) -> bytes:
 def _refresh_manifest(entries: dict[str, bytes], *, format_version: int) -> None:
     manifest = json.loads(entries["manifest.json"])
     manifest["format_version"] = format_version
+    if format_version < 3:
+        chapters = json.loads(entries["chapters.json"])
+        for chapter in chapters:
+            chapter.pop("legacy_memory", None)
+        entries["chapters.json"] = json.dumps(chapters, ensure_ascii=False).encode()
     manifest["entries"] = {
         name: {"sha256": hashlib.sha256(entries[name]).hexdigest(), "size": len(entries[name])}
         for name in ("book.json", "characters.json", "chapters.json", "archives.json", "personas.json", "model-bindings.json")
@@ -463,7 +468,7 @@ def _refresh_manifest(entries: dict[str, bytes], *, format_version: int) -> None
     entries["manifest.json"] = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
 
 
-def test_project_format2_preserves_unknown_slot_ids_and_format1_still_imports(client, auth_headers):
+def test_current_project_preserves_unknown_slot_ids_and_old_formats_still_import(client, auth_headers):
     source_book, source_chapter = _seed_active_revision(
         client,
         auth_headers,
@@ -494,7 +499,7 @@ def test_project_format2_preserves_unknown_slot_ids_and_format1_still_imports(cl
 
     package = client.get(f"/api/v1/books/{source_book['id']}/project-export", headers=auth_headers).content
     entries = _zip_entries(package)
-    assert json.loads(entries["manifest.json"])["format_version"] == 2
+    assert json.loads(entries["manifest.json"])["format_version"] == 3
     exported_issue = json.loads(entries["archives.json"])[0]["state_uncertainties"][0]
     assert exported_issue["character_name"] == "甲（改名后）"
     assert exported_issue["message"] == "本章中甲（改名后）的当前目标有多个不一致或不完整的结果，当前无法确定章末状态。"
@@ -511,6 +516,10 @@ def test_project_format2_preserves_unknown_slot_ids_and_format1_still_imports(cl
     assert detail["state_uncertainties"][0]["character_id"] != source_chapter["character_id"]
     assert detail["state_uncertainties"][0]["character_name"] == "甲（改名后）"
     assert detail["state_uncertainties"][0]["message"] == exported_issue["message"]
+
+    _refresh_manifest(entries, format_version=2)
+    format2_restore = client.post("/api/v1/books/project-import", headers=auth_headers, content=_repack(entries))
+    assert format2_restore.status_code == 201, format2_restore.text
 
     archives = json.loads(entries["archives.json"])
     for archive in archives:

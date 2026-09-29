@@ -16,6 +16,21 @@ import Foundation
 /// constraints explicitly forbid.
 enum LinoErrorPresenter {
 
+    /// Legacy records can contain internal English schema errors. Preserve
+    /// readable author guidance, but never make that protocol the explanation.
+    static func archiveValidationReason(_ message: String?) -> String {
+        let text = (message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.contains("relationship fact must have exactly two participants") {
+            return "人物关系记录未明确对应的两个人物"
+        }
+        let prose = text.replacingOccurrences(of: "Extractor", with: "记忆整理")
+            .replacingOccurrences(of: "Bible", with: "本章剧情要求")
+        if prose.isEmpty || prose.range(of: "[A-Za-z_]{2,}", options: .regularExpression) != nil {
+            return "模型返回的记忆整理结果不完整或不一致，请重新整理"
+        }
+        return text
+    }
+
     // MARK: - Public entry points
 
     /// Presents a terminal (`phase == "failed"`) `WriteJobStatus`. Reads

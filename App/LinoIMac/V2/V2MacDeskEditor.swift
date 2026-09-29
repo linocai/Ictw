@@ -241,6 +241,9 @@ private struct V2MacDeskActionBar: View {
     let onDelete: () -> Void
     let chapterActionInFlight: Bool
     @EnvironmentObject private var sync: ClientSyncStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var session: AppSession
+    @State private var saving = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -263,14 +266,21 @@ private struct V2MacDeskActionBar: View {
                     .buttonStyle(V2MacDeskButton(kind: .secondary, compact: true))
                     .disabled(chapterActionInFlight || !sync.networkActionsAvailable)
             }
-            if snapshot.commands.canDelete {
+            if snapshot.commands.canDelete || ChapterEditingPolicy.canEdit(editor.currentChapter) {
                 Menu {
-                    Button("删除这一章", role: .destructive, action: onDelete)
+                    if ChapterEditingPolicy.canEdit(editor.currentChapter) {
+                        Button(saving ? "正在保存" : "保存到服务器", action: save)
+                            .disabled(saving || editor.isSaving || editor.writingPhase.isActive)
+                    }
+                    if snapshot.commands.canDelete {
+                        Button("删除这一章", role: .destructive, action: onDelete)
+                            .disabled(!sync.networkActionsAvailable)
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                 }
                 .buttonStyle(V2MacDeskButton(kind: .quiet, compact: true))
-                .disabled(chapterActionInFlight || !sync.networkActionsAvailable)
+                .disabled(chapterActionInFlight || saving || editor.isSaving || editor.writingPhase.isActive)
                 .help("更多章节操作")
                 .accessibilityLabel("更多章节操作")
             }
@@ -282,6 +292,20 @@ private struct V2MacDeskActionBar: View {
         .frame(height: V2DeskMetric.actionBarHeight)
         .background(V2DeskPalette.color(.acceptedPaper, scheme: colorScheme))
         .overlay(alignment: .top) { V2MacDeskHairline() }
+    }
+
+    private func save() {
+        guard !saving, !editor.isSaving, !editor.writingPhase.isActive,
+              ChapterEditingPolicy.canEdit(editor.currentChapter), let chapterID = editor.currentChapter?.id else { return }
+        let context = session.bookContextID
+        saving = true
+        Task {
+            defer { saving = false }
+            guard session.bookContextID == context, editor.currentChapter?.id == chapterID else { return }
+            if await editor.save() != nil, session.bookContextID == context, editor.currentChapter?.id == chapterID {
+                session.notices.publish("本章已保存到服务器。")
+            }
+        }
     }
 
     @ViewBuilder private var primaryButton: some View {

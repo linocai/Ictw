@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -11,21 +12,32 @@ from app.models import Chapter, ChapterCharacter, JobRun
 from app.models.entities import utc_now
 
 
-def invalidate_writer_inputs(db: Session, chapters: Iterable[Chapter]) -> list[str]:
+@dataclass(frozen=True)
+class InvalidatedWriterJob:
+    chapter_id: str
+    job_id: str
+
+
+def invalidate_writer_inputs(db: Session, chapters: Iterable[Chapter]) -> list[InvalidatedWriterJob]:
     """Advance only supplied chapters inside the caller's transaction.
 
     Database generation is authoritative across processes.  Local registry
     cancellation is deliberately split into a post-commit best-effort helper.
     """
-    ids: list[str] = []
+    invalidated: list[InvalidatedWriterJob] = []
     for chapter in {chapter.id: chapter for chapter in chapters}.values():
         chapter.write_generation += 1
         if chapter.status == "writing":
             chapter.status = "draft_ready" if chapter.draft_text.strip() else "draft"
+        job_ids = list(db.scalars(select(JobRun.id).where(
+            JobRun.chapter_id == chapter.id,
+            JobRun.kind == "write",
+            JobRun.phase.notin_(("done", "failed", "cancelled")),
+        )).all())
         db.execute(
             update(JobRun)
             .where(
-                JobRun.chapter_id == chapter.id,
+                JobRun.id.in_(job_ids),
                 JobRun.kind == "write",
                 JobRun.phase.notin_(("done", "failed", "cancelled")),
             )
@@ -36,8 +48,8 @@ def invalidate_writer_inputs(db: Session, chapters: Iterable[Chapter]) -> list[s
                 finished_at=utc_now(),
             )
         )
-        ids.append(chapter.id)
-    return ids
+        invalidated.extend(InvalidatedWriterJob(chapter.id, job_id) for job_id in job_ids)
+    return invalidated
 
 
 def chapters_for_book(db: Session, book_id: str) -> list[Chapter]:
@@ -52,11 +64,9 @@ def chapters_for_character(db: Session, character_id: str) -> list[Chapter]:
     )
 
 
-def cancel_local_writer_jobs(chapter_ids: Iterable[str]) -> None:
+def cancel_local_writer_jobs(jobs: Iterable[InvalidatedWriterJob]) -> None:
     """Prompt local cancellation only after commit; never a correctness gate."""
     from app.services.write_jobs import write_registry
 
-    for chapter_id in chapter_ids:
-        job = write_registry.get_live(chapter_id)
-        if job is not None and job.kind == "write":
-            write_registry.cancel(job, discard=True)
+    for job in jobs:
+        write_registry.cancel_by_id(job.chapter_id, job.job_id, discard=True)

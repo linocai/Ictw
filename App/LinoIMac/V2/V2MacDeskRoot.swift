@@ -1,6 +1,20 @@
 import SwiftUI
 import AppKit
 
+@MainActor
+enum V2MacBookNavigation {
+    static func prepare(
+        editor: ChapterEditorStore, workspace: WorkspaceStore,
+        characters: CharactersStore, inspiration: InspirationCreatorStore
+    ) -> Bool {
+        guard editor.resetBookContext() else { return false }
+        workspace.resetBookContext()
+        characters.resetBookContext()
+        inspiration.clearIfChapterChanged(to: nil)
+        return true
+    }
+}
+
 /// Integration root for the clean-room macOS author experience.  The app
 /// entry can replace `MacShell()` with this type without changing any Store
 /// construction or backend contract.
@@ -54,6 +68,13 @@ private struct V2MacSyncStatusButton: View {
             Button(action: openCenter) { V2DeskSyncPill(state: state, compact: true) }
                 .buttonStyle(.plain)
                 .help("查看同步与冲突")
+        } else if sync.hasRetainedChapterDrafts {
+            Button(action: openCenter) {
+                Label("本机保留稿", systemImage: "doc.on.clipboard")
+                    .font(V2DeskType.control(10.5))
+            }
+            .buttonStyle(.plain)
+            .help("原章已删除，查看并复制本机保留稿")
         }
     }
 
@@ -104,6 +125,9 @@ private struct V2MacSyncCenter: View {
                 if sync.automaticallyFlushableMutationCount > 0, !sync.hasPersistentSyncFailure {
                     Text("\(sync.automaticallyFlushableMutationCount) 项本机修改会在恢复连接后按原始编辑基线安全提交。")
                         .font(V2DeskType.control(12)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                }
+                if sync.hasRetainedChapterDrafts {
+                    V2RetainedChapterDrafts()
                 }
                 if !sync.failedMutations.isEmpty {
                     VStack(alignment: .leading, spacing: 9) {
@@ -162,6 +186,7 @@ private struct V2MacSyncCenter: View {
             Button("采用服务器版本", role: .destructive) {
                 if let conflict = serverDecision {
                     sync.keepServer(conflict)
+                    editor.applyServerConflictDecision(conflict)
                     refreshFromServer(conflict)
                 }
                 serverDecision = nil
@@ -240,7 +265,7 @@ private struct V2MacConflictCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             V2DeskConflictDecisionCard(
-                title: "\(conflict.resourceLabel)已在另一设备更新",
+                title: "\(sync.resourceLabel(for: conflict))已在另一设备更新",
                 detail: "本机基线版本 \(conflict.submittedRevision)，服务器当前版本 \(conflict.currentRevision)。请先对比三份内容，再明确决定。",
                 useServer: useServer,
                 keepLocal: keepLocal,
@@ -418,6 +443,10 @@ private struct V2MacConnectionScreen: View {
 private struct V2MacBookshelf: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var characters: CharactersStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @EnvironmentObject private var commandBus: MacCommandBus
     @State private var sheet: V2MacDeskSheet?
     @State private var showingSyncCenter = false
@@ -452,7 +481,10 @@ private struct V2MacBookshelf: View {
                             .frame(minHeight: 260)
                     } else {
                         ForEach(bookshelf.books) { book in
-                            V2MacBookRow(book: book, open: { Task { await bookshelf.open(book) } }, remove: { deleteTarget = book })
+                            V2MacBookRow(book: book, open: {
+                                guard V2MacBookNavigation.prepare(editor: editor, workspace: workspace, characters: characters, inspiration: inspiration) else { return }
+                                Task { await bookshelf.open(book) }
+                            }, remove: { deleteTarget = book })
                             V2MacDeskHairline()
                         }
                     }
@@ -467,11 +499,13 @@ private struct V2MacBookshelf: View {
         .onChange(of: commandBus.showNewBook) { _, requested in
             guard requested else { return }
             commandBus.showNewBook = false
+            guard sheet == nil else { return }
             sheet = .newBook
         }
         .onChange(of: commandBus.showSettings) { _, requested in
             guard requested else { return }
             commandBus.showSettings = false
+            guard sheet == nil else { return }
             sheet = .settings
         }
         .sheet(item: $sheet) { V2MacDeskSheetHost(sheet: $0) }
@@ -544,6 +578,8 @@ struct V2MacWorkspaceDesk: View {
     @EnvironmentObject private var sync: ClientSyncStore
 
     @State private var selectedChapterID: String?
+    @State private var chapterNavigationID = UUID()
+    @State private var loadedBookID: String?
     @State private var contextOpen = false
     @State private var railCollapsed = false
     @State private var contextFace: V2MacContextFace = .intent
@@ -632,7 +668,10 @@ struct V2MacWorkspaceDesk: View {
         // Archive retry keeps a finalized chapter finalized; watching only
         // `status` leaves the rail's old archive-attention marker behind.
         .onChange(of: editor.currentChapter) { _, _ in
-            if let chapter = editor.currentChapter { workspace.upsert(chapter) }
+            if let chapter = editor.currentChapter, chapter.bookId == session.currentBook?.id {
+                workspace.upsert(chapter)
+                selectChapterID(chapter.id)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await editor.refreshActiveJobIfNeeded() }
@@ -644,11 +683,13 @@ struct V2MacWorkspaceDesk: View {
         .onChange(of: commandBus.showNewBook) { _, requested in
             guard requested else { return }
             commandBus.showNewBook = false
+            guard sheet == nil else { return }
             sheet = .newBook
         }
         .onChange(of: commandBus.showSettings) { _, requested in
             guard requested else { return }
             commandBus.showSettings = false
+            guard sheet == nil else { return }
             sheet = .settings
         }
         .onChange(of: commandBus.showNewChapter) { _, requested in
@@ -720,7 +761,7 @@ struct V2MacWorkspaceDesk: View {
         }
         .sheet(isPresented: $showReader) {
             V2MacReaderSheet(
-                selectedChapterID: $selectedChapterID,
+                selectedChapterID: Binding(get: { selectedChapterID }, set: { selectChapterID($0) }),
                 onReadChapter: { chapter in
                     await navigate(to: chapter)
                 },
@@ -766,12 +807,29 @@ struct V2MacWorkspaceDesk: View {
 
     private func loadBook() async {
         guard let book = session.currentBook else { return }
+        let contextID = session.bookContextID
+        if loadedBookID != book.id {
+            loadedBookID = book.id
+            selectChapterID(nil)
+            chapterLoadID = nil
+        }
         await workspace.load(bookId: book.id)
+        guard !Task.isCancelled, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
         await characters.load(bookId: book.id)
+        guard !Task.isCancelled, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
         await agents.load()
+        guard !Task.isCancelled, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
+        if let chapter = editor.currentChapter, chapter.bookId == book.id,
+           workspace.chapters.contains(where: { $0.id == chapter.id }) {
+            selectChapterID(chapter.id)
+        }
         if selectedChapterID == nil || !workspace.chapters.contains(where: { $0.id == selectedChapterID }) {
             if let first = workspace.chapters.first {
                 await navigate(to: first)
+            } else {
+                selectChapterID(nil)
+                _ = editor.resetBookContext()
+                inspiration.clearIfChapterChanged(to: nil)
             }
         }
     }
@@ -780,25 +838,34 @@ struct V2MacWorkspaceDesk: View {
     /// load prevents repeated reader taps from racing the editor and leaving
     /// the selected rail row out of sync with the visible manuscript.
     private func navigate(to summary: ChapterSummary, allowsDuringCreation: Bool = false) async {
+        guard summary.bookId == session.currentBook?.id else { return }
         guard !creatingChapter || allowsDuringCreation else { return }
         guard chapterLoadID == nil else { return }
         guard selectedChapterID != summary.id || editor.currentChapter?.id != summary.id else { return }
 
         let previousEditorChapterID = editor.currentChapter?.id
+        let contextID = session.bookContextID
+        chapterNavigationID = UUID()
         chapterLoadID = summary.id
-        defer { chapterLoadID = nil }
-        selectedChapterID = summary.id
+        defer { if chapterLoadID == summary.id { chapterLoadID = nil } }
+        selectChapterID(summary.id)
         inspiration.clearIfChapterChanged(to: summary.id)
         await editor.load(summary)
+        guard !Task.isCancelled, session.bookContextID == contextID, session.currentBook?.id == summary.bookId else { return }
 
         // `editor.load` deliberately keeps the current chapter on a network
         // failure.  Restore the rail to that same visible chapter instead of
         // leaving a newly selected row beside an older manuscript.
         guard editor.currentChapter?.id == summary.id else {
-            selectedChapterID = editor.currentChapter?.id ?? previousEditorChapterID
+            selectChapterID(editor.currentChapter?.id ?? previousEditorChapterID)
             inspiration.clearIfChapterChanged(to: selectedChapterID)
             return
         }
+    }
+
+    private func selectChapterID(_ id: String?) {
+        if selectedChapterID != id { chapterNavigationID = UUID() }
+        selectedChapterID = id
     }
 
     private func createChapter() {
@@ -923,17 +990,36 @@ struct V2MacWorkspaceDesk: View {
         guard let deletedID = pendingChapterID,
               editor.currentChapter?.id == deletedID,
               let bookID = session.currentBook?.id else { return }
+        let receipt = V2ChapterDeletionNavigation(
+            bookID: bookID, bookContextID: session.bookContextID,
+            chapterID: deletedID, navigationID: chapterNavigationID
+        )
+        guard receipt.canBeginDeletion(
+            currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID,
+            currentNavigationID: chapterNavigationID,
+            selectedChapterID: selectedChapterID, editorChapterID: editor.currentChapter?.id
+        ) else { return }
         Task {
-            guard await editor.deleteCurrentChapter() else {
-                await workspace.refreshChapters(bookId: bookID)
-                return
-            }
-            workspace.removeChapter(id: deletedID)
-            await workspace.refreshChapters(bookId: bookID)
+            guard !Task.isCancelled, receipt.canBeginDeletion(
+                currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID,
+                currentNavigationID: chapterNavigationID,
+                selectedChapterID: selectedChapterID, editorChapterID: editor.currentChapter?.id
+            ) else { return }
+            let deleted = await editor.deleteCurrentChapter()
+            guard !Task.isCancelled, receipt.ownsBook(
+                currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID
+            ) else { return }
+            if deleted { workspace.removeChapter(id: receipt.chapterID) }
+            await workspace.refreshChapters(bookId: receipt.bookID)
+            guard deleted, !Task.isCancelled, receipt.canNavigateAfterDeletion(
+                currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID,
+                currentNavigationID: chapterNavigationID,
+                selectedChapterID: selectedChapterID, editorChapterID: editor.currentChapter?.id
+            ) else { return }
             if let last = workspace.chapters.max(by: { $0.index < $1.index }) {
                 await navigate(to: last)
             } else {
-                selectedChapterID = nil
+                selectChapterID(nil)
             }
         }
     }
@@ -944,7 +1030,10 @@ struct V2MacWorkspaceDesk: View {
                 .font(V2DeskType.prose(18, weight: .semibold))
                 .foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme))
                 .frame(width: 68, alignment: .leading)
-            V2MacDeskIconButton(symbol: "books.vertical", label: "返回书架") { session.closeBook() }
+            V2MacDeskIconButton(symbol: "books.vertical", label: "返回书架") {
+                guard V2MacBookNavigation.prepare(editor: editor, workspace: workspace, characters: characters, inspiration: inspiration) else { return }
+                session.closeBook()
+            }
             Text(session.currentBook?.title.isEmpty == false ? (session.currentBook?.title ?? "") : "未命名书籍")
                 .font(V2DeskType.control(13, weight: .medium))
                 .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))

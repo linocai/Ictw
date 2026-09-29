@@ -58,9 +58,11 @@
 		C00000000000000000000001 /* V2DeskTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000301 /* V2DeskTokens.swift */; };
 		C00000000000000000000002 /* V2DeskPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000302 /* V2DeskPresentation.swift */; };
 		C00000000000000000000003 /* V2DeskStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000303 /* V2DeskStatusViews.swift */; };
+		1CA4799F1DD145B9BB19A939 /* V2ChapterDeletionNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEE67D2D7654D87B021B3BE /* V2ChapterDeletionNavigation.swift */; };
 		C00000000000000000000011 /* V2DeskTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000301 /* V2DeskTokens.swift */; };
 		C00000000000000000000012 /* V2DeskPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000302 /* V2DeskPresentation.swift */; };
 		C00000000000000000000013 /* V2DeskStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000303 /* V2DeskStatusViews.swift */; };
+		7A894EB02E3A48D195E12725 /* V2ChapterDeletionNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEE67D2D7654D87B021B3BE /* V2ChapterDeletionNavigation.swift */; };
 		C00000000000000000000101 /* V2IOSBookshelfView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000311 /* V2IOSBookshelfView.swift */; };
 		C00000000000000000000102 /* V2IOSChapterDeskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000312 /* V2IOSChapterDeskView.swift */; };
 		C00000000000000000000103 /* V2IOSChapterFaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000313 /* V2IOSChapterFaces.swift */; };
@@ -73,6 +75,12 @@
 		C00000000000000000000202 /* V2MacDeskPrimitives.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000322 /* V2MacDeskPrimitives.swift */; };
 		C00000000000000000000203 /* V2MacDeskRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000323 /* V2MacDeskRoot.swift */; };
 		C00000000000000000000204 /* V2MacDeskSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000324 /* V2MacDeskSheets.swift */; };
+		5C5C370215354AADBFC0E04A /* V2MacPersonaDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4AEBFCAFAF243EE95CB7AEE /* V2MacPersonaDraft.swift */; };
+		B70F00000000000000000001 /* V2MacFormDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70F00000000000000000002 /* V2MacFormDrafts.swift */; };
+		B70F00000000000000000004 /* V2ExportDraftGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70F00000000000000000003 /* V2ExportDraftGuard.swift */; };
+		B70F00000000000000000005 /* V2ExportDraftGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70F00000000000000000003 /* V2ExportDraftGuard.swift */; };
+		B70F00000000000000000007 /* V2RetainedChapterDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70F00000000000000000006 /* V2RetainedChapterDrafts.swift */; };
+		B70F00000000000000000008 /* V2RetainedChapterDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70F00000000000000000006 /* V2RetainedChapterDrafts.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -122,6 +130,7 @@
 		C00000000000000000000301 /* V2DeskTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskTokens.swift; sourceTree = "<group>"; };
 		C00000000000000000000302 /* V2DeskPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskPresentation.swift; sourceTree = "<group>"; };
 		C00000000000000000000303 /* V2DeskStatusViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2DeskStatusViews.swift; sourceTree = "<group>"; };
+		7BEE67D2D7654D87B021B3BE /* V2ChapterDeletionNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2ChapterDeletionNavigation.swift; sourceTree = "<group>"; };
 		C00000000000000000000311 /* V2IOSBookshelfView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSBookshelfView.swift; sourceTree = "<group>"; };
 		C00000000000000000000312 /* V2IOSChapterDeskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSChapterDeskView.swift; sourceTree = "<group>"; };
 		C00000000000000000000313 /* V2IOSChapterFaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2IOSChapterFaces.swift; sourceTree = "<group>"; };
@@ -134,6 +143,10 @@
 		C00000000000000000000322 /* V2MacDeskPrimitives.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacDeskPrimitives.swift; sourceTree = "<group>"; };
 		C00000000000000000000323 /* V2MacDeskRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacDeskRoot.swift; sourceTree = "<group>"; };
 		C00000000000000000000324 /* V2MacDeskSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacDeskSheets.swift; sourceTree = "<group>"; };
+		A4AEBFCAFAF243EE95CB7AEE /* V2MacPersonaDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacPersonaDraft.swift; sourceTree = "<group>"; };
+		B70F00000000000000000002 /* V2MacFormDrafts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2MacFormDrafts.swift; sourceTree = "<group>"; };
+		B70F00000000000000000003 /* V2ExportDraftGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2ExportDraftGuard.swift; sourceTree = "<group>"; };
+		B70F00000000000000000006 /* V2RetainedChapterDrafts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2RetainedChapterDrafts.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -236,6 +249,9 @@
 				C00000000000000000000301 /* V2DeskTokens.swift */,
 				C00000000000000000000302 /* V2DeskPresentation.swift */,
 				C00000000000000000000303 /* V2DeskStatusViews.swift */,
+				7BEE67D2D7654D87B021B3BE /* V2ChapterDeletionNavigation.swift */,
+				B70F00000000000000000003 /* V2ExportDraftGuard.swift */,
+				B70F00000000000000000006 /* V2RetainedChapterDrafts.swift */,
 			);
 			path = V2Shared;
 			sourceTree = "<group>";
@@ -262,6 +278,8 @@
 				C00000000000000000000322 /* V2MacDeskPrimitives.swift */,
 				C00000000000000000000323 /* V2MacDeskRoot.swift */,
 				C00000000000000000000324 /* V2MacDeskSheets.swift */,
+				A4AEBFCAFAF243EE95CB7AEE /* V2MacPersonaDraft.swift */,
+				B70F00000000000000000002 /* V2MacFormDrafts.swift */,
 			);
 			path = V2;
 			sourceTree = "<group>";
@@ -368,6 +386,9 @@
 				C00000000000000000000001 /* V2DeskTokens.swift in Sources */,
 				C00000000000000000000002 /* V2DeskPresentation.swift in Sources */,
 				C00000000000000000000003 /* V2DeskStatusViews.swift in Sources */,
+				1CA4799F1DD145B9BB19A939 /* V2ChapterDeletionNavigation.swift in Sources */,
+				B70F00000000000000000004 /* V2ExportDraftGuard.swift in Sources */,
+				B70F00000000000000000007 /* V2RetainedChapterDrafts.swift in Sources */,
 				C00000000000000000000101 /* V2IOSBookshelfView.swift in Sources */,
 				C00000000000000000000102 /* V2IOSChapterDeskView.swift in Sources */,
 				C00000000000000000000103 /* V2IOSChapterFaces.swift in Sources */,
@@ -403,10 +424,15 @@
 				C00000000000000000000011 /* V2DeskTokens.swift in Sources */,
 				C00000000000000000000012 /* V2DeskPresentation.swift in Sources */,
 				C00000000000000000000013 /* V2DeskStatusViews.swift in Sources */,
+				7A894EB02E3A48D195E12725 /* V2ChapterDeletionNavigation.swift in Sources */,
+				B70F00000000000000000005 /* V2ExportDraftGuard.swift in Sources */,
+				B70F00000000000000000008 /* V2RetainedChapterDrafts.swift in Sources */,
 				C00000000000000000000201 /* V2MacDeskEditor.swift in Sources */,
 				C00000000000000000000202 /* V2MacDeskPrimitives.swift in Sources */,
 				C00000000000000000000203 /* V2MacDeskRoot.swift in Sources */,
 				C00000000000000000000204 /* V2MacDeskSheets.swift in Sources */,
+				5C5C370215354AADBFC0E04A /* V2MacPersonaDraft.swift in Sources */,
+				B70F00000000000000000001 /* V2MacFormDrafts.swift in Sources */,
 				B00000000000000000000206 /* LinoTheme.swift in Sources */,
 				B00000000000000000000203 /* LinoModels.swift in Sources */,
 				B00000000000000000000202 /* LinoAPI.swift in Sources */,
@@ -560,7 +586,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 64;
+				CURRENT_PROJECT_VERSION = 71;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -570,7 +596,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -586,7 +612,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 64;
+				CURRENT_PROJECT_VERSION = 71;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LinoI/Info.plist;
@@ -595,7 +621,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -612,7 +638,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 64;
+				CURRENT_PROJECT_VERSION = 71;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -622,7 +648,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;
@@ -638,7 +664,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LinoIMac/LinoIMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 64;
+				CURRENT_PROJECT_VERSION = 71;
 				DEVELOPMENT_TEAM = HX73DFL88G;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -648,7 +674,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lino.linoi.mac;
 				PRODUCT_NAME = ICTW;
 				SDKROOT = macosx;

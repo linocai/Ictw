@@ -11,13 +11,17 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Book, Chapter, ChapterArchiveFact, ChapterArchiveRevision,
+    Book, Chapter, ChapterArchiveRevision,
     Character, CharacterEvent, SearchDocument,
 )
+from app.services.archive_v2 import archive_health_summaries
 
 
 def rebuild_book_search_index(db: Session, book_id: str) -> None:
     """Replace one book's projection inside the caller's transaction."""
+    # Session autoflush is disabled. Project the caller's changes, including
+    # deletions and any previous index rebuild in this same transaction.
+    db.flush()
     book = db.get(Book, book_id)
     db.execute(delete(SearchDocument).where(SearchDocument.book_id == book_id))
     if book is None:
@@ -41,23 +45,21 @@ def rebuild_book_search_index(db: Session, book_id: str) -> None:
             result_type="character", title=character.name,
             body="\n".join((character.role, character.fixed_profile)),
         ))
-    active_chapter_ids = set(db.scalars(
-        select(ChapterArchiveRevision.chapter_id)
-        .join(Chapter, ChapterArchiveRevision.chapter_id == Chapter.id)
-        .where(
-            Chapter.book_id == book_id,
-            ChapterArchiveRevision.is_active.is_(True),
-            ChapterArchiveRevision.status == "complete",
-            Chapter.active_archive_revision_id == ChapterArchiveRevision.id,
-        )
-    ).all())
+    health = archive_health_summaries(db, list(chapters))
+    legacy_chapter_ids = {
+        chapter.id for chapter in chapters if health[chapter.id]["archive_schema"] == "legacy"
+    }
+    active_revision_ids = {
+        chapter.active_archive_revision_id
+        for chapter in chapters if health[chapter.id]["archive_schema"] == "v2"
+    }
     legacy_events = db.execute(
         select(CharacterEvent, Character.name)
         .join(Character, CharacterEvent.character_id == Character.id)
         .where(CharacterEvent.book_id == book_id)
     ).all()
     for event, character_name in legacy_events:
-        if event.chapter_id in active_chapter_ids:
+        if event.chapter_id not in legacy_chapter_ids:
             continue
         db.add(SearchDocument(
             id=f"character-event:{event.id}", book_id=book_id,
@@ -67,13 +69,7 @@ def rebuild_book_search_index(db: Session, book_id: str) -> None:
         ))
     active_revisions = db.scalars(
         select(ChapterArchiveRevision)
-        .join(Chapter, ChapterArchiveRevision.chapter_id == Chapter.id)
-        .where(
-            Chapter.book_id == book_id,
-            ChapterArchiveRevision.is_active.is_(True),
-            ChapterArchiveRevision.status == "complete",
-            Chapter.active_archive_revision_id == ChapterArchiveRevision.id,
-        )
+        .where(ChapterArchiveRevision.id.in_(active_revision_ids))
     ).all()
     for archive in active_revisions:
         db.add(SearchDocument(

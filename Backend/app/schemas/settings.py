@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from app.schemas.common import ORMModel
+from app.persona_contract import EDITABLE_PERSONA_MAX_LENGTH
 
 
 class AgentPersonaRead(ORMModel):
@@ -24,9 +25,9 @@ class AgentPersonaRead(ORMModel):
 class AgentPersonaPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    editable_persona: str | None = Field(default=None, max_length=8000)
+    editable_persona: str | None = Field(default=None, max_length=EDITABLE_PERSONA_MAX_LENGTH)
     # Compatibility input for older clients.  It changes only editable text.
-    system_prompt: str | None = Field(default=None, max_length=8000)
+    system_prompt: str | None = Field(default=None, max_length=EDITABLE_PERSONA_MAX_LENGTH)
 
     @model_validator(mode="after")
     def exactly_one_editable_value(self) -> "AgentPersonaPatch":
@@ -47,8 +48,8 @@ class BookAgentPersonaPut(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    editable_persona: str | None = Field(default=None, max_length=8000)
-    system_prompt: str | None = Field(default=None, max_length=8000)
+    editable_persona: str | None = Field(default=None, max_length=EDITABLE_PERSONA_MAX_LENGTH)
+    system_prompt: str | None = Field(default=None, max_length=EDITABLE_PERSONA_MAX_LENGTH)
 
     @model_validator(mode="after")
     def exactly_one_editable_value(self) -> "BookAgentPersonaPut":

@@ -13,6 +13,12 @@ _FINISH_REASONS = {
     "content_filter": "content_filter",
     "safety": "safety",
     "sensitive": "safety",
+    "end_turn": "end_turn",
+    "completed": "completed",
+    "complete": "complete",
+    "tool_calls": "tool_calls",
+    "function_call": "function_call",
+    "other": "other",
 }
 _BLOCK_REASONS = {
     "prohibited_content": "PROHIBITED_CONTENT",
@@ -106,3 +112,14 @@ class LLMError(Exception):
             }.items()
             if value is not None
         }
+
+
+class LLMStreamIncompleteError(LLMError):
+    """An otherwise readable stream reached EOF without a completion proof."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "上游输出未完整结束，当前正文已保留，请重试整章生成",
+            code="llm_output_truncated",
+            retryable=True,
+        )

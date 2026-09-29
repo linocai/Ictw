@@ -495,6 +495,7 @@ private struct V2IOSChapterActions: ViewModifier {
     let onSave: (() -> Void)?
 
     @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var showingExport = false
@@ -650,20 +651,37 @@ private struct V2IOSChapterActions: ViewModifier {
         }
     }
 
-    /// A rejected delete must cost the author nothing: the refresh corrects
-    /// the stale "this is the last chapter" belief that produced the 409 while
-    /// leaving `chapterPath` — and therefore their place in the book —
-    /// untouched. Only a delete that actually happened uses `load`, whose
-    /// clearing of `chapterPath` is what returns them to the rail.
+    /// Refreshing a deleted/rejected row never owns navigation. Returning to
+    /// the rail additionally requires the original path and the Store's
+    /// cleared editor; a late DELETE must leave a newer chapter in place.
     private func confirmDelete() {
-        guard editor.currentChapter?.id == chapterID else { return }
+        let receipt = V2ChapterDeletionNavigation(
+            bookID: bookID, bookContextID: session.bookContextID,
+            chapterID: chapterID, navigationID: workspace.chapterNavigationID
+        )
+        guard receipt.canBeginDeletion(
+            currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID,
+            currentNavigationID: workspace.chapterNavigationID,
+            selectedChapterID: workspace.chapterPath.last?.id, editorChapterID: editor.currentChapter?.id
+        ) else { return }
         Task {
-            guard await editor.deleteCurrentChapter() else {
-                await workspace.refreshChapters(bookId: bookID)
-                return
-            }
-            workspace.removeChapter(id: chapterID)
-            await workspace.load(bookId: bookID)
+            guard !Task.isCancelled, receipt.canBeginDeletion(
+                currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID,
+                currentNavigationID: workspace.chapterNavigationID,
+                selectedChapterID: workspace.chapterPath.last?.id, editorChapterID: editor.currentChapter?.id
+            ) else { return }
+            let deleted = await editor.deleteCurrentChapter()
+            guard !Task.isCancelled, receipt.ownsBook(
+                currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID
+            ) else { return }
+            if deleted { workspace.removeChapter(id: receipt.chapterID) }
+            await workspace.refreshChapters(bookId: receipt.bookID)
+            guard deleted, !Task.isCancelled, receipt.canNavigateAfterDeletion(
+                currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID,
+                currentNavigationID: workspace.chapterNavigationID,
+                selectedChapterID: workspace.chapterPath.last?.id, editorChapterID: editor.currentChapter?.id
+            ) else { return }
+            workspace.chapterPath = []
         }
     }
 }

@@ -132,3 +132,18 @@ def require_matching_revision(
 
 def bump_content_revision(resource: Revisioned) -> None:
     resource.content_revision = int(resource.content_revision or 0) + 1
+
+
+def next_book_override_revision(db: Session, book_id: str, kind: str, role: str) -> int:
+    from app.models import BookOverrideRevision
+    marker = db.get(BookOverrideRevision, (book_id, kind, role))
+    return (marker.last_revision if marker is not None else 0) + 1
+
+
+def retain_book_override_revision(db: Session, book_id: str, kind: str, role: str, revision: int) -> None:
+    from app.models import BookOverrideRevision
+    marker = db.get(BookOverrideRevision, (book_id, kind, role))
+    if marker is None:
+        db.add(BookOverrideRevision(book_id=book_id, kind=kind, agent_role=role, last_revision=revision))
+    else:
+        marker.last_revision = max(marker.last_revision, revision)

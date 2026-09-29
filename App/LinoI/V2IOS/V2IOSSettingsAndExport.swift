@@ -144,6 +144,7 @@ struct V2IOSBookSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var agents: AgentSettingsStore
+    @StateObject private var leaveCoordinator = V2IOSCharacterSheetLeaveCoordinator()
     @State private var role: String?
     @State private var showingGlobal = false
     private let roles = ["memory_selector", "writer", "checker", "extractor", "inspiration_creator"]
@@ -190,8 +191,14 @@ struct V2IOSBookSettingsView: View {
             .navigationTitle("书设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction) } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { if leaveCoordinator.blocksDismissal { leaveCoordinator.requestLeave() } else { dismiss() } } } }
         }
+        .environmentObject(leaveCoordinator)
+        .interactiveDismissDisabled(leaveCoordinator.blocksDismissal)
+        .background(V2IOSDismissAttemptObserver(
+            shouldDismiss: { !leaveCoordinator.blocksDismissal },
+            onAttempt: { leaveCoordinator.requestLeave() }
+        ))
         .v2IOSPage()
         .task {
             if let id = session.currentBook?.id {
@@ -218,6 +225,8 @@ private struct V2IOSGlobalAgentRoleView: View {
     @State private var text = ""
     @State private var savedText = ""
     @State private var saving = false
+    @State private var initialized = false
+    @State private var loaded = false
     @State private var showingDiscardConfirmation = false
 
     // Read the binding straight from the store. A @State mirror seeded in
@@ -242,7 +251,7 @@ private struct V2IOSGlobalAgentRoleView: View {
                 }
             }
             Section("全局人格") {
-                TextEditor(text: $text).font(V2DeskType.prose(14.5)).frame(minHeight: 170)
+                TextEditor(text: $text).font(V2DeskType.prose(14.5)).frame(minHeight: 170).disabled(saving)
                 if saving { HStack { ProgressView(); Text("正在保存") } }
             }
         }
@@ -255,13 +264,15 @@ private struct V2IOSGlobalAgentRoleView: View {
                 if hasUnsavedChanges { Button("取消", action: attemptDismiss).disabled(saving) }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("保存人格", action: save).disabled(!hasUnsavedChanges || saving)
+                Button("保存人格", action: save).disabled(!hasUnsavedChanges || !loaded || text.v2IOSTrimmed.isEmpty || saving)
             }
         }
         .onAppear {
-            text = agents.personas.first(where: { $0.agentRole == role })?.editablePersona ?? ""
-            savedText = text
+            guard !initialized else { return }
+            initialized = true
+            loadDraft()
         }
+        .onChange(of: agents.personas) { _, _ in loadDraft() }
         .interactiveDismissDisabled(hasUnsavedChanges || saving)
         .navigationBarBackButtonHidden(hasUnsavedChanges)
         .confirmationDialog("放弃未保存的人格修改？", isPresented: $showingDiscardConfirmation, titleVisibility: .visible) {
@@ -276,15 +287,21 @@ private struct V2IOSGlobalAgentRoleView: View {
 
     private func attemptDismiss() { showingDiscardConfirmation = true }
 
+    private func loadDraft() {
+        guard !saving, let persona = agents.personas.first(where: { $0.agentRole == role }) else { return }
+        if !hasUnsavedChanges { text = persona.editablePersona }
+        savedText = persona.editablePersona
+        loaded = true
+    }
+
     private func save() {
-        guard var persona = agents.personas.first(where: { $0.agentRole == role }) else { return }
+        guard !saving, loaded, !text.v2IOSTrimmed.isEmpty,
+              var persona = agents.personas.first(where: { $0.agentRole == role }) else { return }
+        let submittedText = text
         saving = true
-        persona.editablePersona = text
+        persona.editablePersona = submittedText
         Task {
-            await agents.savePersona(persona)
-            if agents.personas.first(where: { $0.agentRole == role })?.editablePersona == text {
-                savedText = text
-            }
+            if await agents.savePersona(persona) { savedText = submittedText }
             saving = false
         }
     }
@@ -301,6 +318,12 @@ private struct V2IOSBookPersonaEditor: View {
     @State private var confirmingRestore = false
     @State private var showingDiscardConfirmation = false
     @State private var saving = false
+    @State private var bookID: String?
+    @State private var initialized = false
+    @State private var loaded = false
+    private var hasBookContext: Bool {
+        bookID != nil && session.currentBook?.id == bookID && agents.bookPersonasBookID == bookID
+    }
 
     var body: some View {
         Form {
@@ -308,12 +331,12 @@ private struct V2IOSBookPersonaEditor: View {
                 Text(source == "book" ? "正在使用这本书的覆盖人格。" : "跟随全局人格。编辑并保存后才会建立本书覆盖。")
                     .font(V2DeskType.control(12.5)).foregroundStyle(Color.secondary)
             }
-            Section("人格") { TextEditor(text: $text).font(V2DeskType.prose(14.5)).frame(minHeight: 200) }
+            Section("人格") { TextEditor(text: $text).font(V2DeskType.prose(14.5)).frame(minHeight: 200).disabled(saving) }
             Section {
                 if saving { HStack { ProgressView(); Text("正在保存") } }
                 if source == "book" {
                     Button("恢复跟随全局", role: .destructive) { confirmingRestore = true }
-                        .disabled(saving)
+                        .disabled(saving || !hasBookContext || !loaded)
                 }
             }
         }
@@ -326,10 +349,17 @@ private struct V2IOSBookPersonaEditor: View {
                 if hasUnsavedChanges { Button("取消", action: attemptDismiss).disabled(saving) }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("保存", action: save).disabled(!hasUnsavedChanges || saving)
+                Button("保存", action: save).disabled(!hasUnsavedChanges || !loaded || !hasBookContext || text.v2IOSTrimmed.isEmpty || saving)
             }
         }
-        .onAppear { loadDraft() }
+        .onAppear {
+            guard !initialized else { return }
+            initialized = true
+            bookID = session.currentBook?.id
+            loadDraft()
+        }
+        .onChange(of: agents.bookPersonas) { _, _ in loadDraft() }
+        .onChange(of: agents.bookPersonasBookID) { _, _ in loadDraft() }
         .interactiveDismissDisabled(hasUnsavedChanges || saving)
         .navigationBarBackButtonHidden(hasUnsavedChanges)
         .confirmationDialog("恢复跟随全局？", isPresented: $confirmingRestore, titleVisibility: .visible) {
@@ -344,28 +374,33 @@ private struct V2IOSBookPersonaEditor: View {
         }
     }
 
-    private func loadDraft() {
-        guard let persona = agents.bookPersonas.first(where: { $0.agentRole == role }) else { return }
-        text = persona.effectivePersona
-        savedText = text
+    private func loadDraft(force: Bool = false) {
+        guard hasBookContext, !saving,
+              let persona = agents.bookPersonas.first(where: { $0.agentRole == role }) else { return }
+        if force || !hasUnsavedChanges { text = persona.effectivePersona }
+        savedText = persona.effectivePersona
         source = persona.source
+        loaded = true
     }
     private var hasUnsavedChanges: Bool { text != savedText }
     private func attemptDismiss() { showingDiscardConfirmation = true }
     private func save() {
-        guard let id = session.currentBook?.id else { return }
+        guard !saving, loaded, hasBookContext, !text.v2IOSTrimmed.isEmpty, let id = bookID else { return }
+        let submittedText = text
         saving = true
         Task {
-            if await agents.saveBookPersona(bookID: id, role: role, editablePersona: text) { loadDraft() }
+            let saved = await agents.saveBookPersona(bookID: id, role: role, editablePersona: submittedText)
             saving = false
+            if saved, hasBookContext { loadDraft(force: true) }
         }
     }
     private func restore() {
-        guard let id = session.currentBook?.id else { return }
+        guard !saving, loaded, hasBookContext, let id = bookID else { return }
         saving = true
         Task {
-            if await agents.resetBookPersona(bookID: id, role: role) { loadDraft() }
+            let saved = await agents.resetBookPersona(bookID: id, role: role)
             saving = false
+            if saved, hasBookContext { loadDraft(force: true) }
         }
     }
 }
@@ -378,8 +413,12 @@ private struct V2IOSBookModelEditor: View {
     @EnvironmentObject private var agents: AgentSettingsStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var draft = BookModelSettingsDraft(role: "writer")
+    @EnvironmentObject private var sheetLeaveCoordinator: V2IOSCharacterSheetLeaveCoordinator
+    @State private var savedDraft = BookModelSettingsDraft(role: "writer")
+    @State private var showingLeaveConfirmation = false
     @State private var saving = false
     @State private var loading = true
+    @State private var initialized = false
     @State private var loadFailed = false
     @State private var confirmingRestore = false
 
@@ -458,25 +497,70 @@ private struct V2IOSBookModelEditor: View {
         .navigationTitle(roleName(role))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction).disabled(saving) } }
-        .task { await load() }
+        .navigationBarBackButtonHidden(isDirty || saving)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { Button("完成", action: requestDismiss).disabled(saving) }
+            if isDirty || saving {
+                ToolbarItem(placement: .topBarLeading) { Button("返回", action: requestDismiss).disabled(saving) }
+            }
+        }
+        .interactiveDismissDisabled(isDirty || saving)
+        .confirmationDialog("放弃未保存的模型修改？", isPresented: $showingLeaveConfirmation, titleVisibility: .visible) {
+            Button("放弃修改", role: .destructive) { draft = savedDraft; sheetLeaveCoordinator.reset(); dismiss() }
+            Button("继续编辑", role: .cancel) {}
+        }
+        .onAppear(perform: syncSheetLeaveCoordinator)
+        .onChange(of: isDirty) { _, _ in syncSheetLeaveCoordinator() }
+        .onChange(of: saving) { _, _ in syncSheetLeaveCoordinator() }
+        .onDisappear { sheetLeaveCoordinator.reset() }
+        .task {
+            guard !initialized else { return }
+            initialized = true
+            await load()
+        }
         .onChange(of: agents.profiles) { _, _ in draft.refreshCapabilities(profiles: agents.profiles, row: row) }
+        .onChange(of: agents.bookModelBindings) { _, _ in recoverLoadedDraft() }
+        .onChange(of: agents.bookModelBindingsBookID) { _, _ in recoverLoadedDraft() }
         .confirmationDialog("恢复跟随全局？", isPresented: $confirmingRestore, titleVisibility: .visible) {
             Button("恢复跟随全局", role: .destructive) { restore() }
             Button("取消", role: .cancel) {}
         } message: { Text("这本书的完整模型覆盖会移除；以后启动的任务重新使用全局配置。") }
     }
 
-    private func loadDraft() { draft = BookModelSettingsDraft(role: role, row: row, profiles: agents.profiles) }
+    private var isDirty: Bool {
+        draft.profileID != savedDraft.profileID || draft.thinking != savedDraft.thinking
+            || draft.effort != savedDraft.effort || draft.temperature != savedDraft.temperature
+    }
+    private func requestDismiss() {
+        guard !saving else { return }
+        if isDirty { showingLeaveConfirmation = true }
+        else { sheetLeaveCoordinator.reset(); dismiss() }
+    }
+    private func syncSheetLeaveCoordinator() {
+        sheetLeaveCoordinator.register(requestLeave: requestDismiss)
+        sheetLeaveCoordinator.update(isDirty: isDirty, isSaving: saving)
+    }
+    private func loadDraft() {
+        draft = BookModelSettingsDraft(role: role, row: row, profiles: agents.profiles)
+        savedDraft = draft
+    }
     private func load() async {
         loading = true
         await agents.load()
-        loadFailed = !(await agents.loadBookModelBindings(bookID: bookID))
+        _ = await agents.loadBookModelBindings(bookID: bookID)
+        // A parent read can supersede this read. Its success is still valid
+        // data for this page, even though this request was not applied.
+        loadFailed = row == nil
         if !loadFailed { loadDraft() }
         loading = false
     }
+    private func recoverLoadedDraft() {
+        guard loadFailed, !loading, !saving, !isDirty, row != nil else { return }
+        loadFailed = false
+        loadDraft()
+    }
     private func save() {
-        guard row != nil, let binding = draft.payload else { return }
+        guard !saving, row != nil, let binding = draft.payload else { return }
         saving = true
         Task {
             if await agents.saveBookModelBinding(bookID: bookID, role: role, binding: binding) {
@@ -487,7 +571,7 @@ private struct V2IOSBookModelEditor: View {
         }
     }
     private func restore() {
-        guard row != nil else { return }
+        guard !saving, row != nil else { return }
         saving = true
         Task {
             if await agents.clearBookModelBinding(bookID: bookID, role: role) { loadDraft() }
@@ -500,12 +584,19 @@ private struct V2IOSProfileEditor: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var agents: AgentSettingsStore
     let profile: LLMProfile?
-    @State private var name = ""
-    @State private var baseURL = ""
-    @State private var model = ""
+    @State private var name: String
+    @State private var baseURL: String
+    @State private var model: String
     @State private var apiKey = ""
     @State private var saving = false
     @State private var showingDiscardConfirmation = false
+
+    init(profile: LLMProfile?) {
+        self.profile = profile
+        _name = State(initialValue: profile?.name ?? "")
+        _baseURL = State(initialValue: profile?.baseURL ?? "")
+        _model = State(initialValue: profile?.modelName ?? "")
+    }
 
     var body: some View {
         Form {
@@ -521,6 +612,7 @@ private struct V2IOSProfileEditor: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
+            .disabled(saving)
             if saving {
                 Section { HStack { ProgressView(); Text("正在保存") } }
             }
@@ -542,7 +634,6 @@ private struct V2IOSProfileEditor: View {
                     .disabled(!canSave || saving)
             }
         }
-        .onAppear { name = profile?.name ?? ""; baseURL = profile?.baseURL ?? ""; model = profile?.modelName ?? "" }
         .interactiveDismissDisabled(hasUnsavedChanges || saving)
         .navigationBarBackButtonHidden(profile != nil && hasUnsavedChanges)
         .confirmationDialog("放弃未保存的模型修改？", isPresented: $showingDiscardConfirmation, titleVisibility: .visible) {
@@ -555,6 +646,7 @@ private struct V2IOSProfileEditor: View {
 
     private var canSave: Bool {
         !name.v2IOSTrimmed.isEmpty && !baseURL.v2IOSTrimmed.isEmpty && !model.v2IOSTrimmed.isEmpty
+            && (profile != nil || !apiKey.v2IOSTrimmed.isEmpty)
     }
 
     private var hasUnsavedChanges: Bool {
@@ -567,7 +659,7 @@ private struct V2IOSProfileEditor: View {
     }
 
     private func save() {
-        guard canSave else { return }
+        guard canSave, !saving else { return }
         saving = true
         Task {
             let saved: Bool
@@ -595,6 +687,7 @@ struct V2IOSExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var notices: NoticeBus
     @Environment(\.colorScheme) private var colorScheme
     let currentChapterID: String?
@@ -634,7 +727,7 @@ struct V2IOSExportSheet: View {
                     } else {
                         V2IOSPrimaryButton(title: "导出", action: startExport)
                     }
-                    Text("只导出服务器已保存的版本；当前未保存的本地修改不会写入文件。")
+                    Text("导出前会核对本机修改。若有未保存、待同步或冲突内容，请先处理后再导出。正文可在章节菜单中“保存到服务器”。")
                         .font(V2DeskType.control(11.5))
                         .foregroundStyle(Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -700,7 +793,12 @@ struct V2IOSExportSheet: View {
 
     private func startExport() {
         guard let book = session.currentBook else { return }
+        do { try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded) }
+        catch { notices.publish(error); return }
         cancelExport()
+        let selectedScope = scope, selectedFormat = format
+        let selectedWorld = includeWorld, selectedCharacters = includeCharacters, selectedSeparate = separate
+        let selection = ExportSelection.prose(scope: selectedScope, currentChapterID: currentChapterID, includeWorldview: selectedWorld, includeCharacters: selectedCharacters)
         let sessionID = UUID()
         exportSessionID = sessionID
         isExporting = true
@@ -709,12 +807,13 @@ struct V2IOSExportSheet: View {
         exportTask = Task {
             defer { finishExport(sessionID: sessionID) }
             do {
-                guard let data = await bookshelf.exportData(book) else { return }
+                let receipt = try bookshelf.prepareExport(bookID: book.id, selection: selection)
+                guard let data = await bookshelf.exportData(book, selection: selection) else { return }
                 try Task.checkCancellation()
                 guard isCurrentExportSession(sessionID) else { return }
                 totalChapters = data.chapters.count
                 completedChapters = totalChapters
-                let selected = V2DeskExportComposer.chapters(for: scope, in: data, currentID: currentChapterID)
+                let selected = V2DeskExportComposer.chapters(for: selectedScope, in: data, currentID: currentChapterID)
                 guard !selected.isEmpty else {
                     if isCurrentExportSession(sessionID) { notices.publish("这个范围没有可导出的已保存章节。") }
                     return
@@ -722,14 +821,18 @@ struct V2IOSExportSheet: View {
                 let files = V2DeskExportComposer.compose(
                     data: data,
                     chapters: selected,
-                    format: format,
-                    includeWorld: includeWorld,
-                    includeCharacters: includeCharacters,
-                    separateChapters: separate
+                    format: selectedFormat,
+                    includeWorld: selectedWorld,
+                    includeCharacters: selectedCharacters,
+                    separateChapters: selectedSeparate
                 )
+                try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+                try bookshelf.validateExport(receipt)
                 let preparedURLs = try V2IOSExportFiles.write(files)
                 try Task.checkCancellation()
                 guard isCurrentExportSession(sessionID) else { return }
+                try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+                try bookshelf.validateExport(receipt)
                 urls = preparedURLs
                 sharing = true
             } catch is CancellationError {
@@ -814,6 +917,8 @@ struct V2IOSSearchSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var workspace: WorkspaceStore
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var inspiration: InspirationCreatorStore
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var notices: NoticeBus
     @EnvironmentObject private var sync: ClientSyncStore
@@ -822,6 +927,7 @@ struct V2IOSSearchSheet: View {
     @State private var isSearching = false
     @State private var hasSearched = false
     @State private var openingID: String?
+    @State private var openingToken = UUID()
     @State private var characterDestinationID: String?
 
     var body: some View {
@@ -889,6 +995,7 @@ struct V2IOSSearchSheet: View {
         )) {
             V2IOSCharactersView(initialCharacterID: characterDestinationID)
         }
+        .onDisappear { openingToken = UUID() }
     }
 
     private func startSearch() {
@@ -909,13 +1016,25 @@ struct V2IOSSearchSheet: View {
 
     private func open(_ result: SearchResult) async {
         guard openingID == nil else { return }
+        let token = UUID()
+        openingToken = token
+        let previousContext = session.bookContextID
+        var ownedContext = previousContext
         openingID = result.id
-        defer { openingID = nil }
+        defer { if openingToken == token { openingID = nil } }
         do {
             let book: Book = try await session.api.request("/books/\(result.bookId)")
+            guard !Task.isCancelled, openingToken == token, session.bookContextID == previousContext else { return }
+            if session.currentBook?.id != book.id {
+                guard V2IOSBookNavigation.prepare(editor: editor, workspace: workspace, characters: characters, inspiration: inspiration) else { return }
+            }
             session.currentBook = book
+            let contextID = session.bookContextID
+            ownedContext = contextID
             await workspace.load(bookId: book.id)
+            guard !Task.isCancelled, openingToken == token, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
             await characters.load(bookId: book.id)
+            guard !Task.isCancelled, openingToken == token, session.bookContextID == contextID, session.currentBook?.id == book.id else { return }
             if let characterID = result.characterId {
                 guard characters.characters.contains(where: { $0.id == characterID }) else {
                     throw APIError.http(404, "人物已不存在")
@@ -930,6 +1049,7 @@ struct V2IOSSearchSheet: View {
             }
             dismiss()
         } catch {
+            guard openingToken == token, session.bookContextID == ownedContext else { return }
             notices.publish(error)
         }
     }
@@ -959,6 +1079,7 @@ struct V2IOSProjectPackageSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var bookshelf: BookshelfStore
+    @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var notices: NoticeBus
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var preparingExport = false
@@ -974,6 +1095,8 @@ struct V2IOSProjectPackageSheet: View {
                     Text("备份当前书的正文、人物、关联、有效记忆、人格和模型覆盖。访问密钥、全局模型设置和内部生成过程文本不会写入项目包。")
                         .font(V2DeskType.control(12.5))
                         .foregroundStyle(Color.secondary)
+                    Text("备份前须保存并同步本书修改、处理冲突；正文可在章节菜单中“保存到服务器”。")
+                        .font(V2DeskType.control(12.5)).foregroundStyle(Color.secondary)
                     Button(preparingExport ? "正在准备备份" : "备份当前书") { Task { await exportCurrentBook() } }
                         .disabled(preparingExport || importing || session.currentBook == nil || !sync.networkActionsAvailable)
                 }
@@ -997,6 +1120,7 @@ struct V2IOSProjectPackageSheet: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: dismiss.callAsFunction).disabled(preparingExport || importing) } }
         }
         .v2IOSPage()
+        .interactiveDismissDisabled(preparingExport || importing)
         .sheet(isPresented: $showingShare) {
             if let sharingURL { V2IOSShareSheet(urls: [sharingURL]) }
         }
@@ -1007,6 +1131,9 @@ struct V2IOSProjectPackageSheet: View {
     }
 
     private func exportCurrentBook() async {
+        guard !preparingExport, !importing else { return }
+        do { try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded) }
+        catch { notices.publish(error); return }
         guard let book = session.currentBook else {
             notices.publish("请先打开一本书再备份。")
             return
@@ -1014,10 +1141,15 @@ struct V2IOSProjectPackageSheet: View {
         preparingExport = true
         defer { preparingExport = false }
         do {
+            let receipt = try bookshelf.prepareExport(bookID: book.id, selection: .project)
             guard let data = await bookshelf.exportProject(book) else { return }
+            try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+            try bookshelf.validateExport(receipt)
             let filename = sanitizedFilename(book.title) + ".ictwbook"
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
             try data.write(to: url, options: .atomic)
+            try V2ExportDraftGuard.persist(editor.persistLocalDraftIfNeeded)
+            try bookshelf.validateExport(receipt)
             sharingURL = url
             showingShare = true
         } catch {
@@ -1026,6 +1158,7 @@ struct V2IOSProjectPackageSheet: View {
     }
 
     private func importProject(from url: URL) async {
+        guard !preparingExport, !importing else { return }
         importing = true
         defer { importing = false }
         let accessed = url.startAccessingSecurityScopedResource()

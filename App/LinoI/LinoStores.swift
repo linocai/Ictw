@@ -5,17 +5,24 @@ import SwiftUI
 final class AppSession: ObservableObject {
     @Published var baseURL = ""
     @Published var token = ""
-    @Published var currentBook: Book?
+    @Published var currentBook: Book? {
+        didSet {
+            if oldValue?.id != currentBook?.id { bookContextID = UUID() }
+        }
+    }
+    private(set) var bookContextID = UUID()
     @Published var selectedTab: WorkspaceTab = .chapters
 
     let notices: NoticeBus
+    private let requestSession: URLSession
 
-    init(notices: NoticeBus) {
+    init(notices: NoticeBus, requestSession: URLSession = .shared) {
         self.notices = notices
+        self.requestSession = requestSession
     }
 
     var api: APIClient {
-        APIClient(baseURL: baseURL, token: token)
+        APIClient(baseURL: baseURL, token: token, session: requestSession)
     }
 
     func bootstrap() async {
@@ -53,9 +60,28 @@ final class AppSession: ObservableObject {
     }
 
     func closeBook() {
+        bookContextID = UUID()
         currentBook = nil
         selectedTab = .chapters
     }
+}
+
+enum ExportSelection: Equatable, Sendable {
+    case project
+    case prose(scope: ExportScope, currentChapterID: String?, includeWorldview: Bool, includeCharacters: Bool)
+
+    static var allProse: Self { .prose(scope: .all, currentChapterID: nil, includeWorldview: true, includeCharacters: true) }
+}
+
+struct ExportReceipt: Sendable {
+    let bookID: String
+    let selection: ExportSelection
+    fileprivate let fingerprint: Data
+}
+
+private struct ExportPreparationError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 @MainActor
@@ -65,11 +91,14 @@ final class BookshelfStore: ObservableObject {
 
     private let session: AppSession
     let sync: ClientSyncStore
+    private var openRequestID: UUID?
+    private var loadRequestID: UUID?
+    private let draftCache = ChapterDraftCache()
 
     init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
         self.sync = sync
-        books = sync.cache.books()
+        books = sync.visibleBooks()
     }
 
     /// `true` only means the shelf was actually read from the configured
@@ -79,15 +108,21 @@ final class BookshelfStore: ObservableObject {
     func load() async -> Bool {
         // Cold start is local-first: a Ningbo outage must not turn a book the
         // author already opened into an empty shelf.
-        if books.isEmpty { books = sync.cache.books() }
+        if books.isEmpty { books = sync.visibleBooks() }
         guard !session.token.isEmpty else { sync.markOffline(); return false }
+        let requestID = UUID()
+        loadRequestID = requestID
         isLoading = true
-        defer { isLoading = false }
+        defer { if loadRequestID == requestID { isLoading = false } }
         do {
             await sync.flush(using: session.api)
-            books = try await session.api.request("/books")
-            sync.cache.saveBooks(books)
+            guard loadRequestID == requestID, !Task.isCancelled else { return false }
+            let readID = sync.cache.beginListRead(.books)
+            let values: [Book] = try await session.api.request("/books")
+            sync.cache.saveBooks(values, ifCurrent: readID)
             sync.markOnline()
+            guard loadRequestID == requestID, !Task.isCancelled else { return false }
+            books = sync.visibleBooks()
             return true
         } catch {
             if case APIError.transport = error { sync.markOffline() }
@@ -98,13 +133,14 @@ final class BookshelfStore: ObservableObject {
 
     @discardableResult
     func createBook(title: String, world: String = "") async -> Book? {
+        let contextID = session.bookContextID
         do {
             let payload = BookPayload(title: title, world_setting: world)
             let book: Book = try await session.api.request("/books", method: "POST", body: payload)
-            books.insert(book, at: 0)
             sync.upsertBook(book)
+            books = sync.visibleBooks()
             sync.markOnline()
-            session.currentBook = book
+            if session.bookContextID == contextID { session.currentBook = book }
             return book
         } catch {
             session.notices.publish(error)
@@ -113,11 +149,18 @@ final class BookshelfStore: ObservableObject {
     }
 
     func open(_ book: Book) async {
-        session.currentBook = book
+        let requestID = UUID()
+        openRequestID = requestID
+        session.currentBook = sync.overlayBook(book)
+        let contextID = session.bookContextID
         do {
-            session.currentBook = try await session.api.request("/books/\(book.id)")
-            if let current = session.currentBook { sync.upsertBook(current) }
+            let current: Book = try await session.api.request("/books/\(book.id)")
+            guard current.id == book.id else { return }
+            guard openRequestID == requestID, session.bookContextID == contextID,
+                  session.currentBook?.id == book.id, !Task.isCancelled else { return }
+            sync.upsertBook(current)
             sync.markOnline()
+            session.currentBook = sync.visibleBooks().first { $0.id == book.id } ?? sync.overlayBook(current)
         } catch {
             if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
@@ -125,19 +168,15 @@ final class BookshelfStore: ObservableObject {
     }
 
     func upsert(_ book: Book) {
-        if let idx = books.firstIndex(where: { $0.id == book.id }) {
-            books[idx] = book
-        } else {
-            books.insert(book, at: 0)
-        }
         sync.upsertBook(book)
+        books = sync.visibleBooks()
     }
 
     func delete(_ book: Book) async {
         do {
             try await session.api.rawRequest("/books/\(book.id)", method: "DELETE", ifMatch: book.contentRevision)
-            books.removeAll { $0.id == book.id }
-            sync.cache.saveBooks(books)
+            sync.confirmResourceDeletion(kind: .book, id: book.id)
+            books = sync.visibleBooks()
             sync.markOnline()
             if session.currentBook?.id == book.id {
                 session.closeBook()
@@ -155,16 +194,168 @@ final class BookshelfStore: ObservableObject {
         }
     }
 
-    /// Full project backups are always prepared by the Backend in one
-    /// response. This keeps a many-chapter export from becoming a partial
-    /// client-side loop and gives both platforms one file-transfer seam.
-    func exportProject(_ book: Book) async -> Data? {
-        guard sync.networkActionsAvailable else {
-            session.notices.publish("离线时不能创建项目包，请恢复网络后重试。")
-            return nil
+    /// One shared preflight protects cold chapter drafts, offline mutations
+    /// and conflicts. It does not write business data or call any model.
+    func prepareExport(bookID: String, selection: ExportSelection) throws -> ExportReceipt {
+        let fingerprint = try exportFingerprint(bookID: bookID, selection: selection)
+        return ExportReceipt(bookID: bookID, selection: selection, fingerprint: fingerprint)
+    }
+
+    func validateExport(_ receipt: ExportReceipt) throws {
+        let current = try exportFingerprint(bookID: receipt.bookID, selection: receipt.selection)
+        guard current == receipt.fingerprint else {
+            throw ExportPreparationError(message: "准备导出期间，本书内容已改变。请保留当前页面，保存或同步最新修改后重新导出。")
         }
+    }
+
+    private func exportFingerprint(bookID: String, selection: ExportSelection) throws -> Data {
+        guard sync.networkActionsAvailable else { throw ExportPreparationError(message: "离线时不能创建导出文件，请恢复网络并同步本机修改后重试。") }
+        guard !sync.hasPersistentSyncFailure else { throw ExportPreparationError(message: "本机待同步内容尚未安全保存，请先处理同步中心提示，再导出。") }
+        guard !sync.cache.isDeleted(kind: .book, id: bookID) else { throw ExportPreparationError(message: "该书已删除，不能继续导出旧文件。") }
+        let book = sync.cache.books().first { $0.id == bookID } ?? (session.currentBook?.id == bookID ? session.currentBook : nil)
+        let title = book?.title ?? bookID
+        let summaries = sync.cache.chapters(bookID: bookID)
+        let summaryByID = Dictionary(uniqueKeysWithValues: summaries.map { ($0.id, $0) })
+        let scope: ExportScope
+        let currentID: String?
+        let includesWorld: Bool
+        let includesCharacters: Bool
+        let project: Bool
+        switch selection {
+        case .project: scope = .all; currentID = nil; includesWorld = true; includesCharacters = true; project = true
+        case let .prose(value, chapterID, world, characters):
+            scope = value; currentID = chapterID; includesWorld = world; includesCharacters = characters; project = false
+        }
+        if scope == .current, currentID == nil { throw ExportPreparationError(message: "尚未选择本章，请先打开需要导出的章节。") }
+        func ownsChapter(_ id: String) -> Bool { summaryByID[id] != nil || sync.cache.chapter(id: id)?.bookId == bookID }
+        func includesChapter(_ id: String) -> Bool {
+            if scope == .current { return id == currentID }
+            if scope == .all { return true }
+            return (summaryByID[id]?.status ?? sync.cache.chapter(id: id)?.status) == "finalized"
+        }
+        if scope == .current, let currentID, !ownsChapter(currentID) {
+            throw ExportPreparationError(message: "本章的书籍归属尚未确认，请先打开该章并刷新，再导出。")
+        }
+        func label(_ id: String) -> String {
+            if let row = summaryByID[id] { return "第 \(row.index) 章《\(row.title.isEmpty ? "未命名" : row.title)》" }
+            if let row = sync.cache.chapter(id: id) { return "第 \(row.index) 章《\(row.title.isEmpty ? "未命名" : row.title)》" }
+            return "章节 \(id)"
+        }
+        let drafts: [LocalChapterDraft]
+        do { drafts = try draftCache.allDrafts() }
+        catch { throw ExportPreparationError(message: "本机草稿缓存无法完整读取，暂不能确认完整导出。请先检查本机草稿保存提示后重试。") }
+        var relevantDrafts: [LocalChapterDraft] = []
+        for draft in drafts {
+            let owner = draft.bookID ?? sync.cache.chapter(id: draft.chapterId)?.bookId
+                ?? (summaryByID[draft.chapterId] != nil ? bookID : nil)
+            if draft.dirty, owner == nil {
+                if sync.cache.isDeleted(kind: .chapter, id: draft.chapterId) {
+                    throw ExportPreparationError(message: "有一份已删章节的本机保留稿无法确认原书信息，请到“同步中心 → 本机保留稿”查看并复制，另存后明确移除此副本，再重新导出。")
+                }
+                throw ExportPreparationError(message: "有一份旧本机草稿（\(draft.title.isEmpty ? draft.chapterId : draft.title)）尚无法确认所属书籍，请先打开该章并保存，再导出。")
+            }
+            guard owner == bookID else { continue }
+            if draft.dirty, scope == .accepted, summaryByID[draft.chapterId] == nil, sync.cache.chapter(id: draft.chapterId) == nil {
+                if sync.cache.isDeleted(kind: .chapter, id: draft.chapterId) {
+                    throw ExportPreparationError(message: "《\(title)》有一份已删章节的本机保留稿，请到“同步中心 → 本机保留稿”查看并复制，另存后明确移除此副本，再重新导出。")
+                }
+                throw ExportPreparationError(message: "《\(title)》有一份本机稿无法确认是否属于已接受章节，请先打开该章保存并刷新章节列表，再导出。")
+            }
+            guard includesChapter(draft.chapterId) else { continue }
+            relevantDrafts.append(draft)
+            guard draft.dirty else { continue }
+            let remote = sync.cache.chapter(id: draft.chapterId)
+            let matches = remote.map { value in
+                draft.title == value.title && draft.userPrompt == value.userPrompt && draft.authorNote == value.authorNote
+                    && draft.targetWordCount == value.targetWordCount && draft.draftText == value.draftText
+                    && draft.characterLinks == value.characterLinks && draft.exemptedCharacterNames == value.exemptedCharacterNames
+            } ?? false
+            if !matches {
+                let deleted = sync.cache.isDeleted(kind: .chapter, id: draft.chapterId)
+                let draftLabel = deleted
+                    ? (draft.chapterIndex.map { "第 \($0) 章" } ?? "原章节") + "《\(draft.title.isEmpty ? "标题不可用" : draft.title)》"
+                    : label(draft.chapterId)
+                let action = deleted
+                    ? "原章节已删除，请到“同步中心 → 本机保留稿”查看并复制，另存到新章节后明确移除此副本"
+                    : "请先打开该章，使用“保存到服务器”，再同步或处理冲突"
+                throw ExportPreparationError(message: "《\(title)》\(draftLabel)有尚未进入服务器的本机稿；\(action)，然后重新导出。")
+            }
+        }
+        let characters = sync.cache.characters(bookID: bookID)
+        let characterIDs = Set(characters.map(\.id))
+        let eventIDs = Set(characters.flatMap { $0.events.map(\.id) })
+        var characterOwners: [String: String] = [:]
+        var eventOwners: [String: String] = [:]
+        for cachedBook in sync.cache.books() {
+            for character in sync.cache.characters(bookID: cachedBook.id) {
+                characterOwners[character.id] = cachedBook.id
+                for event in character.events { eventOwners[event.id] = cachedBook.id }
+            }
+        }
+        let draftOwners = Dictionary(drafts.compactMap { value in value.bookID.map { (value.chapterId, $0) } }, uniquingKeysWith: { first, _ in first })
+        func unknownOwnership(_ identity: SyncResourceIdentity) -> ExportPreparationError {
+            ExportPreparationError(message: "一项本机\(identity.kind == .chapter ? "章节" : "人物")修改（\(identity.id)）尚无法确认所属书籍，暂不能确认完整导出。请先打开对应对象并保存或在同步中心处理，再导出。")
+        }
+        func relevant(_ identity: SyncResourceIdentity, payload: Data, base: Data) throws -> Bool {
+            let object = (try? JSONSerialization.jsonObject(with: base) as? [String: Any]) ?? [:]
+            let patch = (try? JSONSerialization.jsonObject(with: payload) as? [String: Any]) ?? [:]
+            let owner = patch["book_id"] as? String ?? object["book_id"] as? String
+            let characterID = patch["character_id"] as? String ?? object["character_id"] as? String
+            switch identity.kind {
+            case .book: return identity.id == bookID // The title is part of every exported file.
+            case .chapter:
+                if scope == .current, identity.id != currentID { return false }
+                let resolvedOwner = owner ?? sync.cache.chapter(id: identity.id)?.bookId ?? draftOwners[identity.id]
+                    ?? (summaryByID[identity.id] != nil ? bookID : nil)
+                guard let resolvedOwner else { throw unknownOwnership(identity) }
+                guard resolvedOwner == bookID else { return false }
+                if scope == .accepted, summaryByID[identity.id] == nil, sync.cache.chapter(id: identity.id) == nil {
+                    throw unknownOwnership(identity)
+                }
+                return includesChapter(identity.id)
+            case .character:
+                guard includesCharacters else { return false }
+                guard let resolvedOwner = owner ?? characterOwners[identity.id] ?? (characterIDs.contains(identity.id) ? bookID : nil) else { throw unknownOwnership(identity) }
+                return resolvedOwner == bookID
+            case .characterEvent:
+                guard includesCharacters else { return false }
+                let parentOwner = characterID.flatMap { characterOwners[$0] }
+                guard let resolvedOwner = owner ?? eventOwners[identity.id] ?? parentOwner
+                    ?? (eventIDs.contains(identity.id) ? bookID : nil) else { throw unknownOwnership(identity) }
+                return resolvedOwner == bookID
+            case .agentPersona, .modelBinding: return project && (identity.bookID == bookID || !identity.isResolved)
+            case .llmProfile: return false // Global credentials are never in a project package.
+            }
+        }
+        let pending = try sync.pendingMutations.filter { try relevant($0.identity, payload: $0.payload, base: $0.baseSnapshot) }
+        let conflicts = try sync.conflicts.filter { try relevant($0.identity, payload: $0.localPayload, base: $0.baseSnapshot) }
+        if let item = conflicts.first { throw ExportPreparationError(message: "《\(title)》\(item.resourceLabel)有待处理冲突，请先在同步中心比较并处理，再导出。") }
+        if let item = pending.first { throw ExportPreparationError(message: "\(sync.resourceLabel(for: item))尚未同步到服务器，请先在同步中心同步或处理失败，再导出。") }
+        // Capture only the requested scope. An unrelated unaccepted chapter
+        // or another book must not invalidate a current-chapter export.
+        let rows = summaries.filter { includesChapter($0.id) }.sorted { $0.id < $1.id }
+        let encoder = JSONEncoder.lino
+        encoder.outputFormatting = [.sortedKeys]
+        let frozenDrafts = try encoder.encode(relevantDrafts.sorted { $0.chapterId < $1.chapterId }.map { value in
+            var content = value
+            // A same-content clean-cache refresh is not a new author edit.
+            content.updatedAt = Date(timeIntervalSince1970: 0)
+            return content
+        })
+        let frozenRows = try encoder.encode(rows)
+        let frozenBook = try encoder.encode(book)
+        let frozenCharacters = includesCharacters ? try encoder.encode(characters) : Data()
+        // includesWorld is retained in selection even though book title/world
+        // share one conditional write; any pending book write blocks safely.
+        _ = includesWorld
+        return try encoder.encode([frozenBook, frozenRows, frozenDrafts, frozenCharacters])
+    }
+
+    func exportProject(_ book: Book) async -> Data? {
         do {
+            let receipt = try prepareExport(bookID: book.id, selection: .project)
             let data = try await session.api.exportProject(bookID: book.id)
+            try validateExport(receipt)
             sync.markOnline()
             return data
         } catch {
@@ -174,13 +365,12 @@ final class BookshelfStore: ObservableObject {
         }
     }
 
-    func exportData(_ book: Book) async -> BookExportData? {
-        guard sync.networkActionsAvailable else {
-            session.notices.publish("离线时不能导出，请恢复网络后重试。")
-            return nil
-        }
+    func exportData(_ book: Book, selection: ExportSelection = .allProse) async -> BookExportData? {
         do {
+            let receipt = try prepareExport(bookID: book.id, selection: selection)
             let data = try await session.api.exportData(bookID: book.id)
+            guard data.bookID == book.id else { throw ExportPreparationError(message: "服务器返回了另一书籍的导出内容，请重试。") }
+            try validateExport(receipt)
             sync.markOnline()
             return data
         } catch {
@@ -218,10 +408,18 @@ final class WorkspaceStore: ObservableObject {
     @Published private(set) var isLoading = false
     /// Bound to `RootView`'s `NavigationStack(path:)` so a freshly created
     /// chapter can be pushed onto the stack programmatically.
-    @Published var chapterPath: [ChapterSummary] = []
+    @Published var chapterPath: [ChapterSummary] = [] {
+        didSet {
+            if oldValue.map(\.id) != chapterPath.map(\.id) { chapterNavigationID = UUID() }
+        }
+    }
+    private(set) var chapterNavigationID = UUID()
 
     private let session: AppSession
     let sync: ClientSyncStore
+    private var activeBookID: String?
+    private var contextID = UUID()
+    private var listRequestID: UUID?
 
     init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
@@ -232,10 +430,26 @@ final class WorkspaceStore: ObservableObject {
     /// contract here: it unwinds any pushed chapter destination, which is what
     /// makes this the right call after the visible chapter has been deleted.
     func load(bookId: String) async {
+        guard session.currentBook?.id == bookId else { return }
+        activeBookID = bookId
+        contextID = UUID()
         chapterPath = []
-        let cached = sync.cache.chapters(bookID: bookId)
-        if !cached.isEmpty { chapters = cached }
+        chapters = sync.cache.chapters(bookID: bookId)
         await refreshChapters(bookId: bookId)
+    }
+
+    func resetBookContext() {
+        contextID = UUID()
+        listRequestID = nil
+        activeBookID = nil
+        chapters = []
+        chapterPath = []
+        isLoading = false
+    }
+
+    private func ownsBook(_ bookID: String, context: UUID, sessionContext: UUID) -> Bool {
+        contextID == context && session.bookContextID == sessionContext
+            && session.currentBook?.id == bookID && (activeBookID == nil || activeBookID == bookID)
     }
 
     /// Re-reads the chapter list **without** touching `chapterPath`. Callers
@@ -244,13 +458,29 @@ final class WorkspaceStore: ObservableObject {
     /// the chapter they are standing in, which turns "refresh the markers I
     /// just promised you" or "your delete was rejected" into a loss of place.
     func refreshChapters(bookId: String) async {
+        guard session.currentBook?.id == bookId else { return }
+        if activeBookID != bookId {
+            activeBookID = bookId
+            contextID = UUID()
+            chapters = sync.cache.chapters(bookID: bookId)
+        }
+        let context = contextID
+        let sessionContext = session.bookContextID
+        let requestID = UUID()
+        listRequestID = requestID
         isLoading = true
-        defer { isLoading = false }
+        defer { if listRequestID == requestID { isLoading = false } }
         do {
             await sync.flush(using: session.api)
-            chapters = try await session.api.request("/books/\(bookId)/chapters")
-            sync.cache.saveChapters(chapters, bookID: bookId)
+            guard ownsBook(bookId, context: context, sessionContext: sessionContext),
+                  listRequestID == requestID, !Task.isCancelled else { return }
+            let readID = sync.cache.beginListRead(.chapters(bookId))
+            let values: [ChapterSummary] = try await session.api.request("/books/\(bookId)/chapters")
+            sync.cache.saveChapters(values, bookID: bookId, ifCurrent: readID)
             sync.markOnline()
+            guard ownsBook(bookId, context: context, sessionContext: sessionContext),
+                  listRequestID == requestID, !Task.isCancelled else { return }
+            chapters = sync.cache.chapters(bookID: bookId)
         } catch {
             if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
@@ -262,14 +492,19 @@ final class WorkspaceStore: ObservableObject {
     @discardableResult
     func createChapter(replacingCurrentDestination: Bool = false) async -> ChapterSummary? {
         guard let book = session.currentBook else { return nil }
+        let context = contextID
+        let sessionContext = session.bookContextID
         do {
             let payload = ChapterCreatePayload(title: "新章节", user_prompt: "")
             let chapter: Chapter = try await session.api.request("/books/\(book.id)/chapters", method: "POST", body: payload)
             sync.cache.saveChapter(chapter)
-            upsert(chapter)
-            chapters = try await session.api.request("/books/\(book.id)/chapters")
-            sync.cache.saveChapters(chapters, bookID: book.id)
+            cacheSummary(summary(for: chapter))
+            let readID = sync.cache.beginListRead(.chapters(book.id))
+            let values: [ChapterSummary] = try await session.api.request("/books/\(book.id)/chapters")
+            sync.cache.saveChapters(values, bookID: book.id, ifCurrent: readID)
             sync.markOnline()
+            guard ownsBook(book.id, context: context, sessionContext: sessionContext), !Task.isCancelled else { return nil }
+            chapters = sync.cache.chapters(bookID: book.id)
             if let created = chapters.first(where: { $0.id == chapter.id }) {
                 replaceCurrentDestination(with: created, orAppend: !replacingCurrentDestination)
                 return created
@@ -285,6 +520,7 @@ final class WorkspaceStore: ObservableObject {
     /// one navigation level deep. The rail and legacy callers can still append
     /// their first destination through the default behavior.
     func replaceCurrentDestination(with summary: ChapterSummary, orAppend: Bool = true) {
+        guard session.currentBook?.id == summary.bookId else { return }
         guard !chapterPath.isEmpty else {
             if orAppend { chapterPath.append(summary) }
             return
@@ -295,32 +531,44 @@ final class WorkspaceStore: ObservableObject {
     @discardableResult
     func saveBook(title: String, world: String) async -> Bool {
         guard let book = session.currentBook else { return false }
+        let context = contextID
+        let sessionContext = session.bookContextID
         let payload = BookPayload(title: title, world_setting: world)
         let baseBook = sync.cache.books().first(where: { $0.id == book.id }) ?? book
         let base = BookPayload(title: baseBook.title, world_setting: baseBook.worldSetting)
+        let receipt = sync.beginDirectMutation(kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH", baseRevision: book.contentRevision, payload: payload, baseSnapshot: base)
+        defer { sync.finishDirectMutation(receipt) }
         do {
             let updated: Book = try await session.api.request("/books/\(book.id)", method: "PATCH", body: payload, ifMatch: book.contentRevision)
-            session.currentBook = updated
             sync.upsertBook(updated)
-            sync.acknowledge(kind: .book, id: book.id)
+            sync.acknowledge(receipt, response: updated)
             sync.markOnline()
+            guard ownsBook(book.id, context: context, sessionContext: sessionContext), !Task.isCancelled else { return false }
+            session.currentBook = sync.overlayBook(updated)
             return true
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
-                await sync.recordWriteConflict(kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH", baseRevision: book.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
-                session.notices.publish(error)
+                await sync.recordWriteConflict(kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH", baseRevision: book.contentRevision, payload: payload, baseSnapshot: base, receipt: receipt, error: conflict, api: session.api)
+                if sync.conflict(for: .book, id: book.id) != nil { session.notices.publish(error) }
             } else if !sync.enqueueDirectFailure(
                 error, kind: .book, id: book.id, path: "/books/\(book.id)", method: "PATCH",
-                baseRevision: book.contentRevision, payload: payload, baseSnapshot: base
+                baseRevision: book.contentRevision, payload: payload, baseSnapshot: base, receipt: receipt
             ) {
                 session.notices.publish("书籍修改未能安全进入同步队列，请保留当前页面后重试。", critical: true)
+            }
+            if ownsBook(book.id, context: context, sessionContext: sessionContext) {
+                session.currentBook = sync.overlayBook(baseBook)
             }
             return false
         }
     }
 
     func upsert(_ chapter: Chapter) {
-        let summary = ChapterSummary(
+        upsert(summary(for: chapter))
+    }
+
+    private func summary(for chapter: Chapter) -> ChapterSummary {
+        ChapterSummary(
             id: chapter.id,
             bookId: chapter.bookId,
             index: chapter.index,
@@ -337,21 +585,29 @@ final class WorkspaceStore: ObservableObject {
             archiveStateUncertaintyCount: chapter.archive?.stateUncertainties.count ?? 0,
             contentRevision: chapter.contentRevision
         )
-        upsert(summary)
+    }
+
+    private func cacheSummary(_ summary: ChapterSummary, preservingInFlightRead: Bool = false) {
+        var cached = sync.cache.chapters(bookID: summary.bookId)
+        if let index = cached.firstIndex(where: { $0.id == summary.id }) { cached[index] = summary }
+        else { cached.append(summary); cached.sort { $0.index < $1.index } }
+        sync.cache.saveChapters(cached, bookID: summary.bookId, preservingInFlightRead: preservingInFlightRead)
     }
 
     func upsert(_ summary: ChapterSummary) {
-        if let idx = chapters.firstIndex(where: { $0.id == summary.id }) {
-            chapters[idx] = summary
-        } else {
-            chapters.append(summary)
-            chapters.sort { $0.index < $1.index }
-        }
+        cacheSummary(summary, preservingInFlightRead: true)
+        guard session.currentBook?.id == summary.bookId,
+              activeBookID == nil || activeBookID == summary.bookId else { return }
+        chapters = sync.cache.chapters(bookID: summary.bookId)
     }
 
     func removeChapter(id: String) {
-        chapters.removeAll { $0.id == id }
-        if let bookID = session.currentBook?.id { sync.cache.saveChapters(chapters, bookID: bookID) }
+        if let bookID = session.currentBook?.id {
+            sync.cache.saveChapters(sync.cache.chapters(bookID: bookID).filter { $0.id != id }, bookID: bookID)
+            chapters = sync.cache.chapters(bookID: bookID)
+        } else {
+            chapters.removeAll { $0.id == id }
+        }
     }
 }
 
@@ -363,6 +619,9 @@ final class CharactersStore: ObservableObject {
 
     private let session: AppSession
     let sync: ClientSyncStore
+    private var activeBookID: String?
+    private var contextID = UUID()
+    private var loadRequestID: UUID?
 
     init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
@@ -378,15 +637,31 @@ final class CharactersStore: ObservableObject {
     }
 
     func load(bookId: String) async {
-        let cached = sync.cache.characters(bookID: bookId)
-        if !cached.isEmpty { characters = cached; ensureSelection() }
+        guard session.currentBook?.id == bookId else { return }
+        if activeBookID != bookId {
+            activeBookID = bookId
+            contextID = UUID()
+            selectedCharacterId = nil
+        }
+        characters = sync.visibleCharacters(bookID: bookId)
+        ensureSelection()
+        let context = contextID
+        let sessionContext = session.bookContextID
+        let requestID = UUID()
+        loadRequestID = requestID
         isLoading = true
-        defer { isLoading = false }
+        defer { if loadRequestID == requestID { isLoading = false } }
         do {
             await sync.flush(using: session.api)
-            characters = try await session.api.request("/books/\(bookId)/characters")
-            sync.cache.saveCharacters(characters, bookID: bookId)
+            guard ownsBook(bookId, context: context, sessionContext: sessionContext),
+                  loadRequestID == requestID, !Task.isCancelled else { return }
+            let readID = sync.cache.beginListRead(.characters(bookId))
+            let values: [Character] = try await session.api.request("/books/\(bookId)/characters")
+            sync.cache.saveCharacters(values, bookID: bookId, ifCurrent: readID)
             sync.markOnline()
+            guard ownsBook(bookId, context: context, sessionContext: sessionContext),
+                  loadRequestID == requestID, !Task.isCancelled else { return }
+            characters = sync.visibleCharacters(bookID: bookId)
             ensureSelection()
         } catch {
             if case APIError.transport = error { sync.markOffline() }
@@ -394,15 +669,45 @@ final class CharactersStore: ObservableObject {
         }
     }
 
+    func resetBookContext() {
+        contextID = UUID()
+        loadRequestID = nil
+        activeBookID = nil
+        characters = []
+        selectedCharacterId = nil
+        isLoading = false
+    }
+
+    private func ownsBook(_ bookID: String, context: UUID, sessionContext: UUID) -> Bool {
+        contextID == context && session.bookContextID == sessionContext
+            && session.currentBook?.id == bookID && (activeBookID == nil || activeBookID == bookID)
+    }
+
+    private func refreshLocalView(bookID: String, context: UUID, sessionContext: UUID) {
+        guard ownsBook(bookID, context: context, sessionContext: sessionContext) else { return }
+        characters = sync.visibleCharacters(bookID: bookID)
+        ensureSelection()
+    }
+
+    private func cacheCharacter(_ character: Character) {
+        var values = sync.cache.characters(bookID: character.bookId)
+        if let index = values.firstIndex(where: { $0.id == character.id }) { values[index] = character }
+        else { values.append(character) }
+        sync.cache.saveCharacters(values, bookID: character.bookId)
+    }
+
     @discardableResult
     func create(name: String, role: String = "", fixedProfile: String = "") async -> Character? {
         guard let book = session.currentBook else { return nil }
+        let context = contextID
+        let sessionContext = session.bookContextID
         do {
             let payload = CharacterPatchPayload(name: name, role: role, fixed_profile: fixedProfile)
             let character: Character = try await session.api.request("/books/\(book.id)/characters", method: "POST", body: payload)
-            characters.append(character)
-            sync.cache.saveCharacters(characters, bookID: book.id)
+            cacheCharacter(character)
             sync.markOnline()
+            guard ownsBook(book.id, context: context, sessionContext: sessionContext), !Task.isCancelled else { return nil }
+            refreshLocalView(bookID: book.id, context: context, sessionContext: sessionContext)
             selectedCharacterId = character.id
             return character
         } catch {
@@ -413,11 +718,15 @@ final class CharactersStore: ObservableObject {
 
     func importCharacter(name: String, role: String, text: String) async {
         guard let book = session.currentBook else { return }
+        let context = contextID
+        let sessionContext = session.bookContextID
         do {
             let item = CharacterImportItem(name: name, role: role, fixed_profile: text)
             let payload = CharacterImportPayload(items: [item])
             let imported: [Character] = try await session.api.request("/books/\(book.id)/characters/import", method: "POST", body: payload)
-            characters.append(contentsOf: imported)
+            imported.forEach(cacheCharacter)
+            guard ownsBook(book.id, context: context, sessionContext: sessionContext), !Task.isCancelled else { return }
+            refreshLocalView(bookID: book.id, context: context, sessionContext: sessionContext)
             if let first = imported.first { selectedCharacterId = first.id }
         } catch {
             session.notices.publish(error)
@@ -426,38 +735,50 @@ final class CharactersStore: ObservableObject {
 
     @discardableResult
     func update(_ character: Character) async -> Bool {
+        let context = contextID
+        let sessionContext = session.bookContextID
         let payload = CharacterPatchPayload(character)
         let baseCharacter = sync.cache.characters(bookID: character.bookId).first(where: { $0.id == character.id }) ?? character
         let base = CharacterPatchPayload(baseCharacter)
+        let receipt = sync.beginDirectMutation(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH", baseRevision: character.contentRevision, payload: payload, baseSnapshot: base)
+        defer { sync.finishDirectMutation(receipt) }
         do {
             let updated: Character = try await session.api.request("/characters/\(character.id)", method: "PATCH", body: payload, ifMatch: character.contentRevision)
-            replace(updated)
-            sync.cache.saveCharacters(characters, bookID: updated.bookId)
-            sync.acknowledge(kind: .character, id: character.id)
+            cacheCharacter(updated)
+            sync.acknowledge(receipt, response: updated)
             sync.markOnline()
+            refreshLocalView(bookID: character.bookId, context: context, sessionContext: sessionContext)
+            guard ownsBook(character.bookId, context: context, sessionContext: sessionContext), !Task.isCancelled else { return false }
             return true
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
-                await sync.recordWriteConflict(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH", baseRevision: character.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
-                session.notices.publish(error)
+                await sync.recordWriteConflict(kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH", baseRevision: character.contentRevision, payload: payload, baseSnapshot: base, receipt: receipt, error: conflict, api: session.api)
+                if sync.conflict(for: .character, id: character.id) != nil { session.notices.publish(error) }
             } else if !sync.enqueueDirectFailure(
                 error, kind: .character, id: character.id, path: "/characters/\(character.id)", method: "PATCH",
-                baseRevision: character.contentRevision, payload: payload, baseSnapshot: base
+                baseRevision: character.contentRevision, payload: payload, baseSnapshot: base, receipt: receipt
             ) {
                 session.notices.publish("人物修改未能安全进入同步队列，请保留当前页面后重试。", critical: true)
             }
+            refreshLocalView(bookID: character.bookId, context: context, sessionContext: sessionContext)
             return false
         }
     }
 
     @discardableResult
     func delete(_ character: Character) async -> Bool {
+        let context = contextID
+        let sessionContext = session.bookContextID
         do {
             try await session.api.rawRequest("/characters/\(character.id)", method: "DELETE", ifMatch: character.contentRevision)
-            characters.removeAll { $0.id == character.id }
-            sync.cache.saveCharacters(characters, bookID: character.bookId)
+            for event in character.events { sync.confirmDeletion(kind: .characterEvent, id: event.id) }
+            sync.confirmDeletion(kind: .character, id: character.id)
+            var values = sync.cache.characters(bookID: character.bookId)
+            values.removeAll { $0.id == character.id }
+            sync.cache.saveCharacters(values, bookID: character.bookId)
             sync.markOnline()
-            ensureSelection()
+            refreshLocalView(bookID: character.bookId, context: context, sessionContext: sessionContext)
+            guard ownsBook(character.bookId, context: context, sessionContext: sessionContext), !Task.isCancelled else { return false }
             return true
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
@@ -469,23 +790,27 @@ final class CharactersStore: ObservableObject {
     }
 
     func replace(_ character: Character) {
-        if let idx = characters.firstIndex(where: { $0.id == character.id }) {
-            characters[idx] = character
-        } else {
-            characters.append(character)
-        }
-        sync.cache.saveCharacters(characters, bookID: character.bookId)
+        cacheCharacter(character)
+        guard session.currentBook?.id == character.bookId, activeBookID == nil || activeBookID == character.bookId else { return }
+        characters = sync.visibleCharacters(bookID: character.bookId)
+        ensureSelection()
     }
 
     @discardableResult
     func updateEvent(_ event: CharacterEvent, text: String) async -> Bool {
+        let context = contextID
+        let sessionContext = session.bookContextID
         let payload = CharacterEventPatchPayload(event_text: text)
         let base = CharacterEventPatchPayload(event_text: event.eventText)
+        let receipt = sync.beginDirectMutation(kind: .characterEvent, id: event.id, path: "/character-events/\(event.id)", method: "PATCH", baseRevision: event.contentRevision, payload: payload, baseSnapshot: base)
+        defer { sync.finishDirectMutation(receipt) }
         do {
             let updated: CharacterEvent = try await session.api.request("/character-events/\(event.id)", method: "PATCH", body: payload, ifMatch: event.contentRevision)
-            applyEventUpdate(updated)
-            sync.acknowledge(kind: .characterEvent, id: event.id)
+            cacheEventUpdate(updated)
+            sync.acknowledge(receipt, response: updated)
             sync.markOnline()
+            refreshLocalView(bookID: event.bookId, context: context, sessionContext: sessionContext)
+            guard ownsBook(event.bookId, context: context, sessionContext: sessionContext), !Task.isCancelled else { return false }
             return true
         } catch {
             if let conflict = error as? APIError,
@@ -493,43 +818,44 @@ final class CharactersStore: ObservableObject {
                 await sync.recordWriteConflict(
                     kind: .characterEvent, id: event.id, path: "/character-events/\(event.id)", method: "PATCH",
                     readPath: "/character-events/\(event.id)", readStrategy: .direct,
-                    baseRevision: event.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api
+                    baseRevision: event.contentRevision, payload: payload, baseSnapshot: base, receipt: receipt, error: conflict, api: session.api
                 )
-                session.notices.publish(error)
+                refreshLocalView(bookID: event.bookId, context: context, sessionContext: sessionContext)
+                if sync.conflict(for: .characterEvent, id: event.id) != nil { session.notices.publish(error) }
                 return false
             }
             guard sync.enqueueDirectFailure(
                 error, kind: .characterEvent, id: event.id,
                 path: "/character-events/\(event.id)", method: "PATCH",
                 baseRevision: event.contentRevision,
-                payload: payload, baseSnapshot: base
+                payload: payload, baseSnapshot: base, receipt: receipt
             ) else {
                 session.notices.publish("人物记录未能安全保存在本机，请保留编辑框后重试。", critical: true)
                 return false
             }
+            refreshLocalView(bookID: event.bookId, context: context, sessionContext: sessionContext)
+            guard ownsBook(event.bookId, context: context, sessionContext: sessionContext), !Task.isCancelled else { return false }
             if case APIError.transport = error {
-                var local = event
-                local.eventText = text
-                applyEventUpdate(local)
                 session.notices.publish("当前离线，人物记录已保存在本机，恢复网络后会安全同步。")
                 return true
             }
-            var local = event
-            local.eventText = text
-            applyEventUpdate(local)
             return false
         }
     }
 
     func deleteEvent(_ event: CharacterEvent) async {
+        let context = contextID
+        let sessionContext = session.bookContextID
         guard sync.networkActionsAvailable else {
             session.notices.publish("离线时不能删除人物记录；恢复连接后再试。")
             return
         }
         do {
             try await session.api.rawRequest("/character-events/\(event.id)", method: "DELETE", ifMatch: event.contentRevision)
+            sync.confirmResourceDeletion(kind: .characterEvent, id: event.id)
             removeEvent(event)
             sync.markOnline()
+            refreshLocalView(bookID: event.bookId, context: context, sessionContext: sessionContext)
         } catch {
             if case APIError.transport = error { sync.markOffline() }
             if let conflict = error as? APIError, case .writeConflict = conflict {
@@ -543,17 +869,19 @@ final class CharactersStore: ObservableObject {
         }
     }
 
-    private func applyEventUpdate(_ event: CharacterEvent) {
-        guard let charIdx = characters.firstIndex(where: { $0.id == event.characterId }) else { return }
-        guard let eventIdx = characters[charIdx].events.firstIndex(where: { $0.id == event.id }) else { return }
-        characters[charIdx].events[eventIdx] = event
-        sync.cache.saveCharacters(characters, bookID: characters[charIdx].bookId)
+    private func cacheEventUpdate(_ event: CharacterEvent) {
+        var values = sync.cache.characters(bookID: event.bookId)
+        guard let charIdx = values.firstIndex(where: { $0.id == event.characterId }),
+              let eventIdx = values[charIdx].events.firstIndex(where: { $0.id == event.id }) else { return }
+        values[charIdx].events[eventIdx] = event
+        sync.cache.saveCharacters(values, bookID: event.bookId)
     }
 
     private func removeEvent(_ event: CharacterEvent) {
-        guard let charIdx = characters.firstIndex(where: { $0.id == event.characterId }) else { return }
-        characters[charIdx].events.removeAll { $0.id == event.id }
-        sync.cache.saveCharacters(characters, bookID: characters[charIdx].bookId)
+        var values = sync.cache.characters(bookID: event.bookId)
+        guard let charIdx = values.firstIndex(where: { $0.id == event.characterId }) else { return }
+        values[charIdx].events.removeAll { $0.id == event.id }
+        sync.cache.saveCharacters(values, bookID: event.bookId)
     }
 
     func ensureSelection() {
@@ -629,7 +957,12 @@ final class ChapterEditorStore: ObservableObject {
     private var pollingMonitorID: UUID?
     private var pollingErrorNotified = false
     private var actionOperationID: UUID?
+    private var actionBookContextID: UUID?
     private var taskRefreshRequestID: UUID?
+    private var jobObservationID: UUID?
+    private var chapterLoadRequestID: UUID?
+    private var saveRequestID: UUID?
+    private var checkerRetryRequestID: String?
     /// Most recently observed durable task identity for this chapter. A
     /// configuration rejection can occur before a new JobRun exists, so it
     /// records which older terminal run it supersedes.
@@ -637,6 +970,8 @@ final class ChapterEditorStore: ObservableObject {
     private var protectsPreJobCheckerFailure = false
     private var supersededCheckerJobID: String?
     private var localEditRevision: UInt64 = 0
+    private var editorContextID = UUID()
+    private var chapterRefreshRequestID: UUID?
 
     init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
         self.session = session
@@ -689,22 +1024,105 @@ final class ChapterEditorStore: ObservableObject {
     private func beginAction() -> UUID {
         let operationID = UUID()
         actionOperationID = operationID
+        chapterRefreshRequestID = nil
+        actionBookContextID = session.bookContextID
+        taskRefreshRequestID = nil
+        jobObservationID = nil
+        chapterLoadRequestID = nil
+        isLoading = false
         return operationID
     }
 
     private func actionIsCurrent(_ operationID: UUID, chapterID: String, revision: UInt64) -> Bool {
         actionOperationID == operationID
+            && actionBookContextID == session.bookContextID
             && currentChapter?.id == chapterID
+            && currentChapter?.bookId == session.currentBook?.id
             && localEditRevision == revision
     }
 
     private func invalidateInFlightOperations() {
         actionOperationID = nil
+        actionBookContextID = nil
         taskRefreshRequestID = nil
+        jobObservationID = nil
     }
 
-    func load(_ summary: ChapterSummary) async {
+    @discardableResult
+    func resetBookContext() -> Bool {
+        guard persistLocalDraftIfNeeded() else { return false }
+        clearEditorContext()
+        return true
+    }
+
+    private func clearEditorContext() {
+        editorContextID = UUID()
+        chapterRefreshRequestID = nil
+        if let pollingChapterId { stopPolling(for: pollingChapterId) }
+        invalidateInFlightOperations()
+        chapterLoadRequestID = nil
+        saveRequestID = nil
+        localEditRevision &+= 1
+        currentChapter = nil
+        isLoading = false
+        isSaving = false
+        writingPhase = .idle
+        saveState = .synced
+        pollingConnectionInterrupted = false
+        taskMonitoringMessage = nil
+        currentValidationReason = nil
+        memoryContext = nil
+        checkerResult = nil
+        failedCandidateCheckerResult = nil
+        checkerAppliesToVisibleDraft = false
+        checkerRefreshing = false
+        preflightAcceptanceMessage = nil
+        staleCheckedSnapshot = nil
+        restoredLocalDraft = false
+        pendingExemptionNames = []
+        pendingProductionContext = nil
+        candidateCheckerRetrySourceJobID = nil
+        checkerTarget = nil
+        latestTaskJobID = nil
+        checkerRetryRequestID = nil
+        protectsPreJobCheckerFailure = false
+        supersededCheckerJobID = nil
+    }
+
+    /// All observers share one ordering domain, including polling and foreground reads.
+    private func observedJobStatus(chapterId: String) async throws -> WriteJobStatus {
+        let requestID = UUID()
+        let revision = localEditRevision
+        let bookContext = session.bookContextID
+        let editorContext = editorContextID
+        jobObservationID = requestID
+        let status = try await session.api.jobStatus(chapterId: chapterId)
+        guard jobObservationID == requestID, editorContextID == editorContext,
+              currentChapter?.id == chapterId, !sync.cache.isDeleted(kind: .chapter, id: chapterId),
+              session.bookContextID == bookContext, currentChapter?.bookId == session.currentBook?.id,
+              localEditRevision == revision else { throw CancellationError() }
+        return status
+    }
+
+    func load(_ summary: ChapterSummary, replacingLocalPayload: Data? = nil) async {
+        guard session.currentBook?.id == summary.bookId,
+              !sync.cache.isDeleted(kind: .chapter, id: summary.id) else { return }
+        editorContextID = UUID()
+        chapterRefreshRequestID = nil
+        let bookContext = session.bookContextID
+        // Only an explicit conflict decision can discard a different local
+        // payload. Edits made since that decision must survive the refresh.
+        let replacesLocal: Bool
+        if let expectedData = replacingLocalPayload, let expected = Self.payloadObject(expectedData),
+           let current = currentChapter, current.id == summary.id {
+            replacesLocal = Self.chapterPayload(current) == expected
+        } else {
+            replacesLocal = false
+        }
         guard persistLocalDraftIfNeeded() else { return }
+        let requestID = UUID()
+        let startingRevision = localEditRevision
+        chapterLoadRequestID = requestID
         if currentChapter?.id != summary.id {
             invalidateInFlightOperations()
             if let pollingChapterId, pollingChapterId != summary.id {
@@ -725,42 +1143,67 @@ final class ChapterEditorStore: ObservableObject {
         preflightAcceptanceMessage = nil
         staleCheckedSnapshot = nil
         latestTaskJobID = nil
+        checkerRetryRequestID = nil
         protectsPreJobCheckerFailure = false
         supersededCheckerJobID = nil
-        defer { isLoading = false }
+        defer {
+            if chapterLoadRequestID == requestID { isLoading = false }
+        }
         // Offline-first reading. A local snapshot is safe to render because it
         // is explicitly labelled by `sync.state`; a later refresh never
         // replaces an unsent local draft.
         if let cached = sync.cache.chapter(id: summary.id) {
-            currentChapter = cached
+            currentChapter = sync.overlayChapter(cached)
             let local = cache.load(chapterId: cached.id)
-            if let local, local.shouldRestore(over: cached) {
-                currentChapter = local.apply(to: cached)
-                restoredLocalDraft = true
-                saveState = .restoredLocalDraft
+            if let local, local.shouldRestore(over: cached) || (local.dirty && local.baseRevision != nil) {
+                restoreLocalDraft(local, over: cached)
             } else {
                 saveState = sync.state(for: .chapter, id: cached.id) == .synced ? .synced : .localDraft
             }
+        } else if currentChapter?.id != summary.id {
+            currentChapter = nil
+            saveState = .synced
         }
         do {
             await sync.flush(using: session.api)
-            let remote: Chapter = try await session.api.request("/chapters/\(summary.id)")
+            guard chapterLoadRequestID == requestID, localEditRevision == startingRevision,
+                  session.bookContextID == bookContext, session.currentBook?.id == summary.bookId,
+                  !Task.isCancelled else { return }
+            var remote: Chapter = try await session.api.request("/chapters/\(summary.id)")
+            guard chapterLoadRequestID == requestID, localEditRevision == startingRevision,
+                  session.bookContextID == bookContext, session.currentBook?.id == summary.bookId,
+                  remote.id == summary.id, remote.bookId == summary.bookId,
+                  !sync.cache.isDeleted(kind: .chapter, id: remote.id), !Task.isCancelled else { return }
+            if let newer = sync.cache.chapter(id: remote.id), newer.contentRevision > remote.contentRevision { remote = newer }
             if let pollingChapterId, pollingChapterId != remote.id {
                 stopPolling(for: pollingChapterId)
             }
             // Capture the public baseline before applying a local draft. The
             // base revision, not either device's clock, decides whether this
             // draft can be safely restored onto the response.
-            sync.cache.saveChapter(remote)
             let local = cache.load(chapterId: remote.id)
-            if let local, local.shouldRestore(over: remote) {
-                currentChapter = local.apply(to: remote)
-                restoredLocalDraft = true
-                saveState = .restoredLocalDraft
+            let remoteMatchesLocal = local.map {
+                Self.chapterPayload($0.apply(to: remote)) == Self.chapterPayload(remote)
+            } ?? false
+            if let local, !replacesLocal, !remoteMatchesLocal,
+               local.shouldRestore(over: remote) || (local.dirty && local.baseRevision != nil) {
+                // A completed job can advance the server while the author is
+                // editing. Keep both the dirty copy and its old If-Match base;
+                // an explicit save will enter the existing conflict workflow.
+                // Do not clean it merely because a cold read sees a new revision.
+                if local.shouldRestore(over: remote) { sync.cache.saveChapter(remote) }
+                restoreLocalDraft(local, over: remote)
             } else {
-                currentChapter = remote
-                cache.saveClean(remote)
-                saveState = .synced
+                sync.cache.saveChapter(remote)
+                let visible = sync.overlayChapter(remote)
+                currentChapter = visible
+                if Self.chapterPayload(visible) != Self.chapterPayload(remote) {
+                    _ = cache.saveDirty(visible)
+                    saveState = .localDraft
+                } else {
+                    cache.saveClean(remote)
+                    saveState = .synced
+                }
             }
             sync.markOnline()
             staleCheckedSnapshot = cache.loadCheckedSnapshot(chapterId: remote.id)
@@ -781,11 +1224,16 @@ final class ChapterEditorStore: ObservableObject {
                 pendingExemptionNames = outcome.pendingExemptionNames
                 checkerTarget = outcome.checkerTarget
                 candidateCheckerRetrySourceJobID = outcome.candidateCheckerRetrySourceJobID
+                checkerRetryRequestID = outcome.checkerRetryRequestID
                 protectsPreJobCheckerFailure = true
                 supersededCheckerJobID = outcome.supersededJobID
+                latestTaskJobID = outcome.jobID ?? outcome.supersededJobID
             }
 
             let reconciledServerJob = await reconcileLatestJobOnLoad(chapterId: remote.id)
+            guard chapterLoadRequestID == requestID, localEditRevision == startingRevision,
+                  session.bookContextID == bookContext, session.currentBook?.id == summary.bookId,
+                  currentChapter?.id == remote.id, !Task.isCancelled else { return }
             if !reconciledServerJob {
                 resumePollingIfNeeded()
             }
@@ -798,13 +1246,77 @@ final class ChapterEditorStore: ObservableObject {
                 pendingExemptionNames = outcome.pendingExemptionNames
                 checkerTarget = outcome.checkerTarget
                 candidateCheckerRetrySourceJobID = outcome.candidateCheckerRetrySourceJobID
+                checkerRetryRequestID = outcome.checkerRetryRequestID
                 protectsPreJobCheckerFailure = outcome.isPreJobCheckerFailure
                 supersededCheckerJobID = outcome.supersededJobID
             }
         } catch {
+            guard chapterLoadRequestID == requestID, localEditRevision == startingRevision,
+                  session.bookContextID == bookContext, session.currentBook?.id == summary.bookId,
+                  !Task.isCancelled else { return }
             if case APIError.transport = error { sync.markOffline() }
             session.notices.publish(error)
         }
+    }
+
+    private func restoreLocalDraft(_ local: LocalChapterDraft, over remote: Chapter) {
+        var preserved = local.apply(to: remote)
+        if let base = local.baseRevision, base != remote.contentRevision {
+            preserved.contentRevision = base
+            saveState = .remoteSaveFailed(
+                message: "服务器章节已更新，本机修改已保留；请保存后比较冲突。",
+                localDraftPreserved: true
+            )
+        } else {
+            saveState = .restoredLocalDraft
+        }
+        currentChapter = preserved
+        restoredLocalDraft = true
+    }
+
+    private static func payloadObject(_ data: Data) -> [String: JSONValue]? {
+        try? JSONDecoder.lino.decode([String: JSONValue].self, from: data)
+    }
+
+    private static func chapterPayload(_ chapter: Chapter) -> [String: JSONValue]? {
+        guard let data = try? JSONEncoder.lino.encode(ChapterPatchPayload(chapter)) else { return nil }
+        return payloadObject(data)
+    }
+
+    /// The author has explicitly chosen the compared server version. Adopt
+    /// that already-read snapshot now so a failed follow-up GET cannot revive
+    /// the discarded draft. A newer local edit is outside this authorization.
+    func applyServerConflictDecision(_ conflict: ContentConflict) {
+        guard conflict.resourceKind == .chapter,
+              let expected = Self.payloadObject(conflict.localPayload),
+              let server = try? JSONDecoder.lino.decode(Chapter.self, from: conflict.serverSnapshot),
+              server.id == conflict.resourceID else { return }
+        if let current = currentChapter, current.id == server.id {
+            guard Self.chapterPayload(current) == expected else { return }
+            localEditRevision &+= 1
+            invalidateInFlightOperations()
+            chapterLoadRequestID = nil
+            isLoading = false
+            adoptRemoteChapter(server)
+            discardObsoleteTaskOutcome(chapterID: server.id)
+        } else {
+            guard let baseline = sync.cache.chapter(id: server.id),
+                  let local = cache.load(chapterId: server.id), local.dirty,
+                  Self.chapterPayload(local.apply(to: baseline)) == expected else { return }
+            sync.cache.saveChapter(server)
+            cache.saveClean(server)
+        }
+    }
+
+    /// A resolved conflict can belong to a chapter that is not on screen.
+    /// Retire only the exact compared draft, never later edits of that chapter.
+    func discardInactiveDraft(after conflict: ContentConflict) {
+        guard conflict.resourceKind == .chapter, currentChapter?.id != conflict.resourceID,
+              let baseline = sync.cache.chapter(id: conflict.resourceID),
+              let local = cache.load(chapterId: conflict.resourceID), local.dirty,
+              let expected = Self.payloadObject(conflict.localPayload),
+              Self.chapterPayload(local.apply(to: baseline)) == expected else { return }
+        cache.saveClean(baseline)
     }
 
     func editString(_ keyPath: WritableKeyPath<Chapter, String>, value: String) {
@@ -847,28 +1359,69 @@ final class ChapterEditorStore: ObservableObject {
         guard let chapter = currentChapter else { return true }
         guard ChapterLocalDraftPersistencePolicy.needsPersistence(saveState) else { return true }
         saveState = .savingLocally
-        let saved = cache.saveDirty(chapter)
+        let saved = cache.saveDirty(chapter, bookTitle: localBookTitle(for: chapter))
         saveState = saved
             ? .localDraft
             : .localSaveFailed(message: "无法写入本机草稿缓存，请立即复制正文后重试。")
+        if sync.cache.isDeleted(kind: .chapter, id: chapter.id) { sync.refreshRetainedChapterDraftAvailability() }
         return saved
+    }
+
+    private func localBookTitle(for chapter: Chapter) -> String? {
+        sync.visibleBooks().first { $0.id == chapter.bookId }?.title
+            ?? (session.currentBook?.id == chapter.bookId ? session.currentBook?.title : nil)
+    }
+
+    /// Completing recovery must also retire the matching in-memory draft;
+    /// otherwise the next navigation would recreate the file just removed.
+    func removeRetainedChapterDraft(_ draft: RetainedChapterDraft) throws {
+        let isCurrent = currentChapter?.id == draft.chapterID
+        if isCurrent, let current = currentChapter, !draft.matchesVisibleInputs(current) {
+            let saved = cache.saveDirty(current, bookTitle: localBookTitle(for: current))
+            sync.refreshRetainedChapterDraftAvailability()
+            throw RetainedDraftError(message: saved
+                ? "当前编辑器还有更新的输入，已继续保留在本机。未移除副本；请刷新、核对并另存最新稿件后再试。"
+                : "当前编辑器还有更新的输入，且无法写入本机缓存。未移除副本；请立即复制当前稿件后重试。")
+        }
+        try sync.removeRetainedChapterDraft(draft)
+        if isCurrent { clearEditorContext() }
     }
 
     func save() async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
+        guard !sync.cache.isDeleted(kind: .chapter, id: chapter.id) else {
+            let saved = cache.saveDirty(chapter, bookTitle: localBookTitle(for: chapter))
+            sync.refreshRetainedChapterDraftAvailability()
+            session.notices.publish(saved
+                ? "原章节已删除；新增输入仅在本机保留。请到“同步中心 → 本机保留稿”查看并复制，手动另存到新章节。"
+                : "原章节已删除，且新增输入未能写入本机缓存。请立即复制当前稿件；原ID不能继续保存。", critical: true, tone: .error)
+            return nil
+        }
+        let bookContext = session.bookContextID
         // Persist the exact outgoing snapshot before the network request. If
         // PATCH fails, the UI can truthfully promise the local draft survived.
-        let localSnapshotSaved = cache.saveDirty(chapter)
+        let localSnapshotSaved = cache.saveDirty(chapter, bookTitle: localBookTitle(for: chapter))
         let payload = ChapterPatchPayload(chapter)
         let baseChapter = sync.cache.chapter(id: chapter.id) ?? chapter
         let base = ChapterPatchPayload(baseChapter)
+        let receipt = sync.beginDirectMutation(kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH", baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base)
         let startingRevision = localEditRevision
+        let requestID = UUID()
+        saveRequestID = requestID
         isSaving = true
         saveState = .savingRemotely
-        defer { isSaving = false }
+        defer {
+            sync.finishDirectMutation(receipt)
+            if saveRequestID == requestID { isSaving = false }
+        }
         do {
             let saved: Chapter = try await session.api.request("/chapters/\(chapter.id)", method: "PATCH", body: payload, ifMatch: chapter.contentRevision)
-            guard currentChapter?.id == chapter.id else { return saved }
+            guard !sync.cache.isDeleted(kind: .chapter, id: chapter.id) else { return nil }
+            sync.cache.saveChapter(saved)
+            sync.acknowledge(receipt, response: saved)
+            sync.markOnline()
+            guard currentChapter?.id == chapter.id, saveRequestID == requestID,
+                  session.bookContextID == bookContext, session.currentBook?.id == chapter.bookId else { return saved }
             // Keystrokes landing during the round trip must survive it. The
             // response reflects the text we sent, so adopting it wholesale
             // would silently roll the editor back and then mark it synced.
@@ -876,20 +1429,26 @@ final class ChapterEditorStore: ObservableObject {
             // `.savingRemotely` for the whole call, which it always reads as
             // divergence. The edit counter is the only signal that matters.
             guard localEditRevision == startingRevision else {
+                if currentChapter?.contentRevision == chapter.contentRevision {
+                    currentChapter?.contentRevision = saved.contentRevision
+                }
                 saveState = .unsaved
                 return saved
             }
             currentChapter = saved
-            sync.cache.saveChapter(saved)
-            sync.acknowledge(kind: .chapter, id: chapter.id)
-            sync.markOnline()
             cache.saveClean(saved)
             restoredLocalDraft = false
             saveState = .synced
             return saved
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
-                await sync.recordWriteConflict(kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH", baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base, error: conflict, api: session.api)
+                await sync.recordWriteConflict(kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH", baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base, receipt: receipt, error: conflict, api: session.api)
+                guard currentChapter?.id == chapter.id, saveRequestID == requestID, localEditRevision == startingRevision,
+                      session.bookContextID == bookContext, session.currentBook?.id == chapter.bookId else { return nil }
+                if sync.conflict(for: .chapter, id: chapter.id) == nil {
+                    saveState = .localDraft
+                    return nil
+                }
                 saveState = .remoteSaveFailed(message: "章节已在另一设备更新；本机内容已保留，等待比较。", localDraftPreserved: localSnapshotSaved)
                 session.notices.publish("章节已在另一设备更新；本机内容已保留。")
                 return nil
@@ -897,8 +1456,10 @@ final class ChapterEditorStore: ObservableObject {
             let presented = LinoErrorPresenter.present(error: error)
             let queued = sync.enqueueDirectFailure(
                 error, kind: .chapter, id: chapter.id, path: "/chapters/\(chapter.id)", method: "PATCH",
-                baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base
+                baseRevision: chapter.contentRevision, payload: payload, baseSnapshot: base, receipt: receipt
             )
+            guard currentChapter?.id == chapter.id, saveRequestID == requestID, localEditRevision == startingRevision,
+                  session.bookContextID == bookContext, session.currentBook?.id == chapter.bookId else { return nil }
             switch (localSnapshotSaved, queued) {
             case (false, false):
                 saveState = .localSaveFailed(message: "正文和待同步副本都未能安全写入本机，请立即复制正文后重试。")
@@ -927,10 +1488,13 @@ final class ChapterEditorStore: ObservableObject {
 
     func importDraft(_ text: String) async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
+        let operationID = beginAction()
+        let revision = localEditRevision
         do {
             let imported: Chapter = try await session.api.request("/chapters/\(chapter.id)/import", method: "POST", body: ChapterImportPayload(draft_text: text), ifMatch: chapter.contentRevision)
-            currentChapter = imported
             sync.cache.saveChapter(imported)
+            guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return imported }
+            currentChapter = imported
             checkerResult = nil
             failedCandidateCheckerResult = nil
             checkerAppliesToVisibleDraft = false
@@ -962,6 +1526,8 @@ final class ChapterEditorStore: ObservableObject {
             session.notices.publish("请改用「重写本章」生成正文。")
             return nil
         }
+        let operationID = beginAction()
+        let startingRevision = localEditRevision
         let replace = !chapter.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || chapter.status == "writing"
         pendingExemptionNames = []
         currentValidationReason = nil
@@ -971,21 +1537,25 @@ final class ChapterEditorStore: ObservableObject {
         checkerAppliesToVisibleDraft = false
         preflightAcceptanceMessage = nil
         memoryContext = nil
-        guard let saved = await save() else { return nil }
+        guard let saved = await save(),
+              actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
         guard case let .proceed(token) = await productionReadiness(
             for: saved, action: .write, acknowledgedContextToken: acknowledgedContextToken
         ) else { return nil }
-        return await startWrite(replaceDraft: replace, acknowledgedContextToken: token)
+        guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
+        return await startWrite(chapter: saved, operationID: operationID, revision: startingRevision,
+                                replaceDraft: replace, acknowledgedContextToken: token)
     }
 
     /// Saves current edits, then starts the background Extractor job and
     /// returns immediately. Completion (chapter becomes `finalized`) is
     /// observed reactively via `currentChapter`.
     func accept(overrideChecker: Bool = false, allowShortDraft: Bool = false) async -> Chapter? {
-        guard !writingPhase.isActive else { return nil }
-        guard let saved = await save() else { return nil }
+        guard !writingPhase.isActive, let chapter = currentChapter else { return nil }
         let operationID = beginAction()
         let startingRevision = localEditRevision
+        guard let saved = await save(),
+              actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
         let noticeLocation = noticeLocation(for: saved)
         pendingExemptionNames = []
         currentValidationReason = nil
@@ -1087,11 +1657,12 @@ final class ChapterEditorStore: ObservableObject {
             session.notices.publish("本机正文或章节输入尚未与服务器一致；请先处理该修改后再重新整理记忆。", tone: .error)
             return nil
         }
+        let operationID = beginAction()
+        let startingRevision = localEditRevision
         guard case let .proceed(token) = await productionReadiness(
             for: accepted, action: .archiveRetry, acknowledgedContextToken: acknowledgedContextToken
         ) else { return nil }
-        let operationID = beginAction()
-        let startingRevision = localEditRevision
+        guard actionIsCurrent(operationID, chapterID: accepted.id, revision: startingRevision) else { return nil }
         let noticeLocation = noticeLocation(for: accepted)
         ChapterTaskOutcomeStore.clear(chapterID: accepted.id)
         writingPhase = .extracting
@@ -1132,20 +1703,28 @@ final class ChapterEditorStore: ObservableObject {
     func refreshTaskStatus() async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
         let chapterID = chapter.id
+        let editorContext = editorContextID
+        let bookContext = session.bookContextID
         let requestID = UUID()
         let startingRevision = localEditRevision
         let noticeLocation = noticeLocation(for: chapter)
         taskRefreshRequestID = requestID
         do {
             let remote: Chapter = try await session.api.request("/chapters/\(chapterID)")
-            guard taskRefreshRequestID == requestID,
+            guard taskRefreshRequestID == requestID, editorContextID == editorContext,
+                  session.bookContextID == bookContext, remote.bookId == chapter.bookId,
+                  !sync.cache.isDeleted(kind: .chapter, id: chapterID),
+                  remote.contentRevision >= (currentChapter?.contentRevision ?? 0),
                   currentChapter?.id == chapterID,
                   localEditRevision == startingRevision else { return nil }
             if !hasLocalInputDivergence {
                 adoptRemoteChapter(remote)
             }
-            let status = try await session.api.jobStatus(chapterId: chapterID)
-            guard taskRefreshRequestID == requestID,
+            let status = try await observedJobStatus(chapterId: chapterID)
+            guard taskRefreshRequestID == requestID, editorContextID == editorContext,
+                  session.bookContextID == bookContext, remote.bookId == chapter.bookId,
+                  !sync.cache.isDeleted(kind: .chapter, id: chapterID),
+                  remote.contentRevision >= (currentChapter?.contentRevision ?? 0),
                   currentChapter?.id == chapterID,
                   localEditRevision == startingRevision else { return nil }
             if shouldDeferCheckerStatus(status) {
@@ -1175,6 +1754,7 @@ final class ChapterEditorStore: ObservableObject {
             sync.markOnline()
             return currentChapter
         } catch {
+            if error is CancellationError { return nil }
             let presented = LinoErrorPresenter.present(error: error)
             session.notices.publish(
                 noticeLocation + "任务状态暂时无法更新：\(presented.message)",
@@ -1185,7 +1765,9 @@ final class ChapterEditorStore: ObservableObject {
                     requestID: requestID
                 )
             )
-            guard taskRefreshRequestID == requestID,
+            guard taskRefreshRequestID == requestID, editorContextID == editorContext,
+                  session.bookContextID == bookContext,
+                  !sync.cache.isDeleted(kind: .chapter, id: chapterID),
                   currentChapter?.id == chapterID,
                   localEditRevision == startingRevision else { return nil }
             pollingConnectionInterrupted = true
@@ -1197,6 +1779,7 @@ final class ChapterEditorStore: ObservableObject {
     func rerunChecker(acknowledgedContextToken: String? = nil) async -> CheckerResult? {
         guard !writingPhase.isActive else { return nil }
         let operationID = beginAction()
+        let startingRevision = localEditRevision
         checkerRefreshing = true
         defer {
             if actionOperationID == operationID {
@@ -1221,10 +1804,11 @@ final class ChapterEditorStore: ObservableObject {
             guard let saved = await save() else { return nil }
             chapter = saved
         }
+        guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
         guard case let .proceed(token) = await productionReadiness(
             for: chapter, action: .check, acknowledgedContextToken: acknowledgedContextToken
         ) else { return nil }
-        let startingRevision = localEditRevision
+        guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
         let noticeLocation = noticeLocation(for: chapter)
         clearPreJobCheckerFailure(chapterID: chapter.id)
         do {
@@ -1316,11 +1900,21 @@ final class ChapterEditorStore: ObservableObject {
         let revision = localEditRevision
         let location = noticeLocation(for: chapter)
         clearPreJobCheckerFailure(chapterID: chapter.id)
+        let requestID = checkerRetryRequestID ?? UUID().uuidString.lowercased()
+        checkerRetryRequestID = requestID
+        protectsPreJobCheckerFailure = true
+        supersededCheckerJobID = latestTaskJobID
+        ChapterTaskOutcomeStore.save(
+            phase: .failed(code: "checker_start_unconfirmed", message: "复查请求待确认，可刷新或重试同一请求。", stage: .bibleChecking),
+            chapter: chapter, checkerTarget: "generated_candidate", isPreJobCheckerFailure: true,
+            supersededJobID: latestTaskJobID, candidateCheckerRetrySourceJobID: sourceJobID,
+            checkerRetryRequestID: requestID
+        )
         writingPhase = .checking
         do {
             let status = try await session.api.retryCandidateChecker(
                 chapterId: chapter.id, sourceJobId: sourceJobID,
-                contentRevision: chapter.contentRevision
+                contentRevision: chapter.contentRevision, requestID: requestID
             )
             guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return nil }
             clearPreJobCheckerFailure(chapterID: chapter.id)
@@ -1328,11 +1922,19 @@ final class ChapterEditorStore: ObservableObject {
             if !Self.isTerminalPhase(status.phase) { pollJob(chapterId: chapter.id) }
             return currentChapter
         } catch {
+            if await recoverCheckerStartOutcomeIfUnknown(
+                error, chapterId: chapter.id, operationID: operationID, revision: revision,
+                target: "generated_candidate"
+            ) { return currentChapter }
+            if await adoptRunningJobIfNeeded(
+                error, chapterId: chapter.id, operationID: operationID, revision: revision
+            ) { return currentChapter }
             let permanentRetryErrors = ["checker_retry_input_changed", "checker_retry_not_available", "checker_source_not_found", "checker_retry_unavailable"]
             let code = LinoErrorPresenter.code(for: error)
             if actionIsCurrent(operationID, chapterID: chapter.id, revision: revision),
                permanentRetryErrors.contains(code ?? "") {
                 candidateCheckerRetrySourceJobID = nil
+                checkerRetryRequestID = nil
                 failedCandidateCheckerResult = nil
             }
             if actionIsCurrent(operationID, chapterID: chapter.id, revision: revision),
@@ -1383,8 +1985,12 @@ final class ChapterEditorStore: ObservableObject {
         acknowledgedContextToken: String?
     ) async -> ProductionReadinessGate {
         if let acknowledgedContextToken { return .proceed(acknowledgedContextToken) }
+        let operationID = actionOperationID
+        let revision = localEditRevision
         do {
             let readiness = try await session.api.productionReadiness(chapterId: chapter.id)
+            guard currentChapter?.id == chapter.id, actionOperationID == operationID,
+                  localEditRevision == revision else { return .confirmationRequired }
             guard !readiness.limitations.isEmpty else { return .proceed(nil) }
             pendingProductionContext = PendingProductionContext(
                 action: action, chapterID: chapter.id, readiness: readiness
@@ -1459,8 +2065,11 @@ final class ChapterEditorStore: ObservableObject {
 
     func reopen() async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
+        let operationID = beginAction()
+        let revision = localEditRevision
         do {
             let reopened: Chapter = try await session.api.request("/chapters/\(chapter.id)/reopen", method: "POST", ifMatch: chapter.contentRevision)
+            guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return reopened }
             currentChapter = reopened
             sync.cache.saveChapter(reopened)
             checkerResult = nil
@@ -1507,6 +2116,7 @@ final class ChapterEditorStore: ObservableObject {
             guard await reopen() != nil else { return .notStarted }
             didReopen = true
         }
+        guard currentChapter?.id == chapter.id else { return didReopen ? .reopenedButGenerateFailed : .notStarted }
         // generate() 内部 replace 计算为 true，正文被覆盖而非清空
         guard let rewritten = await generate() else {
             return didReopen ? .reopenedButGenerateFailed : .notStarted
@@ -1525,12 +2135,15 @@ final class ChapterEditorStore: ObservableObject {
 
     func cancelWriting() async -> Chapter? {
         guard let chapter = currentChapter else { return nil }
+        let operationID = beginAction()
+        let revision = localEditRevision
         let cancelledStage = writingPhase.currentStage ?? .drafting
         stopPolling(for: chapter.id)
         currentValidationReason = nil
         failedCandidateCheckerResult = nil
         do {
             let cancelled = try await session.api.cancelWrite(chapterId: chapter.id)
+            guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return cancelled }
             currentChapter = cancelled
             cache.saveClean(cancelled)
             writingPhase = .cancelled(
@@ -1548,7 +2161,7 @@ final class ChapterEditorStore: ObservableObject {
             return cancelled
         } catch {
             session.notices.publish(error)
-            resumePollingIfNeeded()
+            if actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) { resumePollingIfNeeded() }
             return nil
         }
     }
@@ -1556,24 +2169,43 @@ final class ChapterEditorStore: ObservableObject {
     func deleteCurrentChapter() async -> Bool {
         guard let chapter = currentChapter else { return false }
         let deletingId = chapter.id
+        let operationID = beginAction()
+        let revision = localEditRevision
+        let localAtDelete = cache.load(chapterId: deletingId)?.updatedAt
+        let sourceBookTitle = localBookTitle(for: chapter)
         stopPolling(for: deletingId)
         do {
             try await session.api.rawRequest("/chapters/\(deletingId)", method: "DELETE", ifMatch: chapter.contentRevision)
-            cache.remove(chapterId: deletingId)
-            sync.cache.removeChapter(id: deletingId)
+            sync.confirmDeletion(kind: .chapter, id: deletingId)
+            let hasNewVisibleInput = currentChapter?.id == deletingId && localEditRevision != revision
+            let hasNewCachedInput = cache.load(chapterId: deletingId).map { $0.dirty && $0.updatedAt != localAtDelete } ?? false
+            let newInputSaved: Bool
+            if hasNewVisibleInput, let current = currentChapter {
+                newInputSaved = cache.saveDirty(current, bookTitle: sourceBookTitle)
+            } else if hasNewCachedInput {
+                // The author may have navigated elsewhere while DELETE ran.
+                // Freeze only source metadata; keep the cached author content.
+                _ = cache.retainSource(chapterID: deletingId, bookID: chapter.bookId,
+                    bookTitle: sourceBookTitle, chapterIndex: chapter.index)
+                newInputSaved = true
+            } else { newInputSaved = false }
+            if hasNewVisibleInput || hasNewCachedInput {
+                let message = newInputSaved
+                    ? "原章节已删除；删除期间的新修改仅在本机保留。请到“同步中心 → 本机保留稿”查看并复制，手动另存到新章节。"
+                    : "原章节已删除，但删除期间的新修改未能写入本机缓存。请立即复制当前稿件后重试。"
+                session.notices.publish(message, critical: true, tone: .error)
+                if currentChapter?.id == deletingId {
+                    saveState = .remoteSaveFailed(message: message, localDraftPreserved: newInputSaved)
+                }
+            } else { cache.remove(chapterId: deletingId) }
+            sync.refreshRetainedChapterDraftAvailability()
+            sync.cache.removeChapter(id: deletingId, bookID: chapter.bookId)
             ChapterTaskOutcomeStore.clear(chapterID: deletingId)
-            writingPhase = .idle
-            saveState = .synced
-            pendingExemptionNames = []
-            currentValidationReason = nil
-            failedCandidateCheckerResult = nil
-            preflightAcceptanceMessage = nil
-            if currentChapter?.id == deletingId {
-                currentChapter = nil
-            }
+            if actionIsCurrent(operationID, chapterID: deletingId, revision: revision) { clearEditorContext() }
             return true
         } catch {
             session.notices.publish(error)
+            if actionIsCurrent(operationID, chapterID: deletingId, revision: revision) { resumePollingIfNeeded() }
             return false
         }
     }
@@ -1581,38 +2213,25 @@ final class ChapterEditorStore: ObservableObject {
     /// Called when the app returns to the foreground. Resumes polling if the
     /// current chapter's server-side status still shows a job in flight.
     func handleScenePhaseActive() {
-        guard let chapter = currentChapter else { return }
-        guard chapter.status == "writing"
-                || chapter.archive?.status == "pending"
-                || chapter.archive?.status == "extracting" else { return }
-        guard !writingPhase.isActive else { return }
-        resumePollingIfNeeded()
+        Task { [weak self] in await self?.refreshActiveJobIfNeeded() }
     }
 
-    /// macOS-only foreground recovery. Deliberately **omits** the
-    /// `status == writing/extracting` guard that `handleScenePhaseActive()`
-    /// carries. Here, whenever there is a `currentChapter`
-    /// and no poll is running, we unconditionally fetch one `jobStatus`,
-    /// apply it, and resume polling if the phase is still non-terminal. A
-    /// missing/never-started job just returns an error we swallow silently so
-    /// window activations don't spam Toasts. Terminal snapshots are applied
-    /// only when the server marks them current and this client has no newer
-    /// local inputs. Reconciliation is silent, so repeated activations never
-    /// replay an old failure Toast. Only called from macOS
-    /// (`NSApplication.didBecomeActiveNotification`).
+    /// Both platforms reconcile background checks without relying on chapter
+    /// status: a Checker does not change draft_ready/finalized. Existing
+    /// currentness and local-input guards also apply on foreground activation.
     func refreshActiveJobIfNeeded() async {
         guard let chapter = currentChapter else { return }
         guard !writingPhase.isActive else { return }
         do {
-            let status = try await session.api.jobStatus(chapterId: chapter.id)
-            guard currentChapter?.id == chapter.id else { return }
+            let status = try await observedJobStatus(chapterId: chapter.id)
+            guard let current = currentChapter, current.id == chapter.id else { return }
             // The failed local start can be newer than this persisted job.
             // In that case even an obsolete decision must not discard the
             // settings/recovery instruction before a distinct job is seen.
             if shouldDeferCheckerStatus(status) { return }
             switch ChapterJobReconciler.decide(
                 status: status,
-                chapter: chapter,
+                chapter: current,
                 hasLocalInputDivergence: hasLocalInputDivergence
             ) {
             case .active:
@@ -1630,10 +2249,10 @@ final class ChapterEditorStore: ObservableObject {
         }
     }
 
-    private func startWrite(replaceDraft: Bool, acknowledgedContextToken: String?) async -> Chapter? {
-        guard let chapter = currentChapter else { return nil }
-        let operationID = beginAction()
-        let startingRevision = localEditRevision
+    private func startWrite(chapter: Chapter, operationID: UUID, revision startingRevision: UInt64,
+                            replaceDraft: Bool, acknowledgedContextToken: String?) async -> Chapter? {
+        guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision),
+              currentChapter?.contentRevision == chapter.contentRevision else { return nil }
         let noticeLocation = noticeLocation(for: chapter)
         ChapterTaskOutcomeStore.clear(chapterID: chapter.id)
         writingPhase = .selectingMemory
@@ -1724,7 +2343,7 @@ final class ChapterEditorStore: ObservableObject {
         while !Task.isCancelled {
             var delayNanoseconds = ChapterTaskPollingPolicy.normalDelayNanoseconds
             do {
-                let status = try await session.api.jobStatus(chapterId: chapterId)
+                let status = try await observedJobStatus(chapterId: chapterId)
                 guard !Task.isCancelled,
                       pollingChapterId == chapterId,
                       pollingMonitorID == monitorID else { return }
@@ -1739,6 +2358,11 @@ final class ChapterEditorStore: ObservableObject {
                     return
                 }
             } catch {
+                if error is CancellationError {
+                    if Task.isCancelled { return }
+                    try? await Task.sleep(nanoseconds: ChapterTaskPollingPolicy.normalDelayNanoseconds)
+                    continue
+                }
                 guard !Task.isCancelled,
                       pollingChapterId == chapterId,
                       pollingMonitorID == monitorID else { return }
@@ -1825,6 +2449,22 @@ final class ChapterEditorStore: ObservableObject {
         // shared by foreground refresh, cold-load reconciliation, and a poll
         // that was already in flight when the newer action failed.
         guard !shouldDeferCheckerStatus(status) else { return }
+        // A poll only guards edits made during that one GET. Edits between
+        // polls still diverge from the job input and must survive its terminal
+        // response, including the local recovery copy and its base revision.
+        if Self.isTerminalPhase(status.phase), hasLocalInputDivergence {
+            discardObsoleteTaskOutcome(chapterID: chapterId)
+            if let remote = status.chapter {
+                setCurrentChapterStatus(remote.status, chapterId: chapterId)
+            } else if currentChapter?.status == "writing" {
+                setCurrentChapterStatus("draft_ready", chapterId: chapterId)
+            }
+            _ = persistLocalDraftIfNeeded()
+            session.notices.publish("任务已结束；你在此期间的修改已保留，未用任务结果覆盖。请保存后重新复查。")
+            return
+        }
+        jobObservationID = nil
+        checkerRetryRequestID = nil
         if let jobID = status.jobId { latestTaskJobID = jobID }
         if status.kind == "check", Self.isActiveJobPhase(status.phase) {
             clearPreJobCheckerFailure(chapterID: chapterId)
@@ -1878,6 +2518,7 @@ final class ChapterEditorStore: ObservableObject {
                 && writingPhase.currentStage == .extraction
             memoryContext = status.memoryContext ?? memoryContext
             failedCandidateCheckerResult = nil
+            candidateCheckerRetrySourceJobID = nil
             let visibleResult: CheckerResult?
             switch status.kind {
             case "write":
@@ -1922,6 +2563,7 @@ final class ChapterEditorStore: ObservableObject {
                 if let visibleResult {
                     saveCheckedSnapshotIfCurrent(visibleResult, chapter: chapter)
                 }
+                sync.cache.saveChapter(chapter)
                 cache.saveClean(chapter)
                 saveState = .synced
             } else {
@@ -2006,7 +2648,8 @@ final class ChapterEditorStore: ObservableObject {
             checkerTarget = status.checkerTarget
             let visibleResult = status.visibleCheckerResult
             failedCandidateCheckerResult = status.failedCandidateCheckerResult
-            candidateCheckerRetrySourceJobID = status.canRetryChecker ? status.checkerSourceJobId : nil
+            candidateCheckerRetrySourceJobID = status.canRetryChecker && status.checkerTarget == "generated_candidate"
+                ? status.checkerSourceJobId : nil
             checkerResult = visibleResult
             checkerAppliesToVisibleDraft = visibleResult != nil
             updatePendingIdentityNames(from: visibleResult)
@@ -2115,7 +2758,8 @@ final class ChapterEditorStore: ObservableObject {
                 isPreJobCheckerFailure: isPreJobCheckerFailure,
                 supersededJobID: isPreJobCheckerFailure ? supersededCheckerJobID : nil,
                 candidateCheckerRetrySourceJobID: isPreJobCheckerFailure
-                    ? candidateCheckerRetrySourceJobID : nil
+                    ? candidateCheckerRetrySourceJobID : nil,
+                checkerRetryRequestID: isPreJobCheckerFailure ? checkerRetryRequestID : nil
             )
         }
     }
@@ -2180,7 +2824,11 @@ final class ChapterEditorStore: ObservableObject {
                 cache.saveClean(remote)
                 saveState = .synced
             }
-            if let status = try? await session.api.jobStatus(chapterId: chapterId),
+            let observationID = UUID()
+            jobObservationID = observationID
+            let observed = try? await session.api.jobStatus(chapterId: chapterId)
+            guard jobObservationID == observationID else { return .observed }
+            if let status = observed,
                actionIsCurrent(operationID, chapterID: chapterId, revision: revision) {
                 switch ChapterJobReconciler.decide(
                     status: status,
@@ -2297,9 +2945,9 @@ final class ChapterEditorStore: ObservableObject {
     ) async -> Bool {
         guard let apiError = error as? APIError,
               case let .validation(_, code, _, _, _) = apiError,
-              code == "write_running" else { return false }
+              ["write_running", "archive_running"].contains(code) else { return false }
         do {
-            let status = try await session.api.jobStatus(chapterId: chapterId)
+            let status = try await observedJobStatus(chapterId: chapterId)
             guard actionIsCurrent(operationID, chapterID: chapterId, revision: revision) else { return true }
             applyJobStatus(status, chapterId: chapterId)
             if Self.isTerminalPhase(status.phase) {
@@ -2316,6 +2964,7 @@ final class ChapterEditorStore: ObservableObject {
             }
             return true
         } catch {
+            if error is CancellationError { return true }
             return false
         }
     }
@@ -2328,12 +2977,14 @@ final class ChapterEditorStore: ObservableObject {
         _ error: Error,
         chapterId: String,
         operationID: UUID,
-        revision: UInt64
+        revision: UInt64,
+        target: String = "visible_draft"
     ) async -> Bool {
         guard Self.checkerStartOutcomeMayBeUnknown(error) else { return false }
+        let precedingJobID = latestTaskJobID
         var supersededJobID: String?
         do {
-            let status = try await session.api.jobStatus(chapterId: chapterId)
+            let status = try await observedJobStatus(chapterId: chapterId)
             guard actionIsCurrent(operationID, chapterID: chapterId, revision: revision) else { return true }
             // Only an active, explicitly visible Checker job with a durable
             // job ID can be the post that lost its response.  A terminal
@@ -2341,7 +2992,7 @@ final class ChapterEditorStore: ObservableObject {
             // same prose, and therefore cannot prove this POST succeeded.
             let isMatchingActiveChecker = status.kind == "check"
                 && status.phase == "checking"
-                && status.checkerTarget == "visible_draft"
+                && status.checkerTarget == target
                 && status.outcomeCurrent == nil
                 && status.jobId != nil
             if isMatchingActiveChecker {
@@ -2349,16 +3000,31 @@ final class ChapterEditorStore: ObservableObject {
                 pollJob(chapterId: chapterId)
                 return true
             }
+            // A different durable job, absent before this action, may have
+            // already completed while its POST response was lost. Never
+            // freeze that new current result as the superseded old job.
+            if let precedingJobID, let jobID = status.jobId,
+               jobID != precedingJobID, status.kind == "check",
+               status.checkerTarget == target, status.outcomeCurrent == true,
+               Self.isTerminalPhase(status.phase) {
+                applyJobStatus(status, chapterId: chapterId)
+                return true
+            }
             supersededJobID = status.jobId
         } catch {
+            if error is CancellationError { return true }
             // The monitor state below deliberately remains unresolved.  It
             // gives the author a read-only recovery action instead of posting
             // the same Checker request again after a lost response.
         }
         guard actionIsCurrent(operationID, chapterID: chapterId, revision: revision) else { return true }
         pollingConnectionInterrupted = true
-        taskMonitoringMessage = "复查是否已启动暂未确认，请刷新任务状态。"
-        checkerTarget = "visible_draft"
+        taskMonitoringMessage = "复查是否已启动暂未确认；可刷新状态，或重新复查当前正文。"
+        checkerTarget = target
+        if target != "generated_candidate" { candidateCheckerRetrySourceJobID = nil }
+        if target == "generated_candidate" {
+            taskMonitoringMessage = "复查是否已启动暂未确认；可刷新状态或重试同一请求，不会重复检查。"
+        }
         protectsPreJobCheckerFailure = true
         supersededCheckerJobID = supersededJobID ?? latestTaskJobID
         stopPolling(for: chapterId)
@@ -2373,7 +3039,9 @@ final class ChapterEditorStore: ObservableObject {
                 chapter: chapter,
                 checkerTarget: checkerTarget,
                 isPreJobCheckerFailure: true,
-                supersededJobID: supersededCheckerJobID
+                supersededJobID: supersededCheckerJobID,
+                candidateCheckerRetrySourceJobID: candidateCheckerRetrySourceJobID,
+                checkerRetryRequestID: checkerRetryRequestID
             )
         }
         return true
@@ -2412,7 +3080,7 @@ final class ChapterEditorStore: ObservableObject {
     /// newer local recovery state through every observer entrance.
     private func shouldDeferCheckerStatus(_ status: WriteJobStatus) -> Bool {
         guard protectsPreJobCheckerFailure,
-              status.kind == "check",
+              status.kind == "check" || (checkerTarget == "generated_candidate" && status.kind == "write"),
               status.checkerTarget == checkerTarget || status.checkerTarget == nil else {
             return false
         }
@@ -2451,7 +3119,7 @@ final class ChapterEditorStore: ObservableObject {
     private func reconcileLatestJobOnLoad(chapterId: String) async -> Bool {
         guard let chapter = currentChapter, chapter.id == chapterId else { return false }
         do {
-            let status = try await session.api.jobStatus(chapterId: chapterId)
+            let status = try await observedJobStatus(chapterId: chapterId)
             guard let latestChapter = currentChapter, latestChapter.id == chapterId else { return true }
             if shouldDeferCheckerStatus(status) { return true }
             switch ChapterJobReconciler.decide(
@@ -2473,6 +3141,7 @@ final class ChapterEditorStore: ObservableObject {
                 return false
             }
         } catch {
+            if error is CancellationError { return true }
             // Loading the chapter remains useful even if this optional
             // reconciliation request fails. Active chapter.status still falls
             // back to the normal retrying poll path below.
@@ -2511,9 +3180,23 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     private func refreshChapter(_ chapterId: String) async {
+        guard let starting = currentChapter, starting.id == chapterId,
+              starting.bookId == session.currentBook?.id,
+              !sync.cache.isDeleted(kind: .chapter, id: chapterId) else { return }
+        let context = editorContextID
+        let bookContext = session.bookContextID
         let startingRevision = localEditRevision
+        let requestID = UUID()
+        chapterRefreshRequestID = requestID
         guard let refreshed: Chapter = try? await session.api.request("/chapters/\(chapterId)") else { return }
-        guard currentChapter?.id == chapterId else { return }
+        guard editorContextID == context, session.bookContextID == bookContext,
+              chapterRefreshRequestID == requestID, !Task.isCancelled,
+              let current = currentChapter, current.id == chapterId, current.bookId == starting.bookId,
+              refreshed.id == chapterId, refreshed.bookId == starting.bookId,
+              current.contentRevision >= starting.contentRevision,
+              refreshed.contentRevision >= current.contentRevision,
+              refreshed.contentRevision >= (sync.cache.chapter(id: chapterId)?.contentRevision ?? 0),
+              !sync.cache.isDeleted(kind: .chapter, id: chapterId) else { return }
         guard ChapterRefreshReconciler.shouldReplaceLocal(
             startingRevision: startingRevision,
             currentRevision: localEditRevision,
@@ -2526,6 +3209,9 @@ final class ChapterEditorStore: ObservableObject {
     /// The accompanying /job read may fail, so it cannot be the only place
     /// that invalidates a pass attached to the former prose or Bible.
     private func adoptRemoteChapter(_ remote: Chapter) {
+        guard !sync.cache.isDeleted(kind: .chapter, id: remote.id),
+              remote.contentRevision >= (sync.cache.chapter(id: remote.id)?.contentRevision ?? 0),
+              currentChapter?.id != remote.id || remote.contentRevision >= (currentChapter?.contentRevision ?? 0) else { return }
         let changedCheckerInput: Bool
         if let current = currentChapter, current.id == remote.id {
             changedCheckerInput = current.draftText != remote.draftText
@@ -2551,6 +3237,8 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     private func clearTaskOutcome(chapterID: String) {
+        checkerRetryRequestID = nil
+        jobObservationID = nil
         let hadPersistedOutcome: Bool
         switch writingPhase {
         case .failed, .cancelled:
@@ -2621,7 +3309,8 @@ final class InspirationCreatorStore: ObservableObject {
                 let response: InspirationResponse = try await session.api.request(
                     "/chapters/\(frozen.chapterID)/inspirations",
                     method: "POST",
-                    body: payload
+                    body: payload,
+                    timeout: APIClient.inspirationRequestTimeout
                 )
                 guard !Task.isCancelled, requestToken == token, activeChapterID == frozen.chapterID else { return }
                 cards = response.cards
@@ -2663,6 +3352,7 @@ final class InspirationCreatorStore: ObservableObject {
         // Navigation does not cancel an author-initiated request. Its result
         // may no longer belong in this panel, but a failure must still reach
         // the global notice history with the frozen chapter location.
+        requestToken = UUID()
         activeChapterID = chapterID
         snapshot = nil
         cards = []
@@ -2709,6 +3399,10 @@ final class AgentSettingsStore: ObservableObject {
     @Published private(set) var bookModelBindings: [BookAgentModelBinding] = []
     @Published private(set) var bookModelBindingsBookID: String?
 
+    private var personaReadID = UUID()
+    private var modelReadID = UUID()
+    private var settingOperations: [String: UUID] = [:]
+
     private let session: AppSession
     let sync: ClientSyncStore
 
@@ -2736,13 +3430,16 @@ final class AgentSettingsStore: ObservableObject {
     @discardableResult
     func loadBookPersonas(bookID: String) async -> Bool {
         guard session.currentBook?.id == bookID else { return false }
+        let bookContext = session.bookContextID
+        let readID = UUID()
+        personaReadID = readID
         if bookPersonasBookID != bookID {
             bookPersonas = []
             bookPersonasBookID = bookID
         }
         do {
             let values: [BookAgentPersona] = try await session.api.request("/books/\(bookID)/agent-personas")
-            guard BookPersonaResponsePolicy.accepts(
+            guard personaReadID == readID, session.bookContextID == bookContext, BookPersonaResponsePolicy.accepts(
                 responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
             ) else { return false }
             bookPersonas = values
@@ -2760,6 +3457,11 @@ final class AgentSettingsStore: ObservableObject {
         guard BookPersonaResponsePolicy.accepts(
             responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
         ) else { return false }
+        let bookContext = session.bookContextID
+        let operationKey = "personaReadID:\(bookID):\(role)"
+        let operationID = UUID()
+        settingOperations[operationKey] = operationID
+        personaReadID = UUID()
         let payload = BookAgentPersonaPayload(editable_persona: editablePersona)
         let current = bookPersonas.first(where: { $0.agentRole == role })
         let base = BookAgentPersonaPayload(editable_persona: current?.bookPersona ?? current?.globalPersona ?? "")
@@ -2769,9 +3471,10 @@ final class AgentSettingsStore: ObservableObject {
                 "/books/\(bookID)/agent-personas/\(role)", method: "PUT", body: payload,
                 ifMatch: revision ?? 0, allowZeroRevision: revision == nil
             )
-            guard BookPersonaResponsePolicy.accepts(
+            guard settingOperations[operationKey] == operationID, session.bookContextID == bookContext, BookPersonaResponsePolicy.accepts(
                 responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
             ) else { return false }
+            personaReadID = UUID()
             replaceBookPersona(saved, bookID: bookID)
             return true
         } catch {
@@ -2788,12 +3491,19 @@ final class AgentSettingsStore: ObservableObject {
         guard BookPersonaResponsePolicy.accepts(
             responseBookID: bookID, activeBookID: session.currentBook?.id, targetBookID: bookPersonasBookID
         ) else { return false }
+        let bookContext = session.bookContextID
+        let operationKey = "personaReadID:\(bookID):\(role)"
+        let operationID = UUID()
+        settingOperations[operationKey] = operationID
+        personaReadID = UUID()
         let revision = bookPersonas.first(where: { $0.agentRole == role })?.contentRevision
         do {
-            try await session.api.rawRequest("/books/\(bookID)/agent-personas/\(role)", method: "DELETE", ifMatch: revision)
+            try await session.api.rawRequest("/books/\(bookID)/agent-personas/\(role)", method: "DELETE", ifMatch: revision ?? 0, allowZeroRevision: revision == nil)
+            guard settingOperations[operationKey] == operationID, session.bookContextID == bookContext else { return false }
             // DELETE deliberately carries no response. Reload so source stays
             // server-authoritative instead of inferring global vs default from
             // equal text values.
+            personaReadID = UUID()
             return await loadBookPersonas(bookID: bookID)
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
@@ -2818,13 +3528,16 @@ final class AgentSettingsStore: ObservableObject {
     @discardableResult
     func loadBookModelBindings(bookID: String) async -> Bool {
         guard session.currentBook?.id == bookID else { return false }
+        let bookContext = session.bookContextID
+        let readID = UUID()
+        modelReadID = readID
         if bookModelBindingsBookID != bookID {
             bookModelBindings = []
             bookModelBindingsBookID = bookID
         }
         do {
             let values: [BookAgentModelBinding] = try await session.api.request("/books/\(bookID)/agent-model-bindings")
-            guard session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
+            guard modelReadID == readID, session.bookContextID == bookContext, session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
             bookModelBindings = values
             sync.markOnline()
             return true
@@ -2838,6 +3551,11 @@ final class AgentSettingsStore: ObservableObject {
     @discardableResult
     func saveBookModelBinding(bookID: String, role: String, binding: AgentModelBindingValues) async -> Bool {
         guard session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
+        let bookContext = session.bookContextID
+        let operationKey = "modelReadID:\(bookID):\(role)"
+        let operationID = UUID()
+        settingOperations[operationKey] = operationID
+        modelReadID = UUID()
         let current = bookModelBindings.first(where: { $0.agentRole == role })
         let revision = current?.contentRevision
         let base = current?.bookBinding ?? current?.globalBinding ?? binding
@@ -2846,7 +3564,8 @@ final class AgentSettingsStore: ObservableObject {
                 "/books/\(bookID)/agent-model-bindings/\(role)", method: "PUT", body: binding,
                 ifMatch: revision ?? 0, allowZeroRevision: revision == nil
             )
-            guard session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
+            guard settingOperations[operationKey] == operationID, session.bookContextID == bookContext, session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
+            modelReadID = UUID()
             replaceBookModelBinding(saved, bookID: bookID)
             sync.markOnline()
             return true
@@ -2863,11 +3582,18 @@ final class AgentSettingsStore: ObservableObject {
     @discardableResult
     func clearBookModelBinding(bookID: String, role: String) async -> Bool {
         guard session.currentBook?.id == bookID, bookModelBindingsBookID == bookID else { return false }
+        let bookContext = session.bookContextID
+        let operationKey = "modelReadID:\(bookID):\(role)"
+        let operationID = UUID()
+        settingOperations[operationKey] = operationID
+        modelReadID = UUID()
         let revision = bookModelBindings.first(where: { $0.agentRole == role })?.contentRevision
         do {
             try await session.api.rawRequest(
-                "/books/\(bookID)/agent-model-bindings/\(role)", method: "DELETE", ifMatch: revision
+                "/books/\(bookID)/agent-model-bindings/\(role)", method: "DELETE", ifMatch: revision ?? 0, allowZeroRevision: revision == nil
             )
+            guard session.bookContextID == bookContext, settingOperations[operationKey] == operationID else { return false }
+            modelReadID = UUID()
             return await loadBookModelBindings(bookID: bookID)
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
@@ -2915,7 +3641,6 @@ final class AgentSettingsStore: ObservableObject {
             if let idx = profiles.firstIndex(where: { $0.id == updated.id }) {
                 profiles[idx] = updated
             }
-            bindings = try await session.api.request("/agent-model-bindings")
             return true
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
@@ -3057,7 +3782,9 @@ final class AgentSettingsStore: ObservableObject {
         }
     }
 
-    func savePersona(_ persona: AgentPersona) async {
+    @discardableResult
+    func savePersona(_ persona: AgentPersona) async -> Bool {
+        guard personas.contains(where: { $0.agentRole == persona.agentRole }) else { return false }
         let payload = AgentPersonaPayload(editable_persona: persona.editablePersona)
         let base = AgentPersonaPayload(editable_persona: personas.first(where: { $0.agentRole == persona.agentRole })?.editablePersona ?? persona.editablePersona)
         do {
@@ -3065,6 +3792,7 @@ final class AgentSettingsStore: ObservableObject {
             if let idx = personas.firstIndex(where: { $0.agentRole == saved.agentRole }) {
                 personas[idx] = saved
             }
+            return true
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
@@ -3074,25 +3802,29 @@ final class AgentSettingsStore: ObservableObject {
                 )
             }
             session.notices.publish(error)
+            return false
         }
     }
 
-    func resetPersona(role: String) async {
-        let revision = personas.first(where: { $0.agentRole == role })?.contentRevision
+    @discardableResult
+    func resetPersona(role: String) async -> Bool {
+        guard let revision = personas.first(where: { $0.agentRole == role })?.contentRevision else { return false }
         do {
             let saved: AgentPersona = try await session.api.request("/agent-personas/\(role)/reset", method: "POST", ifMatch: revision)
             if let idx = personas.firstIndex(where: { $0.agentRole == saved.agentRole }) {
                 personas[idx] = saved
             }
+            return true
         } catch {
             if let conflict = error as? APIError, case .writeConflict = conflict {
                 await sync.recordWriteConflict(
                     kind: .agentPersona, id: role, path: "/agent-personas/\(role)/reset", method: "POST",
                     readPath: "/agent-personas/\(role)", readStrategy: .direct,
-                    baseRevision: revision ?? 0, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(), error: conflict, api: session.api
+                    baseRevision: revision, payload: EmptyMutationPayload(), baseSnapshot: EmptyMutationPayload(), error: conflict, api: session.api
                 )
             }
             session.notices.publish(error)
+            return false
         }
     }
 }
@@ -3112,6 +3844,7 @@ private struct ChapterCreatePayload: Encodable, Sendable {
 struct ChapterPatchPayload: Encodable, Sendable {
     var title: String
     var user_prompt: String
+    var author_note: String
     var draft_text: String
     var headline: String
     var long_summary: String
@@ -3124,6 +3857,7 @@ struct ChapterPatchPayload: Encodable, Sendable {
     init(_ chapter: Chapter) {
         title = chapter.title
         user_prompt = chapter.userPrompt
+        author_note = chapter.authorNote
         draft_text = chapter.draftText
         headline = chapter.headline
         long_summary = chapter.longSummary
@@ -3231,6 +3965,12 @@ private struct AgentBindingProfilePayload: Encodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case llmProfileId = "llm_profile_id"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let llmProfileId { try container.encode(llmProfileId, forKey: .llmProfileId) }
+        else { try container.encodeNil(forKey: .llmProfileId) }
     }
 }
 

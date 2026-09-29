@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from app.llm.base import LLMError, safe_block_reason, safe_finish_reason, safe_upstream_reason
+from app.llm.base import LLMError, LLMStreamIncompleteError, safe_block_reason, safe_finish_reason, safe_upstream_reason
 
 
 NON_THINKING_TOP_P = 0.95
@@ -46,6 +46,7 @@ class OpenAICompatibleClient:
         )
         self.last_finish_reason = _extract_finish_reason(data)
         self.last_usage = _extract_usage(data)
+        _validate_response_end(data)
         return _extract_content(data)
 
     def complete_json(self, *, system: str, user: str, schema: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -66,6 +67,7 @@ class OpenAICompatibleClient:
         )
         self.last_usage = _extract_usage(data)
         self.last_finish_reason = _extract_finish_reason(data)
+        _validate_response_end(data)
         try:
             parsed = json.loads(_extract_content(data))
         except json.JSONDecodeError as exc:
@@ -103,8 +105,12 @@ class OpenAICompatibleClient:
         payload["stream_options"] = {"include_usage": True}
         self.last_finish_reason = None
         self.last_usage = None
+        saw_done = False
+        normal_finish_reasons = {"stop", "end_turn", "completed", "complete"}
         timeout = httpx.Timeout(connect=15, read=kwargs.get("timeout", 180), write=30, pool=15)
         url = f"{self.base_url}/chat/completions"
+        if cancel_event is not None and cancel_event.is_set():
+            return
         try:
             with httpx.stream("POST", url, headers=self._headers(), json=payload, timeout=timeout) as response:
                 if response.status_code >= 400:
@@ -117,6 +123,7 @@ class OpenAICompatibleClient:
                         continue
                     data = line.removeprefix("data:").strip()
                     if data == "[DONE]":
+                        saw_done = True
                         break
                     try:
                         chunk = json.loads(data)
@@ -124,6 +131,7 @@ class OpenAICompatibleClient:
                         continue
                     if not isinstance(chunk, dict):
                         continue
+                    _raise_embedded_error(chunk)
                     prompt_feedback = chunk.get("promptFeedback") or chunk.get("prompt_feedback")
                     if isinstance(prompt_feedback, dict):
                         block_reason = prompt_feedback.get("blockReason") or prompt_feedback.get("block_reason")
@@ -131,24 +139,43 @@ class OpenAICompatibleClient:
                             raise LLMError(
                                 "LLM blocked the request",
                                 code="llm_content_blocked",
-                            block_reason=safe_block_reason(block_reason),
+                                block_reason=safe_block_reason(block_reason),
                             )
                     usage = _extract_usage(chunk)
                     if usage is not None:
                         self.last_usage = usage
+                    reason = _extract_finish_reason(chunk)
+                    if reason is not None:
+                        # Once length has ended the content, a subsequent
+                        # stop/DONE tail cannot turn it into a complete draft.
+                        if self.last_finish_reason in normal_finish_reasons or self.last_finish_reason is None:
+                            self.last_finish_reason = reason
+                        if reason in {"safety", "content_filter"}:
+                            self.last_finish_reason = reason
+                            raise LLMError("上游安全规则拦截了生成", code="llm_content_blocked",
+                                           finish_reason=reason, block_reason=safe_block_reason(reason))
+                        if reason not in normal_finish_reasons | {"length"}:
+                            self.last_finish_reason = reason
+                            raise LLMError("上游未以可用的正文终态结束生成", code="llm_invalid_finish",
+                                           finish_reason=reason)
                     choices = chunk.get("choices")
                     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
                         continue
-                    choice = choices[0]
-                    delta = choice.get("delta", {})
-                    finish_reason = choice.get("finish_reason") or choice.get("finishReason")
-                    if finish_reason is not None:
-                        self.last_finish_reason = str(finish_reason)
-                    text = delta.get("content") or ""
-                    if text:
+                    delta = choices[0].get("delta", {})
+                    if isinstance(delta, dict) and (delta.get("tool_calls") or delta.get("function_call")):
+                        raise LLMError("上游返回工具调用，未生成可用的正文", code="llm_invalid_finish",
+                                       finish_reason=self.last_finish_reason)
+                    text = delta.get("content") if isinstance(delta, dict) else None
+                    if isinstance(text, str) and text:
                         yield text
         except httpx.HTTPError as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                return
             raise LLMError("LLM transport failed", code="llm_transport", retryable=True) from exc
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        if self.last_finish_reason is None and not saw_done:
+            raise LLMStreamIncompleteError()
 
     def test_connection(self) -> None:
         url = f"{self.base_url}/models"
@@ -239,6 +266,35 @@ class OpenAICompatibleClient:
         return data
 
 
+def _raise_embedded_error(data: dict[str, Any]) -> None:
+    if "error" not in data or data["error"] is None:
+        return
+    reason = _safe_upstream_reason(data["error"])
+    code = {
+        "content_policy": "llm_content_blocked",
+        "rate_limited": "llm_rate_limited",
+        "upstream_unavailable": "llm_upstream_unavailable",
+        "authentication": "llm_upstream_rejected",
+        "invalid_request": "llm_upstream_rejected",
+    }.get(reason, "llm_upstream_error")
+    raise LLMError("上游返回错误，当前输出未被采用", code=code,
+                   retryable=reason in {"rate_limited", "upstream_unavailable"},
+                   upstream_reason=reason)
+
+
+def _validate_response_end(data: dict[str, Any]) -> None:
+    _raise_embedded_error(data)
+    reason = _extract_finish_reason(data)
+    if reason in {"safety", "content_filter"}:
+        raise LLMError("上游安全规则拦截了生成", code="llm_content_blocked",
+                       finish_reason=reason, block_reason=safe_block_reason(reason))
+    if reason == "length":
+        raise LLMError("上游输出被截断，未采用不完整结果", code="llm_output_truncated",
+                       retryable=True, finish_reason=reason)
+    if reason is not None and reason not in {"stop", "end_turn", "completed", "complete"}:
+        raise LLMError("上游未正常完成输出", code="llm_invalid_finish", finish_reason=reason)
+
+
 def _extract_content(data: dict[str, Any]) -> str:
     prompt_feedback = data.get("promptFeedback") or data.get("prompt_feedback")
     if isinstance(prompt_feedback, dict):
@@ -284,15 +340,23 @@ def _extract_usage(data: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _extract_finish_reason(data: dict[str, Any]) -> str | None:
+    value = None
     try:
-        value = data["choices"][0].get("finish_reason")
-    except (KeyError, IndexError, TypeError):
+        choice = data["choices"][0]
+        value = choice.get("finish_reason")
+        if value is None:
+            value = choice.get("finishReason")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        pass
+    if value is None:
         candidates = data.get("candidates")
         if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict):
             value = candidates[0].get("finishReason")
-        else:
-            value = None
-    return safe_finish_reason(value)
+    # Streaming content deltas commonly carry a null placeholder. An explicit
+    # non-null value that is not recognized is still an abnormal terminal event.
+    if value is None:
+        return None
+    return safe_finish_reason(value) or "other"
 
 
 def _is_length_finish_reason(value: str | None) -> bool:

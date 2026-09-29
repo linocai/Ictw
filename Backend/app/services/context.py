@@ -131,6 +131,18 @@ def memory_budget(bible: str = "") -> int:
     return MEMORY_BUDGET_CHARS
 
 
+def has_usable_legacy_memory(chapter: Chapter, *, has_events: bool | None = None) -> bool:
+    """Use the same actual narrative sources for readiness and archive UI."""
+    return bool(
+        chapter.status == "finalized" and chapter.legacy_archive_eligible
+        and (
+            (chapter.long_summary or "").strip() or (chapter.headline or "").strip()
+            or _archive_memory_blocks(chapter)
+            or (has_events if has_events is not None else any((event.event_text or "").strip() for event in chapter.events))
+        )
+    )
+
+
 def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
     prior = list(
         db.scalars(
@@ -177,7 +189,7 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                     )
                 )
             continue
-        if not (item.legacy_archive_eligible or item.archive_input_fingerprint is None):
+        if not (item.legacy_archive_eligible):
             continue
         legacy_prior_ids.append(item.id)
         canonical_summary = item.long_summary.strip()
