@@ -1,0 +1,202 @@
+{
+  "version": "2.3.3",
+  "build": 72,
+  "commit": "1e5eb8e10b0894d4113df5ad9899731f1a163a6e",
+  "baseline": "699bebeaedd7134727def2b12d2a9d73376638a6",
+  "backup": "/opt/linoi/backups/20260930-build72-1e5eb8e",
+  "source_files_verified": 71,
+  "head": "20260929_0015",
+  "active_jobs": 0,
+  "integrity": "ok",
+  "foreign_keys": "ok",
+  "restore_test": "passed",
+  "all_database_tables_unchanged": true,
+  "env_unchanged": true,
+  "internal_health": 200,
+  "public_health": 200,
+  "route_statuses": {
+    "/api/v1/health": 401,
+    "/docs": 404,
+    "/openapi.json": 404,
+    "/redoc": 404
+  },
+  "single_instance": true,
+  "pid": "851116",
+  "model_calls": 0,
+  "release": {
+    "url": "https://github.com/linocai/Ictw/releases/tag/v2.3.3-build72",
+    "tag": "v2.3.3-build72",
+    "assets": [
+      {
+        "name": "ICTW-v2.3.3-build72-macOS.zip",
+        "size": 3210070,
+        "sha256": "31c41e2e5c4c3626cac8a4a91ec7244d9c77c2cf4e07c517412d0f34c3e1f5fe"
+      }
+    ]
+  },
+  "cumulative_audit": {
+    "base_commit": "699bebeaedd7134727def2b12d2a9d73376638a6",
+    "target_commit": "1e5eb8e10b0894d4113df5ad9899731f1a163a6e",
+    "scope": "Build71 to Build72 cumulative runtime diff, source continuity and release risk audit by main agent; not a new independent review",
+    "source_files_matched_previous_validation": 200,
+    "production_base_files_matched": 71,
+    "backend_tests": "573 passed, 12 existing skips on unchanged source",
+    "client_tests": "95 Store/HTTP plus client-state gates passed on unchanged source",
+    "database_and_dependencies": "No schema or dependency delta",
+    "user_changes_excluded_from_commit": true
+  },
+  "postcheck": {
+    "pre_post_compressed_restore": "passed",
+    "runtime_matches_release": true,
+    "read_only_missing_chapter_status": 404,
+    "request_id_header_verified": true,
+    "business_tables_unchanged_except_book_open_timestamps": true,
+    "changed_columns": {
+      "books": [
+        "last_opened_at",
+        "updated_at"
+      ]
+    },
+    "active_jobs": 0,
+    "integrity": "ok",
+    "foreign_keys": "ok",
+    "health": 200,
+    "release_model_calls": 0
+  },
+  "mac_install": {
+    "path": "/Applications/ICTW.app",
+    "version": "2.3.3",
+    "build": 72,
+    "backup": "/Users/linotsai/Lino/app_backups/ICTW-v2.3.2-build71-before-build72-20260930.app",
+    "strict_signature": true,
+    "hardened_runtime": true,
+    "get_task_allow": false,
+    "notarized": false,
+    "old_backup_hashes_verified": true,
+    "normal_launch": true,
+    "accepted_page": true,
+    "existing_draft_editor": true,
+    "business_mutations": "Book-open timestamps only; no model, checker, accept or archive calls",
+    "dsym_uuid": "F9D13B16-451E-3ED6-951E-75B80F88B403"
+  },
+  "ios": {
+    "version": "2.3.3",
+    "build": 72,
+    "minimum_os": "27.0",
+    "strict_signature": true,
+    "products": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.3-build72-iOS-Release",
+    "ipa_created": false,
+    "device_installation": "User installs with Xcode",
+    "native_device_ui_verified": false,
+    "dsym_uuid": "585699EB-DB97-3F0F-A450-958253C1183A"
+  },
+  "device_support": {
+    "checked_at": "2026-09-30T06:22:48.761691+00:00",
+    "devices": [
+      {
+        "model": "iPhone17,3",
+        "os": "",
+        "build": "",
+        "validated": false,
+        "reason": "No local support cache; this connection record needs no cleanup"
+      },
+      {
+        "model": "iPhone18,4",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "0c2a1a965f1ed87612fec9272ae1bc508d8aef72d81ec7c62e8f52040291d5b8",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "dca7116f518c99b0b2ec01f91cad6edda9efb7d07061c804d1ca1c2f6e39306c",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "65303e9403b9caf37e85eae43fb16667b4404582fc3df8e758b9ab0b5cee0a54"
+        }
+      },
+      {
+        "model": "iPhone19,2",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "ce718b23beb9210cfeea20547ad797b8c893ebc1f2513878c3603ac6262c7327",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "448d9b4f685ea5b83c5acff545e36dbaaf7a8894dc684fcd12f6b14b025434c3",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "3b8e1bf966e44c6b01812f1f331affb81a085e82e60eaca67411426af5acedb6"
+        }
+      }
+    ],
+    "candidates": [],
+    "deleted": [],
+    "user_confirmed_unused_models": [],
+    "unused_reason": "",
+    "pending_devices": [],
+    "status": "audited"
+  },
+  "build_logs_sha256": {
+    "mac-build.log": "077ffaee88eabd28d3f69bbc14d5cae178f483b35fc63c002753d4375465467e",
+    "ios-build.log": "b9db603b463f15b613608cdb5995f792e82cdb4bfa63c8ccfe0158bad1694da5"
+  },
+  "apple_signed_release": {
+    "mac": "Developer ID Application, hardened runtime, get-task-allow=false",
+    "ios": "Apple Development, device provisioning, no IPA",
+    "strict_signature_and_dsym": "passed",
+    "tools": "Xcode27 / SDK27"
+  },
+  "inspection_corrections": [
+    "Read-only draft lookup initially used chapter_index instead of actual index column; failed without mutation, corrected from model definition."
+  ],
+  "remote_cleanup": [
+    {
+      "path": "/tmp/ictw-build72-release",
+      "files": 223,
+      "before_bytes": 192397354,
+      "manifest_sha256": "4f737fd7943ff37baa163a68cd6a969294337124c3c15a9f176875d4b4b02e42",
+      "no_open_handles": true,
+      "after_bytes": 0
+    },
+    {
+      "path": "/tmp/ictw-build72-preflight.py",
+      "files": 1,
+      "before_bytes": 1215,
+      "manifest_sha256": "a5155e1b0e0f0593d4a2d0ab7fba9829f3323b68624e628492023d0951e333d9",
+      "no_open_handles": true,
+      "after_bytes": 0
+    }
+  ],
+  "local_cleanup": [
+    {
+      "path": "/tmp/ictw-build72-release-apple",
+      "files": 601,
+      "before_bytes": 243546365,
+      "manifest_sha256": "40a415fad55e38d3a879b7d673114d9b04b4898167c2c4794ef1419b8d41a54a",
+      "no_open_handles": true,
+      "after_bytes": 0
+    },
+    {
+      "path": "/tmp/ictw-build72-release",
+      "files": 88,
+      "before_bytes": 9711189,
+      "manifest_sha256": "14fec9693a65929a4239dbceb030495345eb302fb857b1692a1b76d378baac29",
+      "no_open_handles": true,
+      "after_bytes": 0
+    }
+  ],
+  "retained_delivery": [
+    "/Applications/ICTW.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.3-build72-macOS.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.3-build72-macOS.app.dSYM",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.3-build72-macOS.zip",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.3-build72-iOS-Release",
+    "/Users/linotsai/Lino/app_backups/ICTW-v2.3.2-build71-before-build72-20260930.app",
+    "/opt/linoi/backups/20260930-build72-1e5eb8e",
+    "/opt/linoi/releases/v2.3.3-build72"
+  ],
+  "temporary_directory_final_scan": {
+    "/tmp": [],
+    "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T/": []
+  },
+  "delivery_status": "Released, backend deployed, installed Mac validated, resources cleaned. iOS signed Release ready for user Xcode installation; native iOS page acceptance not performed.",
+  "remote_temporary_final_scan": [],
+  "protected_user_source_files_unchanged": true,
+  "remote_opt_linoi_disk_kib": 600184
+}
