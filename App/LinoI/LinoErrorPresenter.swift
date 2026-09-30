@@ -38,22 +38,32 @@ enum LinoErrorPresenter {
     /// pieces, and — for deterministic Writer validation failures — folds in the
     /// `unselected_character` violation's `names` so the message names the
     /// actual character(s) instead of a generic "validation failed".
-    static func present(jobFailure status: WriteJobStatus) -> (message: String, critical: Bool) {
+    static func present(jobFailure status: WriteJobStatus, chapter: Chapter? = nil) -> (message: String, critical: Bool) {
         let code = status.errorCode
         let context = status.errorContext
         let entry = code.flatMap(tableEntry)
+        let checkerProtocolFailure = ["checker_invalid_response", "checker_failed", "checker_start_failed", "checker_retry_start_failed", "checker_retry_failed"].contains(code)
+        let preciseCheckerReason = checkerProtocolFailure ? checkerReason(context?.reasonCode) : nil
         let reason = annotate(
-            reason: status.specificFailureReason ?? entry?.reason ?? status.errorMessage ?? "任务失败",
+            reason: preciseCheckerReason ?? status.specificFailureReason ?? entry?.reason ?? status.errorMessage ?? "具体原因尚未确定",
             code: code,
             violations: status.violations
         )
-        let message = compose(
+        let base = compose(
             agentRole: context?.agentRole,
             modelName: context?.modelName,
             reason: reason,
             rawDetail: context?.upstreamReason ?? context?.blockReason,
-            suggestion: code == "interrupted" ? interruptedSuggestion(for: status) : entry?.suggestion,
-            code: code
+            suggestion: nil,
+            code: code,
+            stageOverride: context?.failureStage.map { stageLabel($0) ?? "任务状态" }
+        )
+        let message = failureDetail(
+            base: base,
+            manuscriptState: context?.manuscriptState ?? (status.kind == "extract" && (status.chapter ?? chapter)?.status == "finalized" ? "accepted" : nil),
+            operation: status.kind,
+            action: jobRecovery(for: status, chapter: chapter),
+            identifier: status.jobId
         )
         return (message, isCritical(code: code, blockReason: context?.blockReason))
     }
@@ -72,16 +82,19 @@ enum LinoErrorPresenter {
         // codes deliberately take the safe presentation table instead.
         let protocolFailure = ["checker_invalid_response", "checker_failed", "checker_start_failed", "checker_retry_start_failed", "checker_retry_failed"].contains(code)
         let reason = protocolFailure
-            ? (entry?.reason ?? "检查未能完成，尚未得到可用结论")
+            ? (checkerReason(context?.reasonCode) ?? entry?.reason ?? "检查未能完成，尚未得到可用结论")
             : (reported.isEmpty ? (entry?.reason ?? "这次检查没有得到可用结论") : reported)
-        let message = compose(
+        let base = compose(
             agentRole: context?.agentRole ?? "checker",
             modelName: context?.modelName,
             reason: reason,
             rawDetail: context?.upstreamReason ?? context?.blockReason,
-            suggestion: entry?.suggestion ?? "请稍后重新复查",
+            suggestion: nil,
             code: code
         )
+        let message = failureDetail(base: base, manuscriptState: context?.manuscriptState,
+            operation: "check",
+            action: "确认正文仍是当前版本后，重新检查当前正文", identifier: result.checkAttemptId)
         return (message, isCritical(code: code, blockReason: context?.blockReason))
     }
 
@@ -108,6 +121,27 @@ enum LinoErrorPresenter {
                 suggestion: "请检查网络后重试", code: nil
             )
             return (message, false)
+        case .sopFailure(let failure):
+            let basic: (message: String, critical: Bool)
+            if let code = failure.code {
+                basic = presentValidation(code: code, message: failure.message,
+                    names: failure.names, violations: failure.violations, preferReportedReason: true)
+            } else if failure.statusCode >= 500 {
+                // An unstructured server body can be a raw exception or
+                // upstream text. Its location fields remain useful, but the
+                // unverified body is not an author-facing explanation.
+                basic = ("服务端处理失败，具体原因尚未确定", false)
+            } else {
+                basic = presentHTTP(statusCode: failure.statusCode, body: failure.message)
+            }
+            let stage = stageLabel(failure.failureStage)
+            let base = stage == nil ? basic.message : "\(stage!)：\(basic.message)"
+            return (failureDetail(base: base, manuscriptState: failure.manuscriptState,
+                operation: failure.failureStage == "extracting" ? "extract" : failure.failureStage == "checking" ? "check" : nil,
+                action: failure.failureStage == "accepting"
+                    ? "先刷新当前章节与任务状态，确认是否已经接受；确认前不要重复接受"
+                    : "请按当前章节提示处理后重试；若状态不明，先刷新任务状态",
+                identifier: failure.requestID), basic.critical)
         case .http(let statusCode, let body):
             return presentHTTP(statusCode: statusCode, body: body)
         case .validation(_, let code, let message, let names, let violations):
@@ -131,6 +165,8 @@ enum LinoErrorPresenter {
             return "transport"
         case .http(let statusCode, _):
             return [401, 403].contains(statusCode) ? "unauthorized" : "http_\(statusCode)"
+        case .sopFailure(let failure):
+            return failure.code ?? "http_\(failure.statusCode)"
         case .validation(_, let code, _, _, _):
             return code
         case .writeConflict:
@@ -169,6 +205,96 @@ enum LinoErrorPresenter {
             "checker_retry_failed",
             "interrupted",
         ].contains(code) || (code?.hasPrefix("llm_") == true)
+    }
+
+    /// Only stable server reason codes are translated. Unknown and historical
+    /// `invalid_protocol` rows do not inherit a guessed citation diagnosis.
+    static func checkerReason(_ code: String?) -> String? {
+        switch code {
+        case "draft_evidence_not_found":
+            return "检查器引用的文字与正文原文不一致，尚未形成有效结论；这不代表文章违规"
+        case "draft_evidence_missing":
+            return "检查器没有给出必需的正文引文，尚未形成有效结论；这不代表文章违规"
+        case "source_evidence_not_found":
+            return "检查器引用的历史资料引文不一致，尚未形成有效结论；这不代表文章违规"
+        case "source_not_found":
+            return "检查器引用了不存在或不适用的资料，尚未形成有效结论；这不代表文章违规"
+        case "uncertain_state_source":
+            return "检查器把待确认的历史状态当成确定矛盾，尚未形成有效结论；这不代表文章违规"
+        case "bible_evidence_not_found", "empty_bible_cited":
+            return "检查器没有正确引用本章剧情要求，尚未形成有效结论；这不代表文章违规"
+        case "non_bible_evidence", "missing_requirement_source", "missing_requirement_draft_evidence":
+            return "检查器关于本章要求的举证方式无效，尚未形成有效结论；这不代表文章违规"
+        case "invalid_top_level", "invalid_issue_fields", "invalid_issue_values", "invalid_verdict_issues":
+            return "检查器返回的结果缺少必要内容或前后矛盾，尚未形成有效结论；这不代表文章违规"
+        case "invalid_name_use_row", "invalid_name_use_fields", "invalid_name_use_values",
+             "unknown_group_id", "duplicate_group_id", "missing_group_id", "invalid_character_id":
+            return "检查器没有完整处理人物辨别，尚未形成有效结论；这不代表文章违规"
+        case "invalid_source_catalog", "invalid_name_catalog":
+            return "程序提供给检查器的资料目录有误，尚未形成有效结论；请刷新任务后再试"
+        case "invalid_response", "checker_execution_error":
+            return "检查器执行时出现异常，尚未形成有效结论；这不代表文章违规"
+        case "invalid_protocol":
+            return "检查未能完成；旧记录没有保存具体失败规则，不能判断文章是否违规"
+        case .some:
+            return "检查未能完成；具体原因尚未确定，不能据此判断文章违规"
+        case .none:
+            return nil
+        }
+    }
+
+    private static func stageLabel(_ stage: String?) -> String? {
+        switch stage {
+        case "preflight": return "任务准备"
+        case "selecting_memory": return "选记忆"
+        case "writing": return "写正文"
+        case "validating": return "正文程序校验"
+        case "checking": return "Bible 检查"
+        case "accepting": return "接受正文"
+        case "extracting": return "整理记忆"
+        case "persisting": return "保存结果"
+        default: return nil
+        }
+    }
+
+    private static func failureDetail(base: String, manuscriptState: String?, operation: String? = nil, action: String, identifier: String?) -> String {
+        let state: String
+        switch manuscriptState {
+        case "unchanged": state = "当前正文未被替换"
+        case "generated_candidate_retained": state = "生成稿已保留，当前正文未被替换"
+        case "accepted":
+            switch operation {
+            case "extract": state = "正文已接受；仅记忆整理未完成"
+            case "check": state = "正文已接受；本次检查未形成结论，已接受正文保持不变"
+            default: state = "正文已接受；本次失败不撤销接受"
+            }
+        default: state = "正文状态尚不能确认，请刷新当前章节核实"
+        }
+        let safeID = identifier.flatMap { id -> String? in
+            guard !id.isEmpty, id.count <= 128,
+                  id.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_").contains($0) }) else { return nil }
+            return id
+        }
+        return "\(base)\n正文状态：\(state)。\n下一步：\(action)。\n\(safeID.map { "服务端记录编号：\($0)" } ?? "未取得服务端记录编号")"
+    }
+
+    private static func jobRecovery(for status: WriteJobStatus, chapter: Chapter?) -> String {
+        if status.outcomeCurrent != true { return "刷新当前任务状态，确认这条失败是否仍适用" }
+        if status.canRetryChecker, status.checkerTarget == "generated_candidate" {
+            return "请重试检查生成稿"
+        }
+        if status.kind == "check", status.checkerTarget == "visible_draft" {
+            return "请重新复查当前正文"
+        }
+        if status.kind == "extract" {
+            return (status.chapter ?? chapter)?.archive?.canRetry == true
+                ? "可直接在本章点击「重试整理」，无需再次检查 Bible"
+                : "刷新本章归档状态，确认可重试后再操作"
+        }
+        if status.kind == "write", ChapterJobFailureStage.resolve(status) != nil {
+            return "按本章提示处理原因后，可重新生成"
+        }
+        return "刷新当前任务状态确认后再继续"
     }
 
     // MARK: - APIError specialisations
@@ -221,9 +347,10 @@ enum LinoErrorPresenter {
     /// (when present) is appended the same way the old `APIError.
     /// errorDescription` did, so nothing regresses for callers that used to
     /// read that computed property directly.
-    private static func presentValidation(code: String, message: String, names: [String], violations: [Violation]) -> (message: String, critical: Bool) {
+    private static func presentValidation(code: String, message: String, names: [String], violations: [Violation], preferReportedReason: Bool = false) -> (message: String, critical: Bool) {
         let entry = tableEntry(for: code)
-        var reason = entry?.reason ?? message
+        let reported = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        var reason = preferReportedReason && !reported.isEmpty ? reported : (entry?.reason ?? message)
         // New servers already fold the safe violation summary into `message`.
         // Old ones do not, so append it once without duplicating either shape.
         let violationText = violations.compactMap { violation -> String? in
@@ -260,9 +387,10 @@ enum LinoErrorPresenter {
         reason: String,
         rawDetail: String?,
         suggestion: String?,
-        code: String?
+        code: String?,
+        stageOverride: String? = nil
     ) -> String {
-        var text = sectionLabel(for: agentRole)
+        var text = stageOverride ?? sectionLabel(for: agentRole)
         if let modelName, !modelName.isEmpty {
             text += "（\(modelName)）"
         }

@@ -144,6 +144,9 @@ private struct V211StoreHTTPTests {
     @MainActor
     static func main() async {
         let tests: [(String, @MainActor () async throws -> Void)] = [
+            ("Build72 Checker diagnosis reaches Store notices and keeps retry authority", build72CheckerFailurePresentation),
+            ("Build72 SOP HTTP request ID reaches the user without repeating accept", build72RequestFailureIdentity),
+            ("Build72 unstructured SOP 5xx hides raw server body", build72UnstructuredHTTPFailure),
             ("Build71 settings late reads cannot roll back successful writes", build71SettingsReadOrdering),
             ("Build71 deleted events revoke queued patches and stale cache reads", build71EventDeletion),
             ("Build71 queued book deletion clears cache and current context", build71QueuedDeletion),
@@ -249,6 +252,76 @@ private struct V211StoreHTTPTests {
         }
         print("Store HTTP regressions: \(selectedTests.count - failures) passed, \(failures) failed")
         exit(failures == 0 ? 0 : 1)
+    }
+
+    @MainActor static func build72CheckerFailurePresentation() async throws {
+        let h = try await Harness("build72-checker", [
+            "job_phase": "failed", "job_kind": "check", "checker_target": "generated_candidate",
+            "can_retry_checker": true, "build72_reason_code": "draft_evidence_not_found",
+        ])
+        try check(h.snapshot().taskBanner?.action == .retryGeneratedCandidateChecker,
+            "a current retained candidate offers only checker retry")
+        try check(h.notices.history.count == 1, "cold load publishes one historical failure")
+        try check(h.notices.history[0].message.contains("正文原文不一致")
+            && h.notices.history[0].message.contains("生成稿已保留")
+            && h.notices.history[0].message.contains("服务端记录编号："),
+            "the full reason, manuscript state and real attempt ID must reach notification history")
+        await h.editor.refreshTaskStatus()
+        try check(h.notices.history.count == 1, "the same attempt does not flood notices when observed again")
+        _ = try await fixture("config", ["job_id_suffix": "-second-attempt"])
+        await h.editor.refreshTaskStatus()
+        try check(h.notices.history.count == 2, "a later attempt with the same reason needs its own notice")
+        let before = try await fixture().requests.count
+        _ = await h.editor.retryGeneratedCandidateChecker()
+        let requests = try await fixture().requests.dropFirst(before)
+        try check(requests.contains { $0.path.hasSuffix("/checker/retry") }
+            && !requests.contains { $0.path.hasSuffix("/write") || $0.path.hasSuffix("/check/start") },
+            "the recovery action checks the retained candidate without starting Writer")
+    }
+
+    @MainActor static func build72RequestFailureIdentity() async throws {
+        let h = try await Harness("build72-http", [
+            "build72_http_failure": true, "build72_request_id": "synthetic-request-72",
+        ])
+        do {
+            let _: WriteJobStatus = try await h.session.api.request("/chapters/\(h.chapters[0].id)/accept", method: "POST")
+            throw HTTPTestFailure(description: "fixture should refuse acceptance")
+        } catch let error as APIError {
+            guard case .sopFailure(let failure) = error else {
+                throw HTTPTestFailure(description: "server request ID was lost during HTTP decoding")
+            }
+            try check(failure.requestID == "synthetic-request-72"
+                && failure.failureStage == "accepting" && failure.manuscriptState == "unchanged",
+                "structured correlation and state must survive APIClient")
+            let text = LinoErrorPresenter.present(error: error).message
+            try check(text.contains("接受正文") && text.contains("服务端记录编号：synthetic-request-72")
+                && text.contains("当前正文未被替换") && text.contains("不要重复接受"),
+                "accept refusal must explain stage, state, request ID and safe recovery")
+        }
+        let writes = try await fixture().requests.filter { $0.method == "POST" }
+        try check(writes.count == 1, "a failed accept response must not trigger another accept")
+    }
+
+    @MainActor static func build72UnstructuredHTTPFailure() async throws {
+        let h = try await Harness("build72-unstructured", [
+            "build72_http_unstructured": true, "build72_request_id": "synthetic-unknown-72",
+        ])
+        do {
+            let _: WriteJobStatus = try await h.session.api.request("/chapters/\(h.chapters[0].id)/accept", method: "POST")
+            throw HTTPTestFailure(description: "fixture should return an unstructured 503")
+        } catch let error as APIError {
+            guard case .sopFailure(let failure) = error else {
+                throw HTTPTestFailure(description: "unstructured SOP error lost its correlation envelope")
+            }
+            try check(failure.code == nil && failure.requestID == "synthetic-unknown-72",
+                "unknown code must retain only the safe request identifier")
+            let text = LinoErrorPresenter.present(error: error).message
+            try check(text.contains("接受正文") && text.contains("具体原因尚未确定")
+                && text.contains("正文状态尚不能确认") && text.contains("synthetic-unknown-72"),
+                "unknown server failure still names stage, uncertain manuscript state and identifier")
+            try check(!text.contains("RAW_UNSAFE_SERVER_DETAIL_SENTINEL"),
+                "unstructured 5xx body must never be treated as an author-facing cause")
+        }
     }
 
     @MainActor static func build71SettingsReadOrdering() async throws {
@@ -1767,6 +1840,14 @@ private struct V211StoreHTTPTests {
         _ = await h.editor.accept()
         try check(h.editor.writingPhase.isActive, "unknown acceptance must remain locked/pending")
         try check(h.editor.taskMonitoringMessage != nil, "unknown acceptance needs a monitoring explanation")
+        try check(h.editor.taskMonitoringMessage?.contains("正文状态需刷新确认") == true
+            && h.editor.taskMonitoringMessage?.contains("确认前不要重复接受") == true
+            && h.editor.taskMonitoringMessage?.contains("未取得服务端记录编号") == true,
+            "lost accept and failed read must retain uncertainty, recovery and honest missing correlation")
+        try check(h.editor.taskMonitoringMessage?.contains("temporarily unavailable") == false
+            && h.editor.taskMonitoringMessage?.components(separatedBy: "正文状态需刷新确认").count == 2
+            && h.editor.taskMonitoringMessage?.components(separatedBy: "下一步：").count == 2,
+            "unknown acceptance shows one safe reason, one state, and one recovery instruction")
         try check(h.snapshot().taskBanner?.action == .refreshTaskStatus, "unknown acceptance must offer read-only refresh")
         _ = await h.editor.accept()
         _ = try await fixture("config", ["get_blocked": false])
@@ -1798,6 +1879,15 @@ private struct V211StoreHTTPTests {
         let h = try await Harness("archive", ["archive_failure": true, "archive_retry_delay": 0.25])
         let original = h.editor.currentChapter!.draftText
         try check(h.snapshot().taskBanner?.action == .retryArchive, "accepted archive failure needs retry")
+        try check(h.editor.currentChapter?.archive?.latestAttempt?.jobId == "synthetic-archive-job",
+            "archive attempt must decode the server's task ID")
+        try check(h.snapshot().taskBanner?.detail?.contains("正文已接受") == true
+            && h.snapshot().taskBanner?.detail?.contains("服务端记录编号：") == true,
+            "archive detail must state accepted manuscript and traceable server record")
+        try check(h.snapshot().taskBanner?.detail?.contains("仅记忆整理未完成") == true
+            && h.snapshot().taskBanner?.detail?.contains("可直接在本章点击「重试整理」") == true
+            && h.snapshot().taskBanner?.detail?.contains("确认可重试后再操作") == false,
+            "a proven retryable archive must describe its actual action and exact manuscript state")
         try check(h.notices.history.contains { $0.message.contains("超时") }, "current failure must restore into history")
         let task = Task { await h.editor.retryArchive() }
         try await eventually("archive retry begins") { try await fixture().requests.contains { $0.path.hasSuffix("/archive/retry") } }

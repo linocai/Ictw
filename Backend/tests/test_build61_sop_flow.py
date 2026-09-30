@@ -283,7 +283,8 @@ def test_generation_validation_failure_is_specific_audited_and_retryable(client,
     assert response.status_code == 200
     status = wait_for_terminal(client, chapter_id, auth_headers)
     assert status["error_code"] == "checker_invalid_response"
-    assert "尚未得到可用结论" in status["error_message"]
+    assert "尚未形成检查结论" in status["error_message"]
+    assert status["error_context"]["reason_code"] == "invalid_top_level"
     assert status["error_context"]["model_name"] == "synthetic-checker"
     assert status["can_retry_checker"]
     assert "never-log-this-secret" not in str(status) + caplog.text
@@ -375,7 +376,9 @@ def test_hidden_checker_retry_execution_failure_stays_retryable_and_unavailable(
     assert unavailable["error_code"] == "checker_retry_failed"
     assert unavailable["checker_result"]["status"] == "unavailable"
     assert unavailable["can_retry_checker"] is True
-    assert "检查未能完成" in unavailable["error_message"]
+    assert "检查结果保存失败" in unavailable["error_message"]
+    assert unavailable["error_context"]["failure_stage"] == "persisting"
+    assert unavailable["error_context"]["manuscript_state"] == "generated_candidate_retained"
     assert "Checker 未通过" not in unavailable["error_message"]
 
     monkeypatch.setattr(write_jobs, "_begin_final_checker_cas", original_begin)

@@ -642,7 +642,10 @@ enum V2DeskPresentation {
                 return .rerunChecker
             }
             if stage == nil { return .refreshTaskStatus }
-            if stage == .extraction { return isAccepted ? .startNewChapter : .retryArchive }
+            if stage == .extraction {
+                return isAccepted ? .startNewChapter
+                    : (source.chapter?.archive?.canRetry == true ? .retryArchive : .refreshTaskStatus)
+            }
             if stage == .acceptance {
                 if needsSettings(code) { return .openSettings }
                 return code == "checker_override_required" ? .rerunChecker : .none
@@ -740,10 +743,12 @@ enum V2DeskPresentation {
         }
         if case .failed(let code, let message, let stage) = source.writingPhase {
             if stage == nil {
+                let knownStep = ["保存结果", "任务准备"].first { message.hasPrefix($0) }
                 return V2DeskTaskBanner(
                     kind: .connectionInterrupted,
                     tone: .warning,
-                    text: code == "checker_start_unconfirmed" ? "复查是否启动尚未确认" : "任务中断，尚不清楚停在哪一步",
+                    text: knownStep.map { "\($0)未完成，结果尚待确认" }
+                        ?? (code == "checker_start_unconfirmed" ? "复查是否启动尚未确认" : "任务中断，尚不清楚停在哪一步"),
                     action: .refreshTaskStatus,
                     detail: message
                 )
@@ -806,7 +811,10 @@ enum V2DeskPresentation {
                 )
             }
             if stage == .extraction || isAccepted {
-                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆没能整理，这一章仍然是完成的", action: .retryArchive, detail: message)
+                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning,
+                    text: "记忆没能整理，这一章仍然是完成的",
+                    action: source.chapter?.archive?.canRetry == true ? .retryArchive : .refreshTaskStatus,
+                    detail: message)
             }
             if needsSettings(code) {
                 return V2DeskTaskBanner(kind: .generationFailed, tone: .danger, text: "模型配置需要处理", action: .openSettings, detail: message)
@@ -834,14 +842,41 @@ enum V2DeskPresentation {
             case .pending:
                 return V2DeskTaskBanner(kind: .archiving, tone: .accent, text: "正在整理这一章的记忆", action: nil)
             case .attention:
-                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆需要重新整理，这一章仍然是完成的", action: .retryArchive, detail: source.chapter?.archive?.errorMessage)
+                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning,
+                    text: "记忆需要重新整理，这一章仍然是完成的",
+                    action: source.chapter?.archive?.canRetry == true ? .retryArchive : .refreshTaskStatus,
+                    detail: archiveFailureDetail(source.chapter?.archive))
             case .usableWithAttention(_, _, let detail):
-                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning, text: "记忆可用，仍有待整理项", action: .retryArchive, detail: detail)
+                return V2DeskTaskBanner(kind: .archiveFailed, tone: .warning,
+                    text: "记忆可用，仍有待整理项",
+                    action: source.chapter?.archive?.canRetry == true ? .retryArchive : .refreshTaskStatus,
+                    detail: archiveFailureDetail(source.chapter?.archive, fallback: detail))
             default:
                 return nil
             }
         }
         return nil
+    }
+
+    private static func archiveFailureDetail(_ archive: ChapterArchive?, fallback: String? = nil) -> String? {
+        guard let archive else { return fallback }
+        // The current archive projection may describe a newer attempt than a
+        // cached latest_attempt preview; keep the current public reason first.
+        let reason = archive.errorMessage ?? archive.latestAttempt?.errorMessage ?? fallback ?? "具体原因尚未确定"
+        let jobID = archive.latestAttempt?.jobId
+        let revisionID = archive.latestAttempt?.revisionId ?? archive.revisionId
+        let sourceID = jobID ?? revisionID
+        let identifier = sourceID.flatMap { id -> String? in
+            guard !id.isEmpty, id.count <= 128,
+                  id.unicodeScalars.allSatisfy({
+                      CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_").contains($0)
+                  }) else { return nil }
+            return id
+        }
+        let action = archive.canRetry ? "可在本章重试归档，无需再次检查 Bible" : "请先刷新归档状态，确认可重试后再操作"
+        let location = identifier.map { "\(jobID == nil ? "归档记录编号" : "服务端任务编号")：\($0)" }
+            ?? "未取得服务端记录编号"
+        return "整理记忆：\(reason)\n正文状态：正文已接受，仅记忆整理未完成。\n下一步：\(action)。\n\(location)"
     }
 
     private static func makeChapterState(

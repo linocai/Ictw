@@ -278,6 +278,7 @@ def _apply_job_phase(db: Session, job_id: str, phase: str, **fields: Any) -> boo
     run = db.get(JobRun, job_id)
     if run is None or run.phase in TERMINAL_PHASES:
         return False
+    previous_phase = run.phase
     run.phase = phase
     for key in (
         "attempt", "violations", "error_code", "error_message", "error_context",
@@ -289,6 +290,39 @@ def _apply_job_phase(db: Session, job_id: str, phase: str, **fields: Any) -> boo
             setattr(run, key, fields[key])
     if phase in TERMINAL_PHASES:
         run.finished_at = utc_now()
+    if phase == "failed":
+        stage = {
+            "pending": "preflight", "selecting_memory": "selecting_memory",
+            "writing": "writing", "validating": "validating",
+            "checking": "checking", "extracting": "extracting",
+        }.get(previous_phase, "unknown")
+        if run.kind == "extract" and previous_phase == "pending":
+            stage = "extracting"
+        if run.kind == "check" and previous_phase == "pending":
+            stage = "checking"
+        context = dict(run.error_context) if isinstance(run.error_context, dict) else {}
+        context.setdefault("failure_stage", stage)
+        chapter = db.get(Chapter, run.chapter_id)
+        if chapter is None:
+            manuscript_state = "unknown"
+        elif chapter.status == "finalized":
+            manuscript_state = "accepted"
+        elif stage == "checking" and run.candidate_id:
+            candidate = db.get(ChapterDraftCandidate, run.candidate_id)
+            draft = run.input_snapshot.get("draft") if isinstance(run.input_snapshot, dict) else {}
+            manuscript_state = (
+                "generated_candidate_retained"
+                if candidate is not None and isinstance(draft, dict) and draft.get("source") == "candidate"
+                else "unchanged" if chapter is not None else "unknown"
+            )
+        else:
+            manuscript_state = "unchanged"
+        context.setdefault("manuscript_state", manuscript_state)
+        run.error_context = context
+        logger.warning(
+            "job_failed job_id=%s stage=%s code=%s manuscript_state=%s",
+            run.id, context["failure_stage"], run.error_code or "unknown", context["manuscript_state"],
+        )
     return True
 
 
@@ -375,6 +409,21 @@ def _error_context(exc: LLMError) -> dict[str, Any]:
     }.items() if value is not None}
 
 
+def _safe_llm_message(exc: LLMError) -> str:
+    """Keep an upstream exception body out of API, persistent job and logs."""
+    return {
+        "llm_timeout": "模型请求超时",
+        "llm_transport": "无法连接模型服务",
+        "llm_rate_limited": "模型服务触发限流",
+        "llm_content_blocked": "模型服务拦截了请求",
+        "llm_output_truncated": "模型输出被截断",
+        "llm_empty_candidate": "模型没有返回有效内容",
+        "llm_invalid_response": "模型返回的数据格式无效",
+        "llm_upstream_unavailable": "模型服务暂时不可用",
+        "llm_upstream_rejected": "模型服务拒绝了请求",
+    }.get(exc.code, "模型服务调用失败")
+
+
 def _public_context_limitations(limitations: object) -> list[dict[str, Any]]:
     """Translate frozen readiness rows for the public checker result wire."""
     if not isinstance(limitations, list):
@@ -438,7 +487,10 @@ def _log_archive_failure(
         "attempts": 1,
     }
     if reason:
-        payload["reason"] = reason
+        # A validator/contract exception may include a model-supplied name or
+        # excerpt. The private revision retains diagnostics; operational logs
+        # only need a stable correlate, never the exception body itself.
+        payload["reason_sha256"] = hashlib.sha256(reason.encode()).hexdigest()[:16]
     if client is not None:
         payload["model_name"] = str(getattr(client, "model_name", "") or "")
     if error_context:
@@ -483,7 +535,11 @@ def _checked_call(job: WriteJob, sf: sessionmaker[Session], message: str, snapsh
         try:
             return validate_checker_result(job.checker.check(message), snapshot, check_attempt_id=job.job_id)
         except CheckerValidationError as exc:
-            logger.warning("checker_validation_failed job_id=%s reason=%s", job.job_id, checker_failure_message(exc))
+            logger.warning(
+                "checker_validation_failed job_id=%s stage=checking reason_code=%s diagnostics=%s",
+                job.job_id, exc.reason_code,
+                json.dumps(checker_failure_diagnostics(exc), ensure_ascii=False, sort_keys=True),
+            )
             raise
     return _call(job, sf, "checker", check_and_validate)
 
@@ -578,12 +634,13 @@ def _run_checker_retry_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             "draft_fingerprint": job.checker_draft_fingerprint,
             "input_fingerprint": snapshot.get("input_fingerprint", ""),
             "check_attempt_id": job.job_id,
+            "error_context": {"agent_role": "checker", "reason_code": "checker_execution_error", "failure_stage": "checking"},
         }
         try:
             record_job_phase(
                 sf, job.job_id, "failed", error_code=code, checker_result=unavailable,
                 error_message="检查未能完成，正文已保留，请重新检查",
-                error_context={"agent_role": "checker"},
+                error_context=unavailable["error_context"],
             )
         finally:
             job.mark_terminal("failed")
@@ -612,13 +669,16 @@ def _run_checker_attempt(job: WriteJob, sf: sessionmaker[Session]) -> None:
             "error_context": _error_context(exc),
         }
     except (CheckerValidationError, ValueError, TypeError) as exc:
+        diagnostics = checker_failure_diagnostics(exc)
+        if not isinstance(exc, CheckerValidationError):
+            logger.warning("checker_validation_failed job_id=%s stage=checking reason_code=%s exception_type=%s", job.job_id, diagnostics["reason_code"], type(exc).__name__)
         result = {
             "status": "unavailable", "draft_fingerprint": fingerprint,
             "input_fingerprint": snapshot.get("input_fingerprint", ""),
             "check_attempt_id": job.job_id, "error_code": "checker_invalid_response",
             "error_message": checker_failure_message(exc),
-            "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or "")},
-            "_validation_diagnostics": checker_failure_diagnostics(exc),
+            "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or ""), "reason_code": diagnostics["reason_code"], "failure_stage": "checking"},
+            "_validation_diagnostics": diagnostics,
         }
     except Exception as exc:
         logger.warning("checker_execution_failed job_id=%s exception_type=%s", job.job_id, type(exc).__name__)
@@ -627,12 +687,17 @@ def _run_checker_attempt(job: WriteJob, sf: sessionmaker[Session]) -> None:
             "input_fingerprint": snapshot.get("input_fingerprint", ""),
             "check_attempt_id": job.job_id, "error_code": "checker_failed" if visible_draft else "checker_retry_failed",
             "error_message": "检查未能完成，正文已保留，请重新检查",
-            "error_context": {"agent_role": "checker"},
+            "error_context": {"agent_role": "checker", "reason_code": "checker_execution_error", "failure_stage": "checking"},
         }
 
     # Result payloads are also consumed directly by the job read-model.  Use
     # the same public limitation wire shape as production-readiness instead of
     # leaking the frozen internal chapter_index/kind representation.
+    if result.get("status") == "unavailable":
+        context = dict(result.get("error_context") or {})
+        context.setdefault("failure_stage", "checking")
+        context.setdefault("manuscript_state", "unchanged" if visible_draft else "generated_candidate_retained")
+        result["error_context"] = context
     result["context_limitations"] = _public_context_limitations(snapshot.get("context_limitations"))
 
     def persist_result() -> bool | None:
@@ -750,20 +815,28 @@ def _run_checker_attempt(job: WriteJob, sf: sessionmaker[Session]) -> None:
             )
             db.commit()
             job.mark_terminal("failed")
-        except Exception:
+        except Exception as exc:
             db.rollback()
+            logger.warning(
+                "checker_persistence_failed job_id=%s stage=persisting exception_type=%s",
+                job.job_id, type(exc).__name__,
+            )
             # Persistence/execution failed after a valid private candidate was
             # already admitted. Keep an explicit unavailable Checker result so
             # the read model offers candidate-only retry instead of claiming
             # that story content was rejected.
+            message = (
+                "检查结果保存失败，当前正文已保留；请重新检查"
+                if visible_draft else "检查结果保存失败，生成稿已保留，当前正文未变；可重试检查"
+            )
             unavailable = {
                 "status": "unavailable",
                 "draft_fingerprint": fingerprint,
                 "input_fingerprint": snapshot.get("input_fingerprint", ""),
                 "check_attempt_id": job.job_id,
                 "error_code": "checker_retry_failed",
-                "error_message": "检查未能完成，生成稿已保留，当前正文未变；可重试检查",
-                "error_context": {"agent_role": "checker"},
+                "error_message": message,
+                "error_context": {"agent_role": "checker", "failure_stage": "persisting"},
             }
             record_job_phase(
                 sf, job.job_id, "failed",
@@ -773,8 +846,8 @@ def _run_checker_attempt(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 input_fingerprint=snapshot.get("input_fingerprint"),
                 context_limitations=snapshot.get("context_limitations"),
                 error_code="checker_retry_failed",
-                error_message="检查未能完成，生成稿已保留，当前正文未变；可重试检查",
-                error_context={"agent_role": "checker"},
+                error_message=message,
+                error_context=unavailable["error_context"],
             )
             job.mark_terminal("failed")
             return False
@@ -964,6 +1037,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                     continue
                 raise incomplete
             _normal_finish_or_raise(job, "writer", job.writer)
+            record_job_phase(sf, job.job_id, "validating", attempt=attempt)
             violations = draft_violations(db, chapter, text, job.writer.finish_reason if job.writer else None)
             last_candidate = _persist_candidate(db, job, chapter, text, attempt, violations)
             length_only = all(item["code"] in {"empty_body", "minimum_length", "length_truncated"} for item in violations)
@@ -1045,6 +1119,9 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 "error_code": exc.code, "error_context": _error_context(exc),
             }
         except (CheckerValidationError, ValueError, TypeError) as exc:
+            diagnostics = checker_failure_diagnostics(exc)
+            if not isinstance(exc, CheckerValidationError):
+                logger.warning("checker_validation_failed job_id=%s stage=checking reason_code=%s exception_type=%s", job.job_id, diagnostics["reason_code"], type(exc).__name__)
             checker_result = {
                 "status": "unavailable",
                 "draft_fingerprint": fingerprint,
@@ -1052,8 +1129,8 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 "check_attempt_id": job.job_id,
                 "error_code": "checker_invalid_response",
                 "error_message": checker_failure_message(exc),
-                "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or "")},
-                "_validation_diagnostics": checker_failure_diagnostics(exc),
+                "error_context": {"agent_role": "checker", "model_name": str(getattr(getattr(job.checker, "llm", None), "model_name", "") or ""), "reason_code": diagnostics["reason_code"], "failure_stage": "checking"},
+                "_validation_diagnostics": diagnostics,
             }
         except Exception as exc:
             logger.warning("checker_execution_failed job_id=%s exception_type=%s", job.job_id, type(exc).__name__)
@@ -1062,8 +1139,13 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 "input_fingerprint": checker_snapshot["input_fingerprint"],
                 "check_attempt_id": job.job_id, "error_code": "checker_retry_failed",
                 "error_message": "检查未能完成，生成稿已保留，可单独重试检查",
-                "error_context": {"agent_role": "checker"},
+                "error_context": {"agent_role": "checker", "reason_code": "checker_execution_error", "failure_stage": "checking"},
             }
+        if checker_result.get("status") == "unavailable":
+            context = dict(checker_result.get("error_context") or {})
+            context.setdefault("failure_stage", "checking")
+            context.setdefault("manuscript_state", "generated_candidate_retained")
+            checker_result["error_context"] = context
         checker_result["context_limitations"] = _public_context_limitations(
             checker_snapshot.get("context_limitations")
         )
@@ -1228,7 +1310,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     except LLMError as exc:
         db.rollback()
         if not _restore_baseline(
-            db, job, phase="failed", error_code=exc.code, error_message=str(exc), error_context=_error_context(exc)
+            db, job, phase="failed", error_code=exc.code, error_message=_safe_llm_message(exc), error_context=_error_context(exc)
         ):
             _mark_chapter_changed(sf, job)
             job.mark_terminal("cancelled")
@@ -1237,7 +1319,8 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     except Exception as exc:
         db.rollback()
         if not _restore_baseline(
-            db, job, phase="failed", error_code="write_failed", error_message="写作任务执行失败"
+            db, job, phase="failed", error_code="write_failed", error_message="写作任务执行异常；请刷新章节状态确认",
+            error_context={"agent_role": "write_pipeline", "failure_stage": "unknown", "manuscript_state": "unknown"},
         ):
             _mark_chapter_changed(sf, job)
             job.mark_terminal("cancelled")
@@ -1251,6 +1334,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     """Run one v2 archive call; accepted prose is never rolled back."""
     db = sf()
     client: Any | None = None
+    operation_stage = "extracting"
     try:
         # Serialize the startup proof and pending -> extracting write with
         # reopen/import, including a worker launched after invalidation.
@@ -1323,6 +1407,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             raise
         else:
             _record_llm(sf, "extractor", client, started, None, job)
+        operation_stage = "validating"
         validated = validate_archive_output(chapter, output)
         if _should_stop(job):
             db.rollback()
@@ -1381,6 +1466,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
                 raise RuntimeError("archive job terminal row is no longer writable")
             db.commit()
 
+        operation_stage = "persisting"
         if not write_registry.finish_if_current(job, persist_complete, phase="done"):
             db.rollback()
         else:
@@ -1388,7 +1474,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
     except LLMError as exc:
         _log_archive_failure(job, stage="upstream", error_code=exc.code,
                              client=client, error_context=_error_context(exc))
-        _finish_archive_failure(db, job, error_code=exc.code, message=str(exc),
+        _finish_archive_failure(db, job, error_code=exc.code, message=_safe_llm_message(exc),
                                 error_context=_error_context(exc))
     except ArchiveFingerprintMismatch as exc:
         _log_archive_failure(job, stage="activation", error_code="archive_input_changed",
@@ -1405,12 +1491,15 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             message=f"归档未通过确定性校验：{archive_validation_message(reason)}",
             failure_kind="partial", reason=reason, summary=summary,
             diagnostics=getattr(exc, "diagnostics", None),
-            error_context={"stage": "archive_validation", "attempts": 1, "reason": reason},
+            error_context={"stage": "archive_validation", "attempts": 1, "reason": reason, "failure_stage": "validating", "agent_role": "extractor"},
         )
     except Exception as exc:
         _log_archive_failure(job, stage="persistence", error_code="extract_failed",
                              client=client, exception_type=type(exc).__name__)
-        _finish_archive_failure(db, job, error_code="extract_failed", message="归档任务执行失败")
+        _finish_archive_failure(
+            db, job, error_code="extract_failed", message="归档任务执行异常，正文已接受",
+            error_context={"agent_role": "extractor", "failure_stage": operation_stage},
+        )
     finally:
         db.close()
 

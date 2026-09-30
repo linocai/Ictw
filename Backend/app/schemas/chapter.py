@@ -117,10 +117,12 @@ class ArchiveInactivePreviewRead(BaseModel):
 
 class ArchiveLatestAttemptRead(BaseModel):
     revision_id: str
+    job_id: str | None = None
     revision: int
     status: str
     error_code: str | None = None
     error_message: str | None = None
+    error_context: dict | None = None
     finished_at: datetime | None = None
 
 

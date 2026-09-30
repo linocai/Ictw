@@ -1495,6 +1495,10 @@ final class ClientSyncStore: ObservableObject {
         case .validation(let status, _, _, _, _):
             if status == 401 || status == 403 { return .authentication }
             return (status == 408 || status == 429 || status >= 500) ? .retryable : .permanent
+        case .sopFailure(let failure):
+            let status = failure.statusCode
+            if status == 401 || status == 403 { return .authentication }
+            return (status == 408 || status == 429 || status >= 500) ? .retryable : .permanent
         default:
             return .permanent
         }
@@ -1505,6 +1509,7 @@ final class ClientSyncStore: ObservableObject {
         switch apiError {
         case .http(let status, _): return status
         case .validation(let status, _, _, _, _): return status
+        case .sopFailure(let failure): return failure.statusCode
         default: return nil
         }
     }

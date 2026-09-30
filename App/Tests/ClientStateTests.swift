@@ -543,7 +543,62 @@ private func testInterruptedJobUsesRecordedPhase() throws {
 
     var hiddenChecker = visibleChecker
     hiddenChecker.checkerTarget = "generated_candidate"
+    hiddenChecker.canRetryChecker = true
     try expect(LinoErrorPresenter.present(jobFailure: hiddenChecker).message.contains("请重试检查生成稿"), "a hidden candidate Checker interruption must not misdirect the author to visible-draft recheck")
+}
+
+private func testBuild72SafeCheckerReasonAndLocation() throws {
+    let data = Data("""
+        {"chapter_id":"synthetic-chapter","job_id":"synthetic-attempt-72", "outcome_current":true,
+         "kind":"check","phase":"failed","error_code":"checker_invalid_response",
+         "error_message":"检查器结果无效，尚未形成结论", "checker_target":"generated_candidate",
+         "can_retry_checker":true,
+         "error_context":{"agent_role":"checker","reason_code":"draft_evidence_not_found",
+           "failure_stage":"checking","manuscript_state":"generated_candidate_retained"}}
+        """.utf8)
+    let status = try JSONDecoder.lino.decode(WriteJobStatus.self, from: data)
+    let explanation = LinoErrorPresenter.present(jobFailure: status).message
+    try expect(explanation.contains("引用的文字与正文原文不一致"), "known Checker evidence error must be specific")
+    try expect(explanation.contains("这不代表文章违规"), "protocol failure must not become a story verdict")
+    try expect(explanation.contains("生成稿已保留，当前正文未被替换"), "candidate state must be explicit")
+    try expect(explanation.contains("请重试检查生成稿"), "recovery must use the existing checker-only route")
+    try expect(explanation.contains("服务端记录编号：synthetic-attempt-72"), "job identifier must survive presentation")
+    try expect(ChapterJobFailureStage.resolve(status) == .bibleChecking, "reported stage must drive the task UI")
+
+    var noPermission = status
+    noPermission.canRetryChecker = false
+    try expect(!LinoErrorPresenter.present(jobFailure: noPermission).message.contains("请重试检查生成稿"),
+        "a stale candidate must not offer a checker retry")
+    var old = status
+    old.errorContext = nil
+    old.jobId = nil
+    let oldExplanation = LinoErrorPresenter.present(jobFailure: old).message
+    try expect(oldExplanation.contains("未取得服务端记录编号") && !oldExplanation.contains("引文与原文不一致"),
+        "legacy failures must not invent a precise reason or identifier")
+
+    for (reason, expected) in [("source_evidence_not_found", "历史资料引文不一致"),
+                                ("invalid_verdict_issues", "前后矛盾"),
+                                ("invalid_protocol", "旧记录没有保存具体失败规则")] {
+        var variant = status
+        variant.errorContext?.reasonCode = reason
+        try expect(LinoErrorPresenter.present(jobFailure: variant).message.contains(expected),
+            "reason \(reason) must remain distinguishable")
+    }
+    var persisting = status
+    persisting.errorContext?.failureStage = "persisting"
+    persisting.errorContext?.manuscriptState = "unknown"
+    let savingExplanation = LinoErrorPresenter.present(jobFailure: persisting).message
+    try expect(savingExplanation.hasPrefix("保存结果"),
+        "a persistence failure must name result saving, not blame the Checker model")
+    try expect(ChapterJobFailureStage.resolve(persisting) == nil,
+        "persistence must not masquerade as a model phase")
+    let savingBanner = V2DeskPresentation.make(makeV2DeskSource(
+        chapter: try makeChapter(),
+        writingPhase: .failed(code: persisting.errorCode, message: savingExplanation, stage: nil)
+    ))
+    try expect(savingBanner.taskBanner?.text == "保存结果未完成，结果尚待确认"
+        && savingBanner.taskBanner?.action == .refreshTaskStatus,
+        "a saving failure offers read-only verification and its real stage")
 }
 
 private func testOldOrFinalizedServerFailureIsDiscarded() throws {
@@ -765,13 +820,13 @@ private func testExtractorFailureKeepsSpecificBackendRule() throws {
         addedEventIds: nil
     )
     try expect(
-        status.specificFailureReason == "正文已接受；Extractor 连续 3 次未通过确定性校验：证据未明确所属人物。可直接重新归档，无需再次检查 Bible",
-        "Extractor failures must preserve the exact safe backend rule while explaining that accepted prose is retained"
+        status.specificFailureReason == "Extractor 连续 3 次未通过确定性校验：证据未明确所属人物",
+        "Extractor failures must preserve the exact safe backend rule without inventing retry permission"
     )
     let presented = LinoErrorPresenter.present(jobFailure: status).message
     try expect(
-        presented.components(separatedBy: "可直接重新归档，无需再次检查 Bible").count == 2,
-        "archive recovery guidance must appear exactly once in the final notice"
+        presented.contains("证据未明确所属人物") && !presented.contains("可直接重新归档"),
+        "unverified archive retry permission must not be promised in the final notice"
     )
 }
 
@@ -794,8 +849,9 @@ private func testCheckerOverrideSurvivesExtractorFailure() throws {
     let status = try JSONDecoder().decode(WriteJobStatus.self, from: data)
     try expect(status.checkerResult?.isOverride == true, "explicit Checker override must decode from extract jobs")
     try expect(
-        status.specificFailureReason?.contains("可直接重新归档，无需再次检查 Bible") == true,
-        "Extractor failure must explain that archive retry is independent from Checker approval"
+        status.specificFailureReason?.contains("证据不足") == true
+            && status.specificFailureReason?.contains("可直接重新归档") == false,
+        "Extractor failure reason remains precise without claiming unverified retry permission"
     )
 
     try expect(
@@ -2088,6 +2144,7 @@ private struct ClientStateTestRunner {
         try testCurrentServerFailureIsApplied()
         try testDoneJobRequiresCurrentnessBeforeItCanRepaintTheDesk()
         try testInterruptedJobUsesRecordedPhase()
+        try testBuild72SafeCheckerReasonAndLocation()
         try testOldOrFinalizedServerFailureIsDiscarded()
         try testOldServerFailureRemainsLocalOnly()
         try testNewerLocalInputsDiscardServerTerminal()

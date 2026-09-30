@@ -360,28 +360,34 @@ struct ChapterArchiveDiagnostic: Codable, Hashable, Sendable, Identifiable {
 }
 
 struct ChapterArchiveLatestAttempt: Codable, Hashable, Sendable {
+    var jobId: String?
     var revisionId: String?
     var revision: Int?
     var status: String
     var errorCode: String?
     var errorMessage: String?
+    var errorContext: JobErrorContext?
     var finishedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case revision, status
+        case jobId = "job_id"
         case revisionId = "revision_id"
         case errorCode = "error_code"
         case errorMessage = "error_message"
+        case errorContext = "error_context"
         case finishedAt = "finished_at"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        jobId = try c.decodeIfPresent(String.self, forKey: .jobId)
         revisionId = try c.decodeIfPresent(String.self, forKey: .revisionId)
         revision = try c.decodeIfPresent(Int.self, forKey: .revision)
         status = try c.decode(String.self, forKey: .status)
         errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
         errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        errorContext = try c.decodeIfPresent(JobErrorContext.self, forKey: .errorContext)
         if errorCode == "archive_validation_failed" {
             errorMessage = LinoErrorPresenter.archiveValidationReason(errorMessage)
         }
@@ -1420,6 +1426,10 @@ struct JobErrorContext: Codable, Hashable, Sendable {
     /// servers, and intentionally takes precedence over the broad agent role
     /// when the UI tells the author where the interruption happened.
     var interruptedPhase: String? = nil
+    var reasonCode: String? = nil
+    var failureStage: String? = nil
+    var manuscriptState: String? = nil
+    var requestID: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case agentRole = "agent_role"
@@ -1431,6 +1441,10 @@ struct JobErrorContext: Codable, Hashable, Sendable {
         case completionWarning = "completion_warning"
         case droppedStateComponents = "dropped_state_components"
         case interruptedPhase = "interrupted_phase"
+        case reasonCode = "reason_code"
+        case failureStage = "failure_stage"
+        case manuscriptState = "manuscript_state"
+        case requestID = "request_id"
     }
 }
 
@@ -1550,7 +1564,7 @@ struct WriteJobStatus: Decodable, Sendable {
                 ? LinoErrorPresenter.archiveValidationReason(errorMessage)
                 : (errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
             guard !message.isEmpty else { return nil }
-            return "正文已接受；\(message)。可直接重新归档，无需再次检查 Bible"
+            return message
         }
         guard errorCode == "checker_rejected" else { return nil }
         let reasons = checkerResult?.issues?
@@ -1945,6 +1959,18 @@ enum ChapterJobReconciler {
 /// Writer. Missing/unknown legacy phase stays unknown rather than guessed.
 enum ChapterJobFailureStage {
     static func resolve(_ status: WriteJobStatus) -> ChapterGenerationStage? {
+        if let stage = status.errorContext?.failureStage {
+            switch stage {
+            case "selecting_memory": return .memorySelection
+            case "writing": return .drafting
+            case "validating": return .deterministicValidation
+            case "checking": return .bibleChecking
+            case "accepting": return .acceptance
+            case "extracting": return .extraction
+            case "preflight", "persisting", "unknown": return nil
+            default: return nil
+            }
+        }
         switch status.errorContext?.interruptedPhase {
         case "selecting_memory": return .memorySelection
         case "writing": return .drafting
@@ -1967,7 +1993,7 @@ enum ChapterJobFailureStage {
             if status.kind == "extract" { return .extraction }
             switch status.errorCode {
             case "checker_failed", "checker_rejected": return .bibleChecking
-            default: return .drafting
+            default: return nil
             }
         }
     }

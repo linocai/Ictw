@@ -919,7 +919,9 @@ def checker_user_message(
         "# 证据与姓名输出协议\n"
         "每个 issue 返回 kind、reason、draft_evidence、bible_evidence、source_kind、source_id、source_evidence。"
         "source_kind/source_id 必须原样指向上方目录，source_evidence 必须是该来源中的连续原文；"
-        "不得用省略号拼接不连续片段。只有 source_kind=bible 时 bible_evidence 才可非空，且必须是同一 Bible 原文。"
+        "不得用省略号拼接不连续片段。draft_evidence 同样必须是“待检查正文（原样）”中的连续原文，"
+        "不可改写、跨句拼接或引用参考资料代替正文。"
+        "只有 source_kind=bible 时 bible_evidence 才可非空，且必须是同一 Bible 原文。"
         "kind=missing_requirement 表示核心要求遗漏：draft_evidence 留空、必须引用非空 Bible；其余问题通常必须引用正文。"
         "但未选择人物、重名或身份未明且该姓名只出现在 Bible 时，身份问题可把 source_kind/source_id 指向 Bible，"
         "draft_evidence 留空并用 Bible 原文举证，绝不可伪造正文引文。"
@@ -930,11 +932,9 @@ def checker_user_message(
         "classification 只能为 character、ordinary_word、uncertain。程序会按 group_id 重建每次命中的精确引文与位置。"
         "ordinary_word 不是人物；character/uncertain 的人物授权问题由程序根据冻结目录生成，不必重复写身份 issue。"
     )
-    if retry_reason_code in {"checker_invalid_response", "invalid_protocol", "invalid_name_uses"}:
-        evidence_contract += (
-            "\n上次检查未形成可用结论。请逐一覆盖所有给定 group_id，每组仅出现一次；"
-            "只返回 group_id，不返回 hit_ids。"
-        )
+    if retry_reason_code:
+        from app.services.checker_validation import checker_retry_hint
+        evidence_contract += "\n" + checker_retry_hint(retry_reason_code)
     if not bible.strip():
         return "\n\n".join([
             reference_context,

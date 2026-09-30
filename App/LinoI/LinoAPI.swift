@@ -7,6 +7,9 @@ enum APIError: LocalizedError, Equatable {
     case http(Int, String)
     case validation(statusCode: Int, code: String, message: String, names: [String], violations: [Violation])
     case transport(String)
+    /// A writing-SOP HTTP failure with the server's safe correlation fields.
+    /// Older servers continue through `validation`/`http` below.
+    case sopFailure(SOPRequestFailure)
     /// The server deliberately omits the competing content. Clients must
     /// re-read the normal public resource before presenting a comparison.
     case writeConflict(resourceType: String, resourceId: String, submittedRevision: Int, currentRevision: Int)
@@ -19,10 +22,46 @@ enum APIError: LocalizedError, Equatable {
         case .validation(_, _, let message, let names, _):
             names.isEmpty ? message : "\(message)：\(names.joined(separator: "、"))"
         case .transport(let message): message
+        case .sopFailure(let failure): failure.message
         case .writeConflict:
             "此内容已在其他设备更新。已保留本机修改，请先比较后再决定。"
         }
     }
+
+    var validationPayload: (code: String, names: [String], violations: [Violation])? {
+        switch self {
+        case .validation(_, let code, _, let names, let violations):
+            return (code, names, violations)
+        case .sopFailure(let failure):
+            guard let code = failure.code else { return nil }
+            return (code, failure.names, failure.violations)
+        default: return nil
+        }
+    }
+
+    var responseStatus: Int? {
+        switch self {
+        case .http(let status, _), .validation(let status, _, _, _, _): return status
+        case .sopFailure(let failure): return failure.statusCode
+        default: return nil
+        }
+    }
+
+    var serverRequestID: String? {
+        if case .sopFailure(let failure) = self { return failure.requestID }
+        return nil
+    }
+}
+
+struct SOPRequestFailure: Equatable {
+    let statusCode: Int
+    let code: String?
+    let message: String
+    let names: [String]
+    let violations: [Violation]
+    let requestID: String?
+    let failureStage: String?
+    let manuscriptState: String?
 }
 
 struct APIClient {
@@ -76,6 +115,21 @@ struct APIClient {
                         submittedRevision: conflict.submittedRevision,
                         currentRevision: conflict.currentRevision
                     )
+                }
+                let context = Self.structuredErrorContext(from: data)
+                if path.hasPrefix("/chapters/") {
+                    let requestID = Self.safeRequestID(http.value(forHTTPHeaderField: "X-Request-ID") ?? context.requestID)
+                    let structured = Self.structuredError(from: data)
+                    throw APIError.sopFailure(SOPRequestFailure(
+                        statusCode: http.statusCode,
+                        code: structured?.code,
+                        message: structured?.message ?? Self.errorMessage(from: data),
+                        names: structured?.names ?? [],
+                        violations: structured?.violations ?? [],
+                        requestID: requestID,
+                        failureStage: context.failureStage,
+                        manuscriptState: context.manuscriptState
+                    ))
                 }
                 if let structured = Self.structuredError(from: data) {
                     throw APIError.validation(
@@ -234,6 +288,23 @@ struct APIClient {
             violations = []
         }
         return (code, message, names, violations)
+    }
+
+    static func structuredErrorContext(from data: Data) -> (failureStage: String?, manuscriptState: String?, requestID: String?) {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = object["detail"] as? [String: Any],
+              let context = detail["error_context"] as? [String: Any] else { return (nil, nil, nil) }
+        return (context["failure_stage"] as? String,
+                context["manuscript_state"] as? String,
+                context["request_id"] as? String)
+    }
+
+    private static func safeRequestID(_ value: String?) -> String? {
+        guard let value, !value.isEmpty, value.count <= 128,
+              value.unicodeScalars.allSatisfy({
+                  CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_").contains($0)
+              }) else { return nil }
+        return value
     }
 
     private static func errorMessage(from data: Data) -> String {

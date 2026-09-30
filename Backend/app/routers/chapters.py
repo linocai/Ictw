@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import time
 from collections.abc import Callable
 
@@ -84,6 +86,7 @@ from app.services.content_revisions import bump_content_revision, require_matchi
 from app.services.search_index import rebuild_book_search_index
 
 router = APIRouter(tags=["chapters"])
+logger = logging.getLogger(__name__)
 
 # Deterministic violations that no override may wave through on accept: an
 # unattributable character name corrupts the archive rather than expressing an
@@ -258,6 +261,8 @@ def _redacted_checker_result(result: dict | None) -> dict | None:
     redacted.pop("name_uses", None)
     redacted.pop("identity_issues", None)
     redacted.pop("_validation_diagnostics", None)
+    if "error_context" in redacted:
+        redacted["error_context"] = _public_error_context(redacted["error_context"])
     return redacted
 
 
@@ -267,6 +272,42 @@ def _public_visible_checker_result(result: dict | None) -> dict | None:
         return result
     public = dict(result)
     public.pop("_validation_diagnostics", None)
+    if "error_context" in public:
+        public["error_context"] = _public_error_context(public["error_context"])
+    return public
+
+
+def _public_error_context(value: object) -> dict:
+    """Explicit wire allowlist; stored diagnostics and unknown upstream keys stay private."""
+    from app.services.checker_validation import CHECKER_REASON_MESSAGES
+
+    if not isinstance(value, dict):
+        return {}
+    public: dict = {}
+    simple = {"agent_role", "model_name", "upstream_reason", "finish_reason", "block_reason", "completion_warning"}
+    for key in simple:
+        item = value.get(key)
+        if isinstance(item, str) and 0 < len(item) <= 200 and all(char.isprintable() for char in item):
+            public[key] = item
+    for key in ("http_status", "dropped_state_components"):
+        item = value.get(key)
+        if type(item) is int and 0 <= item <= 10_000:
+            public[key] = item
+    stage = value.get("failure_stage")
+    if isinstance(stage, str) and stage in {"preflight", "selecting_memory", "writing", "validating", "checking", "accepting", "extracting", "persisting", "unknown"}:
+        public["failure_stage"] = stage
+    interrupted = value.get("interrupted_phase")
+    if isinstance(interrupted, str) and interrupted in {"pending", "selecting_memory", "writing", "validating", "checking", "extracting"}:
+        public["interrupted_phase"] = interrupted
+    state = value.get("manuscript_state")
+    if isinstance(state, str) and state in {"unchanged", "generated_candidate_retained", "accepted", "unknown"}:
+        public["manuscript_state"] = state
+    reason = value.get("reason_code")
+    if isinstance(reason, str) and reason in CHECKER_REASON_MESSAGES:
+        public["reason_code"] = reason
+    request_id = value.get("request_id")
+    if isinstance(request_id, str) and len(request_id) == 36 and all(c in "0123456789abcdefABCDEF-" for c in request_id):
+        public["request_id"] = request_id
     return public
 
 
@@ -484,7 +525,7 @@ def _job_status_from_run(
         attempt=run.attempt,
         error_code=run.error_code,
         error_message=archive_validation_message(run.error_message) if run.error_code == "archive_validation_failed" else run.error_message,
-        error_context=run.error_context,
+        error_context=_public_error_context(run.error_context),
         violations=run.violations,
         memory_context=run.memory_context,
         checker_result=_redacted_checker_result(run.checker_result),
@@ -528,6 +569,38 @@ def _checker_target(run: JobRun) -> str | None:
     if draft.get("source") == "candidate":
         return "generated_candidate"
     return None
+
+
+def _checker_reason_from_run(run: JobRun | None) -> str | None:
+    """Read only a stable reason from the latest failed attempt, never prose."""
+    if run is None or run.phase != "failed":
+        return None
+    context = run.error_context if isinstance(run.error_context, dict) else {}
+    reason = context.get("reason_code")
+    if not isinstance(reason, str):
+        checker = run.checker_result if isinstance(run.checker_result, dict) else {}
+        diagnostics = checker.get("_validation_diagnostics")
+        reason = diagnostics.get("reason_code") if isinstance(diagnostics, dict) else None
+    from app.services.checker_validation import CHECKER_REASON_MESSAGES
+    if isinstance(reason, str) and reason in CHECKER_REASON_MESSAGES:
+        return reason
+    return "invalid_protocol" if run.error_code == "checker_invalid_response" else None
+
+
+def _visible_checker_retry_reason(
+    db: Session, chapter: Chapter, candidate: ChapterDraftCandidate | None, snapshot: dict,
+) -> str | None:
+    if candidate is None or not _candidate_matches_visible_draft(chapter, candidate, chapter.draft_text):
+        return None
+    latest = db.get(JobRun, candidate.latest_checker_attempt_id) if candidate.latest_checker_attempt_id else None
+    if (
+        latest is None or latest.kind != "check" or latest.chapter_id != chapter.id
+        or latest.candidate_id != candidate.id or latest.parent_job_id is not None
+        or latest.input_snapshot != snapshot
+        or latest.input_fingerprint != snapshot.get("input_fingerprint")
+    ):
+        return None
+    return _checker_reason_from_run(latest)
 
 
 def _replace_links(db: Session, chapter: Chapter, links: list) -> None:
@@ -1349,7 +1422,7 @@ def rerun_checker(
         )
     if write_registry.get_live(chapter.id) is not None:
         raise HTTPException(status_code=409, detail={"code": "write_running", "message": "当前任务正在进行"})
-    from app.services.checker_validation import CheckerValidationError, validate_checker_result
+    from app.services.checker_validation import CheckerValidationError, checker_failure_diagnostics, validate_checker_result
     from app.services.production_context import freeze_manual_checker_input, is_frozen_input_current, production_readiness
     from app.services.context import checker_user_message
 
@@ -1360,6 +1433,7 @@ def rerun_checker(
     draft_text = chapter.draft_text
     snapshot = freeze_manual_checker_input(db, chapter, draft_text)
     candidate = _current_candidate(db, chapter)
+    retry_reason_code = _visible_checker_retry_reason(db, chapter, candidate, snapshot)
     if not _candidate_matches_visible_draft(chapter, candidate, draft_text):
         db.execute(
             update(ChapterDraftCandidate)
@@ -1416,6 +1490,7 @@ def rerun_checker(
         name_hits=snapshot["name_hits"],
         name_groups=snapshot.get("name_groups"),
         name_candidate_groups=snapshot.get("name_candidate_groups"),
+        retry_reason_code=retry_reason_code,
     )
     # Build62 still calls this synchronous endpoint.  It must nevertheless
     # reserve the same chapter ownership slot as `/check/start`; otherwise a
@@ -1453,6 +1528,15 @@ def rerun_checker(
         checker_result = validate_checker_result(raw, snapshot, check_attempt_id=check_job_id)
         checker_result["draft_fingerprint"] = candidate_fingerprint
     except Exception as exc:
+        if isinstance(exc, (CheckerValidationError, ValueError, TypeError)):
+            diagnostics = checker_failure_diagnostics(exc)
+            logger.warning(
+                "checker_validation_failed job_id=%s stage=checking reason_code=%s diagnostics=%s exception_type=%s",
+                check_job_id, diagnostics["reason_code"],
+                json.dumps(diagnostics, ensure_ascii=False, sort_keys=True), type(exc).__name__,
+            )
+        else:
+            logger.warning("checker_execution_failed job_id=%s stage=checking exception_type=%s", check_job_id, type(exc).__name__)
         checker_result = _manual_checker_failure(
             exc,
             checker_client,
@@ -1558,6 +1642,8 @@ def _manual_checker_failure(
     snapshot: dict,
     check_attempt_id: str,
 ) -> dict:
+    from app.services.checker_validation import CheckerValidationError
+
     messages = {
         "llm_content_blocked": "上游模型拦截了本次检查请求",
         "llm_timeout": "检查模型请求超时",
@@ -1571,7 +1657,7 @@ def _manual_checker_failure(
         "checker_invalid_response": "检查模型未返回有效检查结论",
         "llm_upstream_error": "检查模型调用失败",
     }
-    context = {"agent_role": "checker", "model_name": str(getattr(client, "model_name", "") or "")}
+    context = {"agent_role": "checker", "model_name": str(getattr(client, "model_name", "") or ""), "failure_stage": "checking", "manuscript_state": "unchanged"}
     code, message = "checker_failed", "本次检查未能完成，请重试"
     if isinstance(exc, LLMError):
         # Never return str(exc): SDK/JSON errors may embed credentials or prose.
@@ -1579,11 +1665,15 @@ def _manual_checker_failure(
         context.update(_error_context(exc))
         code = exc.code if exc.code in messages else "llm_upstream_error"
         message = messages[code]
-    else:
+    elif isinstance(exc, (CheckerValidationError, ValueError, TypeError)):
         from app.services.checker_validation import checker_failure_diagnostics, checker_failure_message
         code, message = "checker_invalid_response", checker_failure_message(exc)
         checker_diagnostics = checker_failure_diagnostics(exc)
-    if not isinstance(exc, LLMError):
+        context["reason_code"] = checker_diagnostics["reason_code"]
+    else:
+        code, message = "checker_failed", "检查器运行异常，具体原因尚未确定"
+        context["reason_code"] = "checker_execution_error"
+    if isinstance(exc, (CheckerValidationError, ValueError, TypeError)):
         # Stored only in the internal Checker record; every public projection
         # removes it before leaving the backend.
         diagnostics = checker_diagnostics
@@ -1634,6 +1724,7 @@ def start_checker(
     draft_text = chapter.draft_text
     snapshot = freeze_manual_checker_input(db, chapter, draft_text)
     candidate = _current_candidate(db, chapter)
+    retry_reason_code = _visible_checker_retry_reason(db, chapter, candidate, snapshot)
     if not _candidate_matches_visible_draft(chapter, candidate, draft_text):
         db.execute(
             update(ChapterDraftCandidate)
@@ -1662,6 +1753,7 @@ def start_checker(
         name_hits=snapshot["name_hits"],
         name_groups=snapshot.get("name_groups"),
         name_candidate_groups=snapshot.get("name_candidate_groups"),
+        retry_reason_code=retry_reason_code,
     )
     run = JobRun(
         id=check_job_id,
@@ -1781,10 +1873,7 @@ def retry_failed_writer_checker(
         name_hits=snapshot["name_hits"],
         name_groups=snapshot.get("name_groups"),
         name_candidate_groups=snapshot.get("name_candidate_groups"),
-        retry_reason_code=(
-            latest.checker_result.get("error_code")
-            if isinstance(latest.checker_result, dict) else None
-        ),
+        retry_reason_code=_checker_reason_from_run(latest),
     )
     retry = JobRun(
         id=retry_id,
@@ -1897,11 +1986,10 @@ def _mark_archive_start_failed(job_id: str, code: str, message: str, context: di
 
         mark_revision_failed(revision, chapter, error_code=code, error_message=message)
         bump_content_revision(chapter)
-        run.phase = "failed"
-        run.error_code = code
-        run.error_message = message
-        run.error_context = context
-        run.finished_at = utc_now()
+        _apply_job_phase(
+            session, job_id, "failed", error_code=code, error_message=message,
+            error_context={**context, "failure_stage": "extracting", "manuscript_state": "accepted"},
+        )
         session.commit()
         session.refresh(chapter)
         session.refresh(run)

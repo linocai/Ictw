@@ -581,7 +581,7 @@ def test_archive_failure_log_is_structured_and_redacted(monkeypatch):
         job,
         stage="archive_validation",
         error_code="archive_validation_failed",
-        reason="fact source span does not exist",
+        reason=f"fact source span does not exist: {accepted_prose}",
         client=SimpleNamespace(model_name="deepseek-v4-pro"),
     )
 
@@ -589,6 +589,7 @@ def test_archive_failure_log_is_structured_and_redacted(monkeypatch):
     assert '"error_code": "archive_validation_failed"' in failure_log
     assert '"stage": "archive_validation"' in failure_log
     assert '"model_name": "deepseek-v4-pro"' in failure_log
+    assert '"reason_sha256":' in failure_log
     assert accepted_prose not in failure_log
 
 

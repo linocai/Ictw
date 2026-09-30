@@ -94,7 +94,11 @@ def archive(status):
         can_retry=status == "failed", latest_attempt_status=status,
         effective_status="full" if status == "complete" else "none",
         state_status="complete" if status == "complete" else "none",
-        state_uncertainties=[], diagnostics=[], latest_attempt=None)
+        state_uncertainties=[], diagnostics=[], latest_attempt=(
+            dict(job_id="synthetic-archive-job", revision_id="synthetic-archive-attempt", revision=1, status="failed",
+                 error_code="llm_timeout", error_message="整理记忆请求超时",
+                 error_context=dict(agent_role="extractor", failure_stage="extracting",
+                                    manuscript_state="accepted")) if status == "failed" else None))
 
 
 def job(chapter, phase=None, kind=None):
@@ -123,10 +127,18 @@ def job(chapter, phase=None, kind=None):
                           error_context=dict(agent_role="checker", model_name="test-checker"))
         else:
             result.update(error_code="llm_timeout", error_message="整理记忆请求超时",
-                          error_context=dict(agent_role="extractor", model_name="test-extractor"))
+                          error_context=dict(agent_role="extractor", model_name="test-extractor",
+                                             failure_stage="extracting", manuscript_state="accepted"))
         if role := STATE["options"].get("job_failure_role"):
             result.update(error_code="llm_timeout", error_message="虚构任务超时",
                           error_context=dict(agent_role=role, model_name="test-role"))
+        if reason := STATE["options"].get("build72_reason_code"):
+            result.update(error_code="checker_invalid_response",
+                          error_message="检查器结果无效，尚未形成结论",
+                          error_context=dict(agent_role="checker", model_name="test-checker",
+                                             reason_code=reason, failure_stage="checking",
+                                             manuscript_state=STATE["options"].get(
+                                                 "build72_manuscript_state", "generated_candidate_retained")))
     return result
 
 
@@ -139,6 +151,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            if self.path.startswith("/api/v1/chapters/") and STATE.get("options", {}).get("build72_request_id"):
+                self.send_header("X-Request-ID", STATE["options"]["build72_request_id"])
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -178,6 +192,18 @@ class Handler(BaseHTTPRequestHandler):
             options = copy.deepcopy(STATE["options"])
             if self.headers.get("Authorization") != "Bearer synthetic-test-token":
                 return self.send(401, {"detail": "unauthorized"})
+            if options.get("build72_http_unstructured") and path.startswith("/chapters/") and path.endswith("/accept"):
+                return self.send(503, {"detail": {
+                    "message": "RAW_UNSAFE_SERVER_DETAIL_SENTINEL",
+                    "error_context": {"failure_stage": "accepting", "manuscript_state": "unknown",
+                                      "request_id": options.get("build72_request_id")}}})
+            if options.get("build72_http_failure") and path.startswith("/chapters/") and path.endswith("/accept"):
+                return self.send(409, {"detail": {
+                    "code": options.get("build72_http_code", "checker_preflight_failed"),
+                    "message": options.get("build72_http_message", "接受前的人物校验未通过"),
+                    "error_context": {"failure_stage": "accepting", "manuscript_state": "unchanged",
+                                      "request_id": options.get("build72_request_id")},
+                    "violations": []}})
             if path == "/books":
                 if self.command == "GET":
                     status = options.get("books_status", 200)

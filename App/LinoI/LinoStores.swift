@@ -1595,6 +1595,7 @@ final class ChapterEditorStore: ObservableObject {
                 case .unknown(let observationError):
                     markAcceptanceResultUnknown(
                         observationError,
+                        originalError: error,
                         chapter: saved,
                         operationID: operationID,
                         revision: startingRevision,
@@ -1818,7 +1819,7 @@ final class ChapterEditorStore: ObservableObject {
             )
             guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else {
                 if status.phase == "failed" || status.phase == "cancelled" {
-                    let presented = LinoErrorPresenter.present(jobFailure: status)
+                    let presented = LinoErrorPresenter.present(jobFailure: status, chapter: chapter)
                     session.notices.publish(
                         noticeLocation + presented.message,
                         critical: presented.critical,
@@ -2626,7 +2627,7 @@ final class ChapterEditorStore: ObservableObject {
         chapterId: String,
         announce: Bool
     ) {
-        let presented = LinoErrorPresenter.present(jobFailure: status)
+        let presented = LinoErrorPresenter.present(jobFailure: status, chapter: currentChapter)
         // Extractor runs only after the server accepted the manuscript. A
         // terminal Extractor failure can arrive before an intermediate
         // `extracting` snapshot, so carry that authoritative fact into the
@@ -2740,11 +2741,10 @@ final class ChapterEditorStore: ObservableObject {
             supersededCheckerJobID = latestTaskJobID
             stopPolling(for: chapter.id)
         }
-        if let apiError = error as? APIError,
-           case let .validation(_, validationCode, _, names, _) = apiError,
-           validationCode == "unselected_characters_in_bible" {
-            pendingExemptionNames = names
-            writingPhase = .failed(code: validationCode, message: presented.message, stage: intendedStage)
+        if let payload = (error as? APIError)?.validationPayload,
+           payload.code == "unselected_characters_in_bible" {
+            pendingExemptionNames = payload.names
+            writingPhase = .failed(code: payload.code, message: presented.message, stage: intendedStage)
         } else {
             writingPhase = .failed(code: code, message: presented.message, stage: intendedStage)
         }
@@ -2794,6 +2794,8 @@ final class ChapterEditorStore: ObservableObject {
             return status == 408 || status == 429 || status >= 500
         case .validation(let status, _, _, _, _):
             return status == 408 || status == 429 || status >= 500
+        case .sopFailure(let failure):
+            return failure.statusCode == 408 || failure.statusCode == 429 || failure.statusCode >= 500
         default:
             return false
         }
@@ -2863,15 +2865,33 @@ final class ChapterEditorStore: ObservableObject {
 
     private func markAcceptanceResultUnknown(
         _ observationError: Error,
+        originalError: Error,
         chapter: Chapter,
         operationID: UUID,
         revision: UInt64,
         noticeLocation: String
     ) {
-        let presented = LinoErrorPresenter.present(error: observationError)
+        let id = (originalError as? APIError)?.serverRequestID
+        let readReason: String
+        if observationError is DecodingError {
+            readReason = "服务器的刷新结果无法读取"
+        } else if let apiError = observationError as? APIError {
+            switch apiError {
+            case .transport: readReason = "刷新时未能连接服务器"
+            case .sopFailure(let failure):
+                readReason = [401, 403].contains(failure.statusCode) ? "刷新时登录状态无效" : "刷新时服务器暂不可用"
+            case .http(let status, _), .validation(let status, _, _, _, _):
+                readReason = [401, 403].contains(status) ? "刷新时登录状态无效" : "刷新时服务器暂不可用"
+            default: readReason = "当前无法读取服务器状态"
+            }
+        } else {
+            readReason = "当前无法读取服务器状态"
+        }
+        let location = id.map { "服务端记录编号：\($0)" } ?? "未取得服务端记录编号"
+        let message = "接受结果尚不能确认：\(readReason)。正文状态需刷新确认。\(location)。下一步：只刷新章节和任务状态，确认前不要重复接受。"
         session.notices.publish(
-            noticeLocation + "接受结果暂未确认：\(presented.message)",
-            critical: presented.critical,
+            noticeLocation + message,
+            critical: true,
             tone: .error,
             deduplicationKey: "accept-unknown:\(chapter.id):\(operationID.uuidString)"
         )
@@ -2879,12 +2899,14 @@ final class ChapterEditorStore: ObservableObject {
         // Keep `.accepting`: a second accept could duplicate an operation the
         // server already started. Only the read-only refresh can resolve it.
         pollingConnectionInterrupted = true
-        taskMonitoringMessage = "接受结果暂未确认：\(presented.message)"
+        taskMonitoringMessage = message
     }
 
     private static func preflightAcceptanceOverrideMessage(from error: Error) -> String? {
         guard let apiError = error as? APIError,
-              case let .validation(_, code, _, _, violations) = apiError else { return nil }
+              let payload = apiError.validationPayload else { return nil }
+        let code = payload.code
+        let violations = payload.violations
         if code == "short_draft_confirmation_required" {
             return LinoErrorPresenter.present(error: apiError).message
         }
@@ -2894,9 +2916,7 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     private static func isShortDraftConfirmationRequired(_ error: Error) -> Bool {
-        guard let apiError = error as? APIError,
-              case let .validation(_, code, _, _, _) = apiError else { return false }
-        return code == "short_draft_confirmation_required"
+        (error as? APIError)?.validationPayload?.code == "short_draft_confirmation_required"
     }
 
     private func noticeLocation(for chapter: Chapter) -> String {
@@ -2914,6 +2934,8 @@ final class ChapterEditorStore: ObservableObject {
             return status == 408 || status == 429 || status >= 500
         case .validation(let status, _, _, _, _):
             return status == 408 || status == 429 || status >= 500
+        case .sopFailure(let failure):
+            return failure.statusCode == 408 || failure.statusCode == 429 || failure.statusCode >= 500
         default:
             return false
         }
@@ -2943,8 +2965,7 @@ final class ChapterEditorStore: ObservableObject {
         operationID: UUID,
         revision: UInt64
     ) async -> Bool {
-        guard let apiError = error as? APIError,
-              case let .validation(_, code, _, _, _) = apiError,
+        guard let code = (error as? APIError)?.validationPayload?.code,
               ["write_running", "archive_running"].contains(code) else { return false }
         do {
             let status = try await observedJobStatus(chapterId: chapterId)
@@ -3063,7 +3084,7 @@ final class ChapterEditorStore: ObservableObject {
     }
 
     private static func failureStage(from status: WriteJobStatus) -> ChapterGenerationStage? {
-        status.kind == "check" ? .bibleChecking : ChapterJobFailureStage.resolve(status)
+        ChapterJobFailureStage.resolve(status)
     }
 
     private static func isActiveJobPhase(_ phase: String) -> Bool {

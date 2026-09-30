@@ -62,7 +62,8 @@ def test_manual_checker_retains_safe_failure_and_audits_once(client, auth_header
     assert result["error_context"] == {
         "agent_role": "checker", "model_name": "test-checker", "http_status": 403,
         "block_reason": "PROHIBITED_CONTENT", "finish_reason": "content_filter",
-        "upstream_reason": "content_policy",
+        "upstream_reason": "content_policy", "failure_stage": "checking",
+        "manuscript_state": "unchanged",
     }
     assert secret not in response.text + caplog.text
     assert response.json()["draft_text"] == ""
@@ -89,7 +90,7 @@ def test_manual_checker_retains_safe_failure_and_audits_once(client, auth_header
     ({"verdict": "passed", "issues": "bad"}, None, "checker_invalid_response"),
     ({"verdict": "passed", "issues": {}}, None, "checker_invalid_response"),
     ({"verdict": "passed", "issues": 1}, None, "checker_invalid_response"),
-    (None, RuntimeError("private unexpected payload"), "checker_invalid_response"),
+    (None, RuntimeError("private unexpected payload"), "checker_failed"),
     (None, LLMError("private response", code="private unknown error code",
                     upstream_reason="private provider body"), "llm_upstream_error"),
 ])
@@ -178,9 +179,11 @@ def test_restart_public_job_retains_stage_without_changing_accepted_prose(client
     assert response.status_code == 200
     status = response.json()
     assert status["phase"] == "failed" and status["error_code"] == "interrupted"
-    assert status["error_context"] == {
-        "interrupted_phase": phase, "agent_role": role, "model_name": "test-model",
-    }
+    assert status["error_context"]["interrupted_phase"] == phase
+    assert status["error_context"]["agent_role"] == role
+    assert status["error_context"]["model_name"] == "test-model"
+    assert status["error_context"]["failure_stage"] == phase
+    assert status["error_context"]["manuscript_state"] == ("accepted" if revision_id else "unchanged")
     assert status["outcome_current"] is True
     visible = client.get(f"/api/v1/chapters/{chapter_id}", headers=auth_headers).json()
     assert visible["draft_text"] == "雨落在屋檐。" * 1000

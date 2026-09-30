@@ -1416,15 +1416,28 @@ def canonicalize_archive_diagnostics(
     return _controlled_diagnostics(value, character_names=character_names)
 
 
-def _latest_attempt_read(revision: ChapterArchiveRevision | None) -> dict[str, Any] | None:
+def _latest_attempt_read(db: Session, chapter: Chapter, revision: ChapterArchiveRevision | None) -> dict[str, Any] | None:
     if revision is None:
         return None
+    run = db.scalars(
+        select(JobRun).where(JobRun.archive_revision_id == revision.id)
+        .order_by(JobRun.created_at.desc(), JobRun.id.desc()).limit(1)
+    ).first()
+    context: dict[str, str] = {}
+    stored_context = run.error_context if run is not None and isinstance(run.error_context, dict) else {}
+    stage = stored_context.get("failure_stage")
+    if isinstance(stage, str) and stage in {"preflight", "extracting", "validating", "persisting", "unknown"}:
+        context["failure_stage"] = stage
+    if chapter.status == "finalized" and revision.status in {"failed", "partial", "stale"}:
+        context["manuscript_state"] = "accepted"
     return {
         "revision_id": revision.id,
+        "job_id": run.id if run is not None else None,
         "revision": revision.revision,
         "status": revision.status,
         "error_code": revision.error_code,
         "error_message": archive_validation_message(revision.error_message) if revision.error_code == "archive_validation_failed" else revision.error_message,
+        "error_context": context or None,
         "finished_at": revision.finished_at,
     }
 
@@ -1498,7 +1511,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "state_status": "partial" if has_state_gaps else "complete",
             "state_uncertainties": state_uncertainties,
             "diagnostics": diagnostics,
-            "latest_attempt": _latest_attempt_read(latest),
+            "latest_attempt": _latest_attempt_read(db, chapter, latest),
         }
     if has_usable_legacy_memory(chapter):
         return {
@@ -1518,7 +1531,7 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "state_status": "complete",
             "state_uncertainties": [],
             "diagnostics": _controlled_diagnostics(getattr(latest, "diagnostics", [])) if latest else [],
-            "latest_attempt": _latest_attempt_read(latest),
+            "latest_attempt": _latest_attempt_read(db, chapter, latest),
         }
     return {
         "status": _unusable_archive_status(chapter, latest),
@@ -1537,5 +1550,5 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
         "state_status": "none",
         "state_uncertainties": [],
         "diagnostics": _controlled_diagnostics(getattr(latest, "diagnostics", [])) if latest else [],
-        "latest_attempt": _latest_attempt_read(latest),
+        "latest_attempt": _latest_attempt_read(db, chapter, latest),
     }
