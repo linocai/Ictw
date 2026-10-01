@@ -1,0 +1,244 @@
+{
+  "version": "2.3.4",
+  "build": 74,
+  "commit": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+  "baseline": "1e5eb8e10b0894d4113df5ad9899731f1a163a6e",
+  "backup": "/opt/linoi/backups/20261001-build74-bed570f",
+  "source_files_verified": 71,
+  "head": "20260929_0015",
+  "active_jobs": 0,
+  "integrity": "ok",
+  "foreign_keys": 0,
+  "restore_test": true,
+  "all_database_tables_unchanged": true,
+  "post_backup": "post-start SQLite snapshot has identical contents; verified compressed pre-backup reused without duplicate whole DB",
+  "env_unchanged": true,
+  "internal_health": {
+    "status": "ok",
+    "version": "2.3.4"
+  },
+  "public_health": {
+    "status": "ok",
+    "version": "2.3.4"
+  },
+  "route_statuses": {
+    "/api/v1/health": 401,
+    "/docs": 404,
+    "/openapi.json": 404,
+    "/redoc": 404
+  },
+  "single_instance": true,
+  "pid": 882369,
+  "model_calls": 0,
+  "release_package": "/opt/linoi/releases/v2.3.4-build74",
+  "release": {
+    "url": "https://github.com/linocai/Ictw/releases/tag/v2.3.4-build74",
+    "tag": "v2.3.4-build74",
+    "asset": {
+      "name": "ICTW-v2.3.4-build74-macOS.zip",
+      "size": 3214553,
+      "sha256": "fc5bde781d30122f6accd454b0fec81b1b3ab4975f8e82059255caaa55478107",
+      "github_digest_verified": true,
+      "download_sha256_verified": true
+    }
+  },
+  "cumulative_audit": {
+    "from": "1e5eb8e10b0894d4113df5ad9899731f1a163a6e",
+    "through": "current Build74 target, source hashes exactly match independent review and repair review",
+    "changed_tracked_runtime_and_tests": [
+      "App/LinoI.xcodeproj/project.pbxproj",
+      "App/LinoI/LinoModels.swift",
+      "App/LinoI/LinoStores.swift",
+      "App/LinoI/V2IOS/V2IOSChapterDeskView.swift",
+      "App/LinoI/V2IOS/V2IOSChapterFaces.swift",
+      "App/LinoI/V2IOS/V2IOSPeripheralViews.swift",
+      "App/LinoI/V2Shared/V2DeskPresentation.swift",
+      "App/Tests/Build70FormLifecycleTests.swift",
+      "App/Tests/V211StoreHTTPTests.swift",
+      "App/Tests/run_build70_ui_policy_tests.sh",
+      "App/Tests/run_client_state_tests.sh",
+      "App/Tests/run_store_http_tests.sh",
+      "App/Tests/v211_http_fixture.py",
+      "Backend/app/main.py",
+      "Backend/tests/test_v1_1_features.py"
+    ],
+    "new_tests": [
+      "App/Tests/Build73IOSInteractionTests.swift",
+      "App/Tests/run_build73_ui_policy_tests.sh"
+    ],
+    "schema_or_dependencies_changed": false,
+    "backend_delta": "APP_VERSION constant and expected test assertion only",
+    "protected_user_modifications_excluded": true,
+    "target_commit": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+    "production_base_files_matched": 71
+  },
+  "final_validation": {
+    "backend": "573 passed, 12 existing skips, fresh full run",
+    "client": "98 Store/HTTP, 55 UI checks and state gates; unchanged reviewed source",
+    "review": "Build73 cumulative independent review plus Build74 repair review; P1 closed, no new finding"
+  },
+  "postcheck": {
+    "all_business_tables_unchanged_except_book_open_timestamps": true,
+    "book_changed_columns": [
+      "last_opened_at",
+      "updated_at"
+    ],
+    "chapters_jobs_memory_and_settings_unchanged": true,
+    "active_jobs": 0,
+    "integrity": "ok",
+    "foreign_keys": 0,
+    "source_files_matched": 71,
+    "env_unchanged": true,
+    "internal_and_public_health": "ok",
+    "single_instance": true,
+    "pid": 882369
+  },
+  "apple_signed_release": {
+    "ios": {
+      "version": "2.3.4",
+      "build": 74,
+      "minimum_os": "27.0",
+      "sdk": "iphoneos27.0",
+      "strict_signature": true,
+      "identity": "Apple Development",
+      "get_task_allow": true,
+      "uuid": [
+        "87227E0B-5F3B-39DE-B316-FBC80A4CA22B"
+      ]
+    },
+    "mac": {
+      "version": "2.3.4",
+      "build": 74,
+      "minimum_os": "27.0",
+      "sdk": "macosx27.0",
+      "strict_signature": true,
+      "identity": "Developer ID Application",
+      "get_task_allow": false,
+      "uuid": [
+        "4D9CCC0C-9E1F-3B22-A6C7-033168EDDB07"
+      ]
+    }
+  },
+  "mac_install": {
+    "path": "/Applications/ICTW.app",
+    "version": "2.3.4",
+    "build": 74,
+    "backup": "/Users/linotsai/Lino/app_backups/ICTW-v2.3.3-build72-before-build74-20261001.app",
+    "strict_signature": true,
+    "hardened_runtime": true,
+    "get_task_allow": false,
+    "notarized": false,
+    "old_backup_hashes_verified": true,
+    "normal_launch": true,
+    "accepted_page": true,
+    "existing_draft_editor": true,
+    "original_page_restored": true,
+    "business_mutations": "Book-open timestamps only; no input/model/check/accept/archive actions"
+  },
+  "ios": {
+    "products": "/Users/linotsai/Lino/app_builds/ICTW-v2.3.4-build74-iOS-Release",
+    "strict_signature": true,
+    "ipa_created": false,
+    "installation": "User installs through Xcode; project ready as 2.3.4 (74)",
+    "native_device_ui_verified": false
+  },
+  "device_support": {
+    "checked_at": "2026-10-01T03:49:05.569093+00:00",
+    "devices": [
+      {
+        "model": "iPhone17,3",
+        "os": "",
+        "build": "",
+        "validated": false,
+        "reason": "No local support cache; this connection record needs no cleanup"
+      },
+      {
+        "model": "iPhone18,4",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "0c2a1a965f1ed87612fec9272ae1bc508d8aef72d81ec7c62e8f52040291d5b8",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "dca7116f518c99b0b2ec01f91cad6edda9efb7d07061c804d1ca1c2f6e39306c",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "65303e9403b9caf37e85eae43fb16667b4404582fc3df8e758b9ab0b5cee0a54"
+        }
+      },
+      {
+        "model": "iPhone19,2",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "ce718b23beb9210cfeea20547ad797b8c893ebc1f2513878c3603ac6262c7327",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "448d9b4f685ea5b83c5acff545e36dbaaf7a8894dc684fcd12f6b14b025434c3",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "3b8e1bf966e44c6b01812f1f331affb81a085e82e60eaca67411426af5acedb6"
+        }
+      }
+    ],
+    "candidates": [],
+    "deleted": [],
+    "user_confirmed_unused_models": [],
+    "unused_reason": "",
+    "pending_devices": [],
+    "status": "audited"
+  },
+  "build_logs_sha256": {
+    "ios-release.log": "f43222bc929a58ef6606b376461094f6bf6f189045a61b7cc23465dc0ba5e80c",
+    "mac-release.log": "14def0ec6e57f1dfed3f43e428011e846269a9e89b538344f8387bf8b97cf070",
+    "backend-tests.log": "bb84d107abb39e0fc3837ffe8f15c8ccb4180bc8aa6d56c5645d92fd024752e5"
+  },
+  "inspection_corrections": [
+    "Mac Xcode Release initially included get-task-allow; artifact re-signed with project entitlements and Developer ID, runtime enabled and get-task-allow absent/false before packaging or installation.",
+    "Native launch used full installed path because bundle ID resolves multiple retained builds.",
+    "Pytest progress parser narrowed to progress lines to exclude warning text; actual successful run is 573 passed and 12 skipped."
+  ],
+  "retained_delivery": [
+    "/Applications/ICTW.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.4-build74-macOS.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.4-build74-macOS.app.dSYM",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.4-build74-macOS.zip",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.3.4-build74-iOS-Release",
+    "/Users/linotsai/Lino/app_backups/ICTW-v2.3.3-build72-before-build74-20261001.app",
+    "/opt/linoi/backups/20261001-build74-bed570f",
+    "/opt/linoi/releases/v2.3.4-build74"
+  ],
+  "local_cleanup": {
+    "status": "complete",
+    "root": "/tmp/ictw-build74-release",
+    "logical_bytes_before": 278640741,
+    "allocated_kib_before": 282672,
+    "logical_bytes_after": 0,
+    "files_or_symlinks": 914,
+    "inventory_sha256": "1bd6896f3107358be4413b0d5986ac47978b00d888bf2ac0afbb9bc71e8a8afd",
+    "no_open_handles": true,
+    "retired_install_path": "/Applications/.ICTW-build72-before74.app",
+    "retired_install_bytes_removed": 8648242,
+    "retired_install_backup_verified": true,
+    "user_and_system_tmp_named_residue": [],
+    "total_removed_logical_bytes": 287288983
+  },
+  "remote_cleanup": {
+    "status": "complete",
+    "root": "/tmp/ictw-build74-release",
+    "logical_bytes_before": 115769363,
+    "allocated_kib_before": 113492,
+    "logical_bytes_after": 0,
+    "files": 151,
+    "inventory_sha256": "5dba0cd4bfc53508f713c9df3761423865db0d32bbafa82ccd7d2ed70d1b1261",
+    "no_open_handles": true,
+    "final_named_residue": [],
+    "opt_linoi_disk_kib": 610268,
+    "retained": "/opt/linoi/backups/20261001-build74-bed570f and /opt/linoi/releases/v2.3.4-build74"
+  },
+  "protected_user_source_files_unchanged": true,
+  "delivery_status": "released and resource cleanup complete; iOS physical installation and native acceptance remain user handoff",
+  "final_integrity": {
+    "source_tag_matches": true,
+    "source_commit": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+    "user_original_changes_preserved": true,
+    "only_protected_user_diff_outside_records": true,
+    "local_and_remote_resource_cleanup_complete": true
+  }
+}

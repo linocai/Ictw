@@ -3,7 +3,7 @@
   "target": {
     "version": "2.3.4",
     "build": 73,
-    "status": "historical Build73 implementation and review; superseded by verified local Build74 quick fix; neither released"
+    "status": "historical Build73 validation; incorporated into released Build74, see subsequent_release"
   },
   "baseline": "7791b167641aa541bc9810f59a26108283062870",
   "target_source_sha256": {
@@ -563,7 +563,7 @@
     "date": "2026-10-01",
     "target_version": "2.3.4",
     "target_build": 74,
-    "status": "local fix, verification, independent repair review and cleanup complete; not released",
+    "status": "verified and reviewed fix included in released Build74; see subsequent_release",
     "request": "quick fix the independent-review P1",
     "baseline_head": "7791b167641aa541bc9810f59a26108283062870",
     "baseline_source_sha256": {
@@ -777,5 +777,11 @@
       "plan_bytes": 8671,
       "temporary_root_absent": true
     }
+  },
+  "subsequent_release": {
+    "version": "2.3.4",
+    "build": 74,
+    "source_commit": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+    "record": "archive/operations/2026-10-01-build74-deployment.json"
   }
 }
