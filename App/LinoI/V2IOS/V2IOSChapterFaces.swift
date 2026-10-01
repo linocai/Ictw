@@ -1,52 +1,63 @@
 import SwiftUI
 
+enum V2IOSChapterField: Hashable { case title, intent, manuscript }
+
 struct V2IOSIntentFace: View {
+    var focusedField: FocusState<V2IOSChapterField?>.Binding
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var session: AppSession
-    @State private var showingCharacters = false
-    @State private var showingWorld = false
+    @EnvironmentObject private var workspace: WorkspaceStore
+    @State private var creationContext: ChapterInteractionContext?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 8) {
+                    V2IOSSectionLabel(title: "章节标题")
+                    TextField("第 \(editor.currentChapter?.index ?? 0) 章", text: title)
+                        .font(V2DeskType.prose(23, weight: .semibold))
+                        .textFieldStyle(.plain)
+                        .padding(13).v2IOSPaper()
+                        .focused(focusedField, equals: .title)
+                        .submitLabel(.next)
+                        .onSubmit { focusedField.wrappedValue = .intent }
+                        .disabled(!canEditChapter)
+                        .accessibilityLabel("章节标题")
+                }
+                VStack(alignment: .leading, spacing: 8) {
                     V2IOSSectionLabel(title: "本章意图")
-                    if canEditChapter {
-                        TextEditor(text: intent)
-                            .font(V2DeskType.prose(15))
-                            .frame(minHeight: 154)
-                            .padding(9)
-                            .v2IOSPaper()
-                            .accessibilityLabel("本章意图")
-                    } else {
-                        Text(editor.currentChapter?.userPrompt.v2IOSTrimmed.isEmpty == false ? editor.currentChapter!.userPrompt : "还没有本章意图")
-                            .font(V2DeskType.prose(15))
-                            .foregroundStyle(editor.currentChapter?.userPrompt.v2IOSTrimmed.isEmpty == false ? Color.primary : Color.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, minHeight: 154, alignment: .topLeading)
-                            .padding(9)
-                            .v2IOSPaper()
-                            .accessibilityLabel("已接受的本章意图")
-                    }
+                    TextEditor(text: intent)
+                        .font(V2DeskType.prose(15))
+                        .frame(minHeight: 154)
+                        .padding(9)
+                        .scrollContentBackground(.hidden)
+                        .v2IOSPaper()
+                        .focused(focusedField, equals: .intent)
+                        .disabled(!canEditChapter)
+                        .accessibilityLabel("本章意图")
                 }
                 VStack(alignment: .leading, spacing: 9) {
                     V2IOSSectionLabel(title: "本章出场人物")
                     V2IOSFlowLayout(spacing: 7) {
                         ForEach(characters.characters) { character in
                             Button { toggle(character) } label: {
-                                Text(character.name)
-                                    .font(V2DeskType.control(13))
-                                    .padding(.horizontal, 16)
-                                    .frame(minHeight: 44)
-                                    .foregroundStyle(isLinked(character) ? Color.white : Color.primary)
-                                    .background(isLinked(character) ? Color.primary : Color.clear, in: Capsule())
-                                    .overlay(Capsule().stroke(Color.primary.opacity(0.2), lineWidth: 1))
+                                HStack(spacing: 5) {
+                                    if isLinked(character) { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
+                                    Text(character.name)
+                                }
+                                .font(V2DeskType.control(13))
+                                .padding(.horizontal, 15).frame(minHeight: 44)
+                                .foregroundStyle(V2DeskPalette.color(isLinked(character) ? .card : .ink, scheme: colorScheme))
+                                .background(isLinked(character) ? V2DeskPalette.color(.ink, scheme: colorScheme) : Color.clear, in: Capsule())
+                                .overlay(Capsule().stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme), lineWidth: 1))
                             }
                             .buttonStyle(.plain)
                             .disabled(!canEditChapter)
+                            .accessibilityAddTraits(isLinked(character) ? [.isSelected] : [])
                         }
-                        Button { showingCharacters = true } label: {
+                        Button(action: createCharacter) {
                             Text("＋ 新增人物")
                                 .font(V2DeskType.control(13))
                                 .foregroundStyle(Color.secondary)
@@ -58,42 +69,28 @@ struct V2IOSIntentFace: View {
                         .disabled(!canEditChapter)
                     }
                 }
-                VStack(alignment: .leading, spacing: 9) {
-                    V2IOSSectionLabel(title: "世界观")
-                    if session.currentBook?.worldSetting.v2IOSTrimmed.isEmpty != false {
-                        HStack {
-                            Text("还没有写").font(V2DeskType.control(12.5)).foregroundStyle(Color.secondary)
-                            Spacer()
-                            Button("去写") { showingWorld = true }.font(V2DeskType.control(12.5, weight: .medium)).buttonStyle(.plain)
-                        }
-                        .padding(13).v2IOSPaper(.desk)
-                    } else {
-                        Text(session.currentBook?.worldSetting ?? "")
-                            .font(V2DeskType.prose(14.5)).lineSpacing(6).lineLimit(5)
-                            .padding(13).v2IOSPaper(.desk)
-                    }
-                }
             }
             .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 16)
         }
-        .sheet(isPresented: $showingCharacters) {
-            V2IOSCharactersView()
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
-        }
-        .sheet(isPresented: $showingWorld) {
-            V2IOSWorldEditorView()
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+        .sheet(item: $creationContext) { context in
+            V2IOSNewChapterCharacterSheet(context: context)
         }
     }
 
+    private var title: Binding<String> {
+        Binding(get: { editor.currentChapter?.title ?? "" }, set: { editor.editString(\.title, value: $0) })
+    }
     private var intent: Binding<String> {
         Binding(get: { editor.currentChapter?.userPrompt ?? "" }, set: { editor.editString(\.userPrompt, value: $0) })
     }
     private var canEditChapter: Bool { ChapterEditingPolicy.canEdit(editor.currentChapter) }
+    private func createCharacter() {
+        guard canEditChapter, let chapter = editor.currentChapter,
+              session.currentBook?.id == chapter.bookId, workspace.chapterPath.last?.id == chapter.id else { return }
+        focusedField.wrappedValue = nil
+        creationContext = ChapterInteractionContext(bookID: chapter.bookId, bookContextID: session.bookContextID,
+            chapterID: chapter.id, navigationID: workspace.chapterNavigationID, editorContextID: editor.editingSessionID)
+    }
     private func isLinked(_ character: Character) -> Bool { editor.currentChapter?.characterLinks.contains(ChapterLink(characterId: character.id)) == true }
     private func toggle(_ character: Character) {
         guard let chapter = editor.currentChapter else { return }
@@ -106,6 +103,7 @@ struct V2IOSIntentFace: View {
 
 struct V2IOSManuscriptFace: View {
     let snapshot: V2DeskSnapshot
+    var focusedField: FocusState<V2IOSChapterField?>.Binding
     @EnvironmentObject private var editor: ChapterEditorStore
     @Environment(\.colorScheme) private var colorScheme
 
@@ -114,7 +112,7 @@ struct V2IOSManuscriptFace: View {
             if snapshot.isBodyReadOnly {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 17) {
-                        titleField(readOnly: true)
+                        chapterTitle
                         Text(editor.currentChapter?.draftText ?? "")
                             .font(V2DeskType.prose())
                             .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
@@ -125,7 +123,7 @@ struct V2IOSManuscriptFace: View {
                 }
             } else {
                 VStack(spacing: 0) {
-                    titleField(readOnly: false).padding(.horizontal, 22).padding(.top, 18)
+                    chapterTitle.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.top, 18)
                     if editor.currentChapter?.draftText.v2IOSTrimmed.isEmpty != false {
                         HStack {
                             Text("还没有正文").font(V2DeskType.prose(16.5)).foregroundStyle(Color.secondary)
@@ -138,6 +136,7 @@ struct V2IOSManuscriptFace: View {
                         .lineSpacing(V2DeskType.proseLineSpacing)
                         .scrollContentBackground(.hidden)
                         .padding(.horizontal, 16).padding(.top, 10)
+                        .focused(focusedField, equals: .manuscript)
                         .accessibilityLabel("正文")
                 }
                 .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
@@ -145,24 +144,16 @@ struct V2IOSManuscriptFace: View {
         }
     }
 
-    @ViewBuilder private func titleField(readOnly: Bool) -> some View {
-        if readOnly {
-            Text(editor.currentChapter?.title.v2IOSTrimmed.isEmpty == false ? editor.currentChapter!.title : "第 \(editor.currentChapter?.index ?? 0) 章")
-                .font(V2DeskType.prose(23, weight: .semibold))
-        } else {
-            TextField("章节标题", text: Binding(get: { editor.currentChapter?.title ?? "" }, set: { editor.editString(\.title, value: $0) }))
-                .font(V2DeskType.prose(23, weight: .semibold))
-                .textFieldStyle(.plain)
-                .padding(.bottom, 8)
-                .overlay(alignment: .bottom) { Rectangle().fill(Color.secondary.opacity(0.24)).frame(height: 1) }
-        }
+    private var chapterTitle: some View {
+        Text(editor.currentChapter?.title.v2IOSTrimmed.isEmpty == false ? editor.currentChapter!.title : "第 \(editor.currentChapter?.index ?? 0) 章")
+            .font(V2DeskType.prose(23, weight: .semibold))
     }
-
     private var draftTextBinding: Binding<String> { Binding(get: { editor.currentChapter?.draftText ?? "" }, set: { editor.editString(\.draftText, value: $0) }) }
 }
 
 struct V2IOSEvidenceFace: View {
     let snapshot: V2DeskSnapshot
+    @ObservedObject var actions: V2IOSChapterActionCoordinator
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var sync: ClientSyncStore
@@ -170,16 +161,16 @@ struct V2IOSEvidenceFace: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
-                V2IOSSectionLabel(title: "证据")
+                V2IOSSectionLabel(title: "检查结果")
                 evidence
                 if !(editor.currentChapter?.draftText.v2IOSTrimmed.isEmpty ?? true) {
                     Button(editor.checkerRefreshing ? "正在复查…" : "重新复查当前正文") {
-                        Task { _ = await editor.rerunChecker() }
+                        actions.run(editor: editor) { _ = await editor.rerunChecker() }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(editor.writingPhase.isActive || editor.checkerRefreshing || !sync.networkActionsAvailable)
+                    .disabled(actions.busy || !actions.canMutate(editor: editor) || !sync.networkActionsAvailable)
                 }
-                nameClarification
+                nameClarification.disabled(actions.busy || !actions.canMutate(editor: editor) || !sync.networkActionsAvailable)
                 archive
             }
             .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 16)
@@ -212,7 +203,7 @@ struct V2IOSEvidenceFace: View {
                                             .font(V2DeskType.control(11)).foregroundStyle(Color.secondary)
                                     }
                                     Button("选为这位人物") {
-                                        Task { _ = await editor.saveNameClarification(selectedCharacterIDs: [candidate.characterId]) }
+                                        actions.run(editor: editor) { _ = await editor.saveNameClarification(selectedCharacterIDs: [candidate.characterId]) }
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -221,7 +212,7 @@ struct V2IOSEvidenceFace: View {
                             }
                         }
                         Button("标为普通词") {
-                            Task { _ = await editor.saveNameClarification(exemptedNames: [issue.name]) }
+                            actions.run(editor: editor) { _ = await editor.saveNameClarification(exemptedNames: [issue.name]) }
                         }
                         .buttonStyle(.bordered)
                     }

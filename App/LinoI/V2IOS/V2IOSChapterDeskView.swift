@@ -11,6 +11,7 @@ struct V2IOSChapterDestinationView: View {
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var inspiration: InspirationCreatorStore
     @EnvironmentObject private var workspace: WorkspaceStore
+    @StateObject private var actions = V2IOSChapterActionCoordinator()
     @State private var resolvedChapter: Chapter?
     @State private var loadFailed = false
 
@@ -18,9 +19,9 @@ struct V2IOSChapterDestinationView: View {
         Group {
             if let resolvedChapter {
                 if resolvedChapter.status == "finalized" {
-                    V2IOSChapterReaderView(summary: summary, resolvedChapter: resolvedChapter)
+                    V2IOSChapterReaderView(summary: summary, resolvedChapter: resolvedChapter, actions: actions)
                 } else {
-                    V2IOSChapterDeskView(summary: summary)
+                    V2IOSChapterDeskView(summary: summary, actions: actions)
                 }
             } else if loadFailed {
                 VStack(spacing: 12) {
@@ -59,6 +60,8 @@ struct V2IOSChapterDestinationView: View {
             workspace.upsert(chapter)
             resolvedChapter = chapter
         }
+        .onChange(of: workspace.chapterNavigationID) { _, _ in actions.invalidate() }
+        .onDisappear { actions.invalidate() }
         // Keep the notice inside the destination so its top safe-area inset
         // begins below the system navigation bar instead of covering it.
         .v2IOSNoticeOverlay()
@@ -72,15 +75,16 @@ struct V2IOSChapterDestinationView: View {
 /// variation of the writing desk. Its only primary navigation is the real
 /// ordered next chapter supplied by the shared policy.
 struct V2IOSChapterReaderView: View {
+    @EnvironmentObject private var session: AppSession
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var isMoving = false
     @State private var showingSettings = false
-
     let summary: ChapterSummary
     let resolvedChapter: Chapter
+    @ObservedObject var actions: V2IOSChapterActionCoordinator
 
     var body: some View {
         VStack(spacing: 0) {
@@ -92,7 +96,7 @@ struct V2IOSChapterReaderView: View {
                     // merely because the shared snapshot calls it primary.
                     primaryAction: .none,
                     perform: performReaderAction,
-                    networkActionsAvailable: sync.networkActionsAvailable
+                    networkActionsAvailable: sync.networkActionsAvailable && !actions.busy && !editor.isSaving
                 )
             }
             ScrollView {
@@ -124,7 +128,7 @@ struct V2IOSChapterReaderView: View {
             bookID: summary.bookId,
             commands: commands,
             isAccepted: chapter.status == "finalized",
-            onSave: nil
+            coordinator: actions
         )
         .sheet(isPresented: $showingSettings) {
             V2IOSSettingsView()
@@ -186,13 +190,13 @@ struct V2IOSChapterReaderView: View {
     private func performReaderAction(_ action: V2DeskPrimaryAction) {
         switch action {
         case .rerunChecker:
-            Task { _ = await editor.rerunChecker() }
+            actions.run(editor: editor) { _ = await editor.rerunChecker() }
         case .retryGeneratedCandidateChecker:
-            Task { if let chapter = await editor.retryGeneratedCandidateChecker() { workspace.upsert(chapter) } }
+            actions.run(editor: editor) { if let chapter = await editor.retryGeneratedCandidateChecker() { workspace.upsert(chapter) } }
         case .retryArchive:
-            Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
+            actions.run(editor: editor) { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
         case .refreshTaskStatus:
-            Task { if let chapter = await editor.refreshTaskStatus() { workspace.upsert(chapter) } }
+            actions.run(editor: editor) { if let chapter = await editor.refreshTaskStatus() { workspace.upsert(chapter) } }
         case .openSettings:
             showingSettings = true
         default:
@@ -203,36 +207,45 @@ struct V2IOSChapterReaderView: View {
     @ViewBuilder private var readerDock: some View {
         let previous = V2DeskReadingOrder.previous(after: chapter.id, in: workspace.chapters)
         let next = V2DeskReadingOrder.next(after: chapter.id, in: workspace.chapters)
-        if let next {
-            HStack(spacing: 10) {
-                if let previous {
-                    Button("上一章") { replaceRoute(with: previous) }
-                        .font(V2DeskType.control(12.5, weight: .medium))
-                        .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
-                        .frame(width: 76, height: 48)
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
-                        .buttonStyle(.plain)
-                        .disabled(isMoving)
+        VStack(spacing: 8) {
+            if commands.canRewrite || actions.preparing {
+                V2IOSSecondaryButton(title: actions.preparing ? "正在读取重写影响…" : "重写") {
+                    actions.startPreview(chapterID: chapter.id, bookID: summary.bookId,
+                        editor: editor, session: session, workspace: workspace)
                 }
-                switch next {
-                case .read(let nextChapter):
-                    V2IOSPrimaryButton(title: displayTitle(nextChapter), disabled: isMoving) {
-                        replaceRoute(with: nextChapter)
+                .disabled(actions.busy || !actions.canMutate(editor: editor) || !sync.networkActionsAvailable)
+            }
+            if let next {
+                HStack(spacing: 10) {
+                    if let previous {
+                        Button("上一章") { replaceRoute(with: previous) }
+                            .font(V2DeskType.control(12.5, weight: .medium))
+                            .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
+                            .frame(width: 76, height: 48)
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
+                            .buttonStyle(.plain)
+                            .disabled(isMoving)
                     }
-                case .write(let nextChapter):
-                    V2IOSPrimaryButton(title: "继续写《\(displayTitle(nextChapter))》", disabled: isMoving) {
-                        replaceRoute(with: nextChapter)
-                    }
-                case .startNewChapter:
-                    V2IOSPrimaryButton(title: "开始新一章", disabled: isMoving) {
-                        createNewChapter()
+                    switch next {
+                    case .read(let nextChapter):
+                        V2IOSPrimaryButton(title: displayTitle(nextChapter), disabled: isMoving) {
+                            replaceRoute(with: nextChapter)
+                        }
+                    case .write(let nextChapter):
+                        V2IOSPrimaryButton(title: "继续写《\(displayTitle(nextChapter))》", disabled: isMoving) {
+                            replaceRoute(with: nextChapter)
+                        }
+                    case .startNewChapter:
+                        V2IOSPrimaryButton(title: "开始新一章", disabled: isMoving) {
+                            createNewChapter()
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 8)
-            .background(V2DeskPalette.color(.rail, scheme: colorScheme))
-            .overlay(alignment: .top) { Divider() }
         }
+        .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 8)
+        .background(V2DeskPalette.color(.rail, scheme: colorScheme))
+        .overlay(alignment: .top) { Divider() }
     }
 
     private func replaceRoute(with chapter: ChapterSummary) {
@@ -269,12 +282,15 @@ struct V2IOSChapterDeskView: View {
     @EnvironmentObject private var inspiration: InspirationCreatorStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var face: V2DeskChapterFace = .intent
+    @FocusState private var focusedField: V2IOSChapterField?
+    @State private var showingSaveDetails = false
     @State private var showingInspiration = false
     @State private var inspirationDetent: PresentationDetent = V2IOSInspirationPresentation.compactDetent
     @State private var showingSettings = false
     @State private var showingAcceptWarning = false
 
     let summary: ChapterSummary
+    @ObservedObject var actions: V2IOSChapterActionCoordinator
 
     var body: some View {
         let snapshot = V2DeskPresentation.make(source)
@@ -285,23 +301,29 @@ struct V2IOSChapterDeskView: View {
                     .background(V2DeskPalette.color(.taskWarning, scheme: colorScheme))
             }
             if let banner = snapshot.taskBanner {
-                V2IOSTaskBanner(banner: banner, primaryAction: snapshot.primaryAction, perform: perform, networkActionsAvailable: sync.networkActionsAvailable)
+                V2IOSTaskBanner(banner: banner, primaryAction: snapshot.primaryAction, perform: perform, networkActionsAvailable: sync.networkActionsAvailable && !actions.busy && !editor.isSaving)
             }
             if editor.isLoading && editor.currentChapter?.id != summary.id {
                 Spacer(); ProgressView("读取章节"); Spacer()
             } else if editor.currentChapter?.id == summary.id {
+                pageNavigation
                 TabView(selection: $face) {
-                    V2IOSIntentFace().tag(V2DeskChapterFace.intent)
-                    V2IOSManuscriptFace(snapshot: snapshot).tag(V2DeskChapterFace.manuscript)
-                    V2IOSEvidenceFace(snapshot: snapshot).tag(V2DeskChapterFace.evidence)
+                    V2IOSIntentFace(focusedField: $focusedField).tag(V2DeskChapterFace.intent)
+                    V2IOSManuscriptFace(snapshot: snapshot, focusedField: $focusedField).tag(V2DeskChapterFace.manuscript)
+                    V2IOSEvidenceFace(snapshot: snapshot, actions: actions).tag(V2DeskChapterFace.evidence)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                pageIndicator
+                saveStatus
                 V2IOSActionDock(
-                    face: $face,
                     primary: snapshot.primaryAction,
+                    mergesRewrite: V2IOSChapterInteractionPolicy.mergesPrimaryIntoRewrite(snapshot.primaryAction, hasDraft: editor.currentChapter?.draftText.v2IOSTrimmed.isEmpty == false),
+                    canRewrite: snapshot.commands.canRewrite && actions.canMutate(editor: editor),
+                    rewritePreparing: actions.preparing,
+                    rewriteAction: startRewrite,
+                    busy: actions.busy || editor.isSaving,
                     primaryAction: { tapPrimary(snapshot.primaryAction) },
                     inspirationAction: {
+                        focusedField = nil
                         inspirationDetent = V2IOSInspirationPresentation.compactDetent
                         showingInspiration = true
                     },
@@ -321,18 +343,16 @@ struct V2IOSChapterDeskView: View {
         .navigationTitle(snapshot.title.v2IOSTrimmed.isEmpty ? "第 \(summary.index) 章" : snapshot.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+        .onChange(of: face) { _, _ in focusedField = nil }
+        .sheet(isPresented: $showingSaveDetails) {
+            NoticeDetailSheet(title: editor.saveState.label, message: editor.saveState.failureMessage ?? "")
+        }
         .v2IOSChapterActions(
             chapterID: summary.id,
             bookID: summary.bookId,
             commands: snapshot.commands,
             isAccepted: snapshot.chapterState == .accepted,
-            onSave: {
-                Task {
-                    if let chapter = await editor.save() {
-                        workspace.upsert(chapter)
-                    }
-                }
-            }
+            coordinator: actions
         )
         .task(id: summary.id) {
             inspiration.clearIfChapterChanged(to: summary.id)
@@ -344,9 +364,10 @@ struct V2IOSChapterDeskView: View {
         .onChange(of: editor.currentChapter) { _, chapter in
             if let chapter { workspace.upsert(chapter) }
         }
-        .onDisappear { editor.persistLocalDraftIfNeeded() }
+        .onDisappear { editor.persistLocalDraftIfNeeded(); focusedField = nil }
         .sheet(isPresented: $showingInspiration) {
             V2IOSInspirationSheet(selectedDetent: $inspirationDetent)
+                .environmentObject(actions)
                 .presentationDetents(
                     [V2IOSInspirationPresentation.compactDetent, .large],
                     selection: $inspirationDetent
@@ -362,7 +383,8 @@ struct V2IOSChapterDeskView: View {
         }
         .confirmationDialog("这一章会被记为完成", isPresented: $showingAcceptWarning, titleVisibility: .visible) {
             Button("仍然接受", role: .destructive) {
-                Task {
+                guard editor.currentChapter?.id == summary.id else { return }
+                actions.run(editor: editor) {
                     let shortConfirmation = editor.preflightAcceptanceMessage != nil
                     if let chapter = await editor.accept(
                         overrideChecker: !shortConfirmation,
@@ -392,7 +414,7 @@ struct V2IOSChapterDeskView: View {
             }
             Button("知情继续", role: .destructive) {
                 guard let pending = editor.pendingProductionContext else { return }
-                Task { if let chapter = await editor.confirmProductionContextAndContinue(pending) { workspace.upsert(chapter) } }
+                actions.run(editor: editor) { if let chapter = await editor.confirmProductionContextAndContinue(pending) { workspace.upsert(chapter) } }
             }
             Button("返回", role: .cancel) { editor.dismissProductionContextConfirmation() }
         } message: {
@@ -429,36 +451,225 @@ struct V2IOSChapterDeskView: View {
         return "\(chapters)\n\n这些资料尚不完整。你可以先恢复建议章节，或仅本次知情后继续\(action)。"
     }
 
-    private var pageIndicator: some View {
-        HStack(spacing: 7) {
+    private var pageNavigation: some View {
+        HStack(spacing: 0) {
             ForEach(V2DeskChapterFace.allCases, id: \.self) { item in
-                Capsule()
-                    .fill(item == face ? V2DeskPalette.color(.ink, scheme: colorScheme) : V2DeskPalette.color(.ink, scheme: colorScheme).opacity(0.15))
-                    .frame(width: 22, height: 3)
-                    .accessibilityLabel(item.title)
+                Button {
+                    focusedField = nil
+                    face = item
+                } label: {
+                    Text(item == .evidence ? "检查结果" : item.title)
+                        .font(V2DeskType.control(13, weight: item == face ? .semibold : .regular))
+                        .foregroundStyle(V2DeskPalette.color(item == face ? .ink : .metadataInk, scheme: colorScheme))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .overlay(alignment: .bottom) {
+                            if item == face { Rectangle().fill(V2DeskPalette.color(.ink, scheme: colorScheme)).frame(height: 2) }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(item == face ? [.isSelected] : [])
             }
         }
-        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+    }
+
+    private var saveStatus: some View {
+        HStack(spacing: 8) {
+            if editor.isSaving { ProgressView().controlSize(.small) }
+            Text(editor.saveState.label)
+                .font(V2DeskType.control(11.5))
+                .foregroundStyle(V2DeskPalette.color(editor.saveState.needsRetry ? .danger : .metadataInk, scheme: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
+            if editor.saveState.failureMessage != nil {
+                Button("详情") { showingSaveDetails = true }
+                    .font(V2DeskType.control(12))
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            Spacer(minLength: 0)
+            if let title = V2IOSChapterInteractionPolicy.saveTitle(state: editor.saveState, online: sync.networkActionsAvailable) {
+                Button(title) {
+                    focusedField = nil
+                    if sync.networkActionsAvailable {
+                        actions.run(editor: editor) { if let chapter = await editor.save() { workspace.upsert(chapter) } }
+                    } else { editor.persistLocalDraftIfNeeded() }
+                }
+                .font(V2DeskType.control(12.5, weight: .medium))
+                .frame(minWidth: 44, minHeight: 44)
+                .disabled(sync.networkActionsAvailable
+                    ? actions.busy || inspiration.isLoading || !actions.canMutate(editor: editor)
+                    : !ChapterEditingPolicy.canEdit(editor.currentChapter))
+            }
+            if focusedField != nil {
+                Button("完成") { focusedField = nil }
+                    .font(V2DeskType.control(12.5, weight: .medium))
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .buttonStyle(.plain)
+                    .accessibilityHint("收起键盘，保留输入")
+            }
+        }
+        .padding(.horizontal, 20)
+        .background(V2DeskPalette.color(.rail, scheme: colorScheme))
+    }
+
+    private func startRewrite() {
+        focusedField = nil
+        actions.startPreview(chapterID: summary.id, bookID: summary.bookId,
+            editor: editor, session: session, workspace: workspace)
     }
 
     private func tapPrimary(_ action: V2DeskPrimaryAction) {
-        guard !action.requiresNetwork || sync.networkActionsAvailable else { return }
+        guard editor.currentChapter?.id == summary.id, !actions.busy, !editor.isSaving,
+              !action.requiresNetwork || sync.networkActionsAvailable else { return }
+        focusedField = nil
+        if V2IOSChapterInteractionPolicy.mergesPrimaryIntoRewrite(action, hasDraft: editor.currentChapter?.draftText.v2IOSTrimmed.isEmpty == false) {
+            startRewrite(); return
+        }
         switch action {
-        case .generate, .retryGeneration: Task { if let chapter = await editor.generate() { workspace.upsert(chapter) } }
-        case .cancelGeneration: Task { if let chapter = await editor.cancelWriting() { workspace.upsert(chapter) } }
-        case .rerunChecker: Task { _ = await editor.rerunChecker() }
-        case .retryGeneratedCandidateChecker: Task { if let chapter = await editor.retryGeneratedCandidateChecker() { workspace.upsert(chapter) } }
-        case .accept: Task { if let chapter = await editor.accept() { workspace.upsert(chapter) } }
+        case .generate, .retryGeneration: actions.run(editor: editor) { if let chapter = await editor.generate() { workspace.upsert(chapter) } }
+        case .cancelGeneration: actions.run(editor: editor) { if let chapter = await editor.cancelWriting() { workspace.upsert(chapter) } }
+        case .rerunChecker: actions.run(editor: editor) { _ = await editor.rerunChecker() }
+        case .retryGeneratedCandidateChecker: actions.run(editor: editor) { if let chapter = await editor.retryGeneratedCandidateChecker() { workspace.upsert(chapter) } }
+        case .accept: actions.run(editor: editor) { if let chapter = await editor.accept() { workspace.upsert(chapter) } }
         case .acceptWithWarning: showingAcceptWarning = true
-        case .startNewChapter: Task { await workspace.createChapter() }
-        case .retryArchive: Task { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
-        case .refreshTaskStatus: Task { if let chapter = await editor.refreshTaskStatus() { workspace.upsert(chapter) } }
+        case .startNewChapter: actions.run(editor: editor) { await workspace.createChapter() }
+        case .retryArchive: actions.run(editor: editor) { if let chapter = await editor.retryArchive() { workspace.upsert(chapter) } }
+        case .refreshTaskStatus: actions.run(editor: editor) { if let chapter = await editor.refreshTaskStatus() { workspace.upsert(chapter) } }
         case .openSettings: showingSettings = true
         case .none: break
         }
     }
 
     private func perform(_ action: V2DeskPrimaryAction) { tapPrimary(action) }
+}
+
+/// A single latch and receipt serve the menu, writing dock and reading dock.
+/// A preview is author intent, so it must never survive a different visit.
+@MainActor
+final class V2IOSChapterActionCoordinator: ObservableObject {
+    @Published var showingRewrite = false
+    @Published var showingReopen = false
+    @Published var showingDelete = false
+    @Published private(set) var preparing = false
+    @Published private(set) var running = false
+    @Published private(set) var pendingImpact: RewriteImpactPreview?
+    private var receipt: ChapterInteractionContext?
+    private var requestID: UUID?
+    private var previewWasAccepted = false
+
+    var busy: Bool { preparing || running || showingRewrite || showingReopen || showingDelete }
+
+    func invalidate() {
+        requestID = nil
+        receipt = nil
+        preparing = false
+        running = false
+        showingRewrite = false
+        showingReopen = false
+        showingDelete = false
+        pendingImpact = nil
+    }
+
+    func owns(_ context: ChapterInteractionContext, editor: ChapterEditorStore,
+              session: AppSession, workspace: WorkspaceStore) -> Bool {
+        context.owns(bookID: session.currentBook?.id, bookContextID: session.bookContextID,
+                     chapterID: editor.currentChapter?.id, navigationID: workspace.chapterNavigationID,
+                     editorContextID: editor.editingSessionID)
+            && workspace.chapterPath.last?.id == context.chapterID
+            && editor.currentChapter?.bookId == context.bookID
+    }
+
+    func context(chapterID: String, bookID: String, editor: ChapterEditorStore,
+                 session: AppSession, workspace: WorkspaceStore) -> ChapterInteractionContext? {
+        let context = ChapterInteractionContext(bookID: bookID, bookContextID: session.bookContextID,
+            chapterID: chapterID, navigationID: workspace.chapterNavigationID,
+            editorContextID: editor.editingSessionID)
+        return owns(context, editor: editor, session: session, workspace: workspace) ? context : nil
+    }
+
+    func canMutate(editor: ChapterEditorStore) -> Bool {
+        !V2IOSChapterInteractionPolicy.blocksChapterMutation(
+            phase: editor.writingPhase, saving: editor.isSaving, checking: editor.checkerRefreshing)
+    }
+
+    func startPreview(reopen: Bool = false, chapterID: String, bookID: String,
+                      editor: ChapterEditorStore, session: AppSession, workspace: WorkspaceStore) {
+        guard !busy, editor.sync.networkActionsAvailable, canMutate(editor: editor),
+              editor.currentChapter?.id == chapterID,
+              let context = context(chapterID: chapterID, bookID: bookID,
+                                    editor: editor, session: session, workspace: workspace),
+              (reopen ? editor.currentChapter?.status == "finalized"
+                : editor.currentChapter?.draftText.v2IOSTrimmed.isEmpty == false) else { return }
+        let id = UUID()
+        requestID = id
+        receipt = context
+        previewWasAccepted = editor.currentChapter?.status == "finalized"
+        let wasAccepted = previewWasAccepted
+        preparing = true
+        Task {
+            guard requestID == id else { return }
+            guard owns(context, editor: editor, session: session, workspace: workspace),
+                  canMutate(editor: editor),
+                  (editor.currentChapter?.status == "finalized") == wasAccepted else { invalidate(); return }
+            let impact = await editor.loadRewriteImpact()
+            guard requestID == id else { return }
+            preparing = false
+            guard owns(context, editor: editor, session: session, workspace: workspace),
+                  canMutate(editor: editor),
+                  (editor.currentChapter?.status == "finalized") == wasAccepted else { invalidate(); return }
+            pendingImpact = impact
+            if reopen { showingReopen = true } else { showingRewrite = true }
+        }
+    }
+
+    func confirm(reopen: Bool, editor: ChapterEditorStore, session: AppSession, workspace: WorkspaceStore) {
+        guard !running, !preparing else { return }
+        guard editor.sync.networkActionsAvailable, let context = receipt, canMutate(editor: editor),
+              (editor.currentChapter?.status == "finalized") == previewWasAccepted,
+              owns(context, editor: editor, session: session, workspace: workspace) else { invalidate(); return }
+        showingRewrite = false
+        showingReopen = false
+        running = true
+        let id = UUID()
+        requestID = id
+        Task {
+            defer { if requestID == id { invalidate() } }
+            guard requestID == id, owns(context, editor: editor, session: session, workspace: workspace),
+                  canMutate(editor: editor),
+                  (editor.currentChapter?.status == "finalized") == previewWasAccepted else { return }
+            let refresh: Bool
+            if reopen {
+                let chapter = await editor.reopen()
+                if let chapter { workspace.upsert(chapter) }
+                refresh = chapter != nil
+            } else {
+                let outcome = await editor.rewrite {
+                    requestID == id && owns(context, editor: editor, session: session, workspace: workspace)
+                }
+                if let chapter = outcome.chapter { workspace.upsert(chapter) }
+                refresh = outcome.requiresChapterListRefresh
+            }
+            guard refresh, session.currentBook?.id == context.bookID,
+                  session.bookContextID == context.bookContextID else { return }
+            await workspace.refreshChapters(bookId: context.bookID)
+        }
+    }
+
+    /// Lock synchronously before creating a Task, including explicit save.
+    func run(editor: ChapterEditorStore, operation: @escaping @MainActor () async -> Void) {
+        guard !busy, !editor.isSaving, editor.sync.networkActionsAvailable else { return }
+        let id = UUID()
+        requestID = id
+        running = true
+        let editingSessionID = editor.editingSessionID
+        let chapterID = editor.currentChapter?.id
+        Task {
+            defer { if requestID == id { running = false; requestID = nil } }
+            guard requestID == id, editor.editingSessionID == editingSessionID,
+                  editor.currentChapter?.id == chapterID else { return }
+            await operation()
+        }
+    }
 }
 
 extension View {
@@ -469,14 +680,14 @@ extension View {
         bookID: String,
         commands: V2DeskChapterCommands,
         isAccepted: Bool,
-        onSave: (() -> Void)?
+        coordinator: V2IOSChapterActionCoordinator
     ) -> some View {
         modifier(V2IOSChapterActions(
             chapterID: chapterID,
             bookID: bookID,
             commands: commands,
             isAccepted: isAccepted,
-            onSave: onSave
+            coordinator: coordinator
         ))
     }
 }
@@ -492,26 +703,13 @@ private struct V2IOSChapterActions: ViewModifier {
     let bookID: String
     let commands: V2DeskChapterCommands
     let isAccepted: Bool
-    let onSave: (() -> Void)?
+    @ObservedObject var coordinator: V2IOSChapterActionCoordinator
 
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var workspace: WorkspaceStore
     @EnvironmentObject private var sync: ClientSyncStore
     @State private var showingExport = false
-    @State private var showingReopen = false
-    @State private var showingRewrite = false
-    @State private var showingDelete = false
-    /// One gate for every chapter-scope action. Rewrite and reopen each wait
-    /// on a `rewrite-preview` round trip before their dialog appears; with a
-    /// gate per flow, tapping one and then the other on a slow network raised
-    /// both dialogs at once. Delete opens instantly and joins the same gate so
-    /// it cannot stack on top of an in-flight preview either.
-    @State private var preparingChapterAction = false
-    /// `nil` means the preview failed, not "not yet fetched" — no dialog is
-    /// raised until the fetch has resolved one way or the other.
-    @State private var pendingImpact: RewriteImpactPreview?
-
     func body(content: Content) -> some View {
         content
             .toolbar {
@@ -525,67 +723,62 @@ private struct V2IOSChapterActions: ViewModifier {
             }
             .confirmationDialog(
                 V2DeskReopenConfirmation.title,
-                isPresented: $showingReopen,
+                isPresented: $coordinator.showingReopen,
                 titleVisibility: .visible
             ) {
                 Button("重新编辑", role: .destructive) { confirmReopen() }
-                Button("取消", role: .cancel) {}
+                Button("取消", role: .cancel) { coordinator.invalidate() }
             } message: {
                 Text(V2DeskReopenConfirmation.message(
-                    affected: pendingImpact?.affectedChapters ?? [],
-                    previewUnavailable: pendingImpact == nil
+                    affected: coordinator.pendingImpact?.affectedChapters ?? [],
+                    previewUnavailable: coordinator.pendingImpact == nil
                 ))
             }
             .confirmationDialog(
                 V2DeskRewriteConfirmation.title,
-                isPresented: $showingRewrite,
+                isPresented: $coordinator.showingRewrite,
                 titleVisibility: .visible
             ) {
                 Button("重写", role: .destructive) { confirmRewrite() }
-                Button("取消", role: .cancel) {}
+                Button("取消", role: .cancel) { coordinator.invalidate() }
             } message: {
                 Text(V2DeskRewriteConfirmation.message(
                     isAccepted: isAccepted,
-                    affected: pendingImpact?.affectedChapters ?? [],
-                    previewUnavailable: pendingImpact == nil
+                    affected: coordinator.pendingImpact?.affectedChapters ?? [],
+                    previewUnavailable: coordinator.pendingImpact == nil
                 ))
             }
             .confirmationDialog(
                 V2DeskDeleteConfirmation.title,
-                isPresented: $showingDelete,
+                isPresented: $coordinator.showingDelete,
                 titleVisibility: .visible
             ) {
                 Button("删除", role: .destructive) { confirmDelete() }
-                Button("取消", role: .cancel) {}
+                Button("取消", role: .cancel) { coordinator.invalidate() }
             } message: {
                 Text(V2DeskDeleteConfirmation.message)
             }
     }
 
-    /// The waiting label is the only feedback available here: tapping an item
-    /// closes the menu, so a disabled state alone would be invisible until the
-    /// author reopens the menu — which is exactly the moment they need to see
-    /// that the first tap did register.
+    /// Menu and visible dock enter the same preview and confirmation flow.
     private var menu: some View {
         Menu {
             if commands.canRewrite {
-                Button(preparingChapterAction ? "重写本章（正在读取影响范围）" : "重写本章") { startRewriteFlow() }
-                    .disabled(preparingChapterAction)
+                Button(coordinator.preparing ? "重写本章（正在读取影响范围）" : "重写本章") { startRewriteFlow() }
+                    .disabled(coordinator.busy || !coordinator.canMutate(editor: editor))
             }
             if isAccepted {
                 Button(
-                    preparingChapterAction ? "重新编辑这一章（正在读取影响范围）" : "重新编辑这一章",
+                    coordinator.preparing ? "重新编辑这一章（正在读取影响范围）" : "重新编辑这一章",
                     role: .destructive
                 ) { startReopenFlow() }
-                    .disabled(preparingChapterAction)
-            } else if let onSave {
-                Button("保存到服务器", action: onSave)
+                    .disabled(coordinator.busy || !coordinator.canMutate(editor: editor))
             }
             Button("导出这一章") { showingExport = true }
             if commands.canDelete {
                 Divider()
-                Button("删除这一章", role: .destructive) { showingDelete = true }
-                    .disabled(preparingChapterAction)
+                Button("删除这一章", role: .destructive) { coordinator.showingDelete = true }
+                    .disabled(coordinator.busy || !coordinator.canMutate(editor: editor))
             }
         } label: {
             HStack(spacing: 4) {
@@ -593,62 +786,27 @@ private struct V2IOSChapterActions: ViewModifier {
                 Image(systemName: "ellipsis.circle")
             }
         }
-        .disabled(!sync.networkActionsAvailable)
+        .disabled(!sync.networkActionsAvailable || coordinator.running || editor.isSaving)
         .accessibilityHint(sync.networkActionsAvailable ? "" : "离线时不可用；已打开内容仍可阅读和编辑")
         .accessibilityLabel("更多章节操作")
     }
 
     private func startRewriteFlow() {
-        guard !preparingChapterAction, editor.currentChapter?.id == chapterID else { return }
-        preparingChapterAction = true
-        Task {
-            defer { preparingChapterAction = false }
-            pendingImpact = await editor.loadRewriteImpact()
-            // The preview is a network round trip and the edge-swipe stays
-            // live throughout it. Leaving during that window must not raise a
-            // dialog describing the chapter we left about the chapter we are
-            // now on -- confirming it would rewrite the wrong chapter.
-            guard editor.currentChapter?.id == chapterID else { return }
-            showingRewrite = true
-        }
+        coordinator.startPreview(chapterID: chapterID, bookID: bookID,
+            editor: editor, session: session, workspace: workspace)
     }
 
-    /// Reopen fires the identical server-side cascade a rewrite's first step
-    /// does, so it takes the identical preview and the identical copy.
     private func startReopenFlow() {
-        guard !preparingChapterAction, editor.currentChapter?.id == chapterID else { return }
-        preparingChapterAction = true
-        Task {
-            defer { preparingChapterAction = false }
-            pendingImpact = await editor.loadRewriteImpact()
-            guard editor.currentChapter?.id == chapterID else { return }
-            showingReopen = true
-        }
+        coordinator.startPreview(reopen: true, chapterID: chapterID, bookID: bookID,
+            editor: editor, session: session, workspace: workspace)
     }
 
-    /// Refreshes the chapter list whenever the reopen landed — which includes
-    /// the case where the write job then failed to start. The confirmation
-    /// promised those downstream chapters would be marked unreliable, and that
-    /// promise falls due even when no new prose is coming. `refreshChapters`
-    /// rather than `load`: the author stays on this chapter to watch the
-    /// generation instead of being thrown back to the rail.
     private func confirmRewrite() {
-        guard editor.currentChapter?.id == chapterID else { return }
-        Task {
-            let outcome = await editor.rewrite()
-            if let chapter = outcome.chapter { workspace.upsert(chapter) }
-            guard outcome.requiresChapterListRefresh else { return }
-            await workspace.refreshChapters(bookId: bookID)
-        }
+        coordinator.confirm(reopen: false, editor: editor, session: session, workspace: workspace)
     }
 
     private func confirmReopen() {
-        guard editor.currentChapter?.id == chapterID else { return }
-        Task {
-            guard let reopened = await editor.reopen() else { return }
-            workspace.upsert(reopened)
-            await workspace.refreshChapters(bookId: bookID)
-        }
+        coordinator.confirm(reopen: true, editor: editor, session: session, workspace: workspace)
     }
 
     /// Refreshing a deleted/rejected row never owns navigation. Returning to
@@ -664,7 +822,8 @@ private struct V2IOSChapterActions: ViewModifier {
             currentNavigationID: workspace.chapterNavigationID,
             selectedChapterID: workspace.chapterPath.last?.id, editorChapterID: editor.currentChapter?.id
         ) else { return }
-        Task {
+        coordinator.showingDelete = false
+        coordinator.run(editor: editor) {
             guard !Task.isCancelled, receipt.canBeginDeletion(
                 currentBookID: session.currentBook?.id, currentBookContextID: session.bookContextID,
                 currentNavigationID: workspace.chapterNavigationID,
@@ -728,8 +887,12 @@ private struct V2IOSTaskBanner: View {
 }
 
 private struct V2IOSActionDock: View {
-    @Binding var face: V2DeskChapterFace
     let primary: V2DeskPrimaryAction
+    let mergesRewrite: Bool
+    let canRewrite: Bool
+    let rewritePreparing: Bool
+    let rewriteAction: () -> Void
+    let busy: Bool
     let primaryAction: () -> Void
     let inspirationAction: () -> Void
     let inspirationDisabled: Bool
@@ -738,15 +901,15 @@ private struct V2IOSActionDock: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Button { face = alternateFace } label: {
-                Text(alternateFace.title)
-                    .font(V2DeskType.control(12, weight: .medium))
-                    .foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
-                    .frame(width: 48, height: 48)
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
-            }.buttonStyle(.plain).accessibilityLabel("查看\(alternateFace.title)")
             if primary != .none {
-                V2IOSPrimaryButton(title: primary.title, disabled: primary.requiresNetwork && !networkActionsAvailable, action: primaryAction)
+                V2IOSPrimaryButton(title: mergesRewrite ? "重写本章" : primary.title,
+                    disabled: busy || (primary.requiresNetwork && !networkActionsAvailable),
+                    action: primaryAction)
+            }
+            if !mergesRewrite && (canRewrite || rewritePreparing) {
+                V2IOSSecondaryButton(title: rewritePreparing ? "读取影响…" : "重写", action: rewriteAction)
+                    .frame(maxWidth: 100)
+                    .disabled(busy || !networkActionsAvailable || !canRewrite)
             }
             Button(action: inspirationAction) {
                 Text("✦").font(.system(size: 17)).foregroundStyle(V2DeskPalette.color(.accent, scheme: colorScheme)).frame(width: 48, height: 48).overlay(RoundedRectangle(cornerRadius: 12).stroke(V2DeskPalette.color(.strongLine, scheme: colorScheme)))
@@ -759,9 +922,5 @@ private struct V2IOSActionDock: View {
         .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 8)
         .background(V2DeskPalette.color(.rail, scheme: colorScheme))
         .overlay(alignment: .top) { Divider() }
-    }
-
-    private var alternateFace: V2DeskChapterFace {
-        switch face { case .intent: .manuscript; case .manuscript: .intent; case .evidence: .manuscript }
     }
 }

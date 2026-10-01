@@ -847,7 +847,8 @@ enum ChapterRewriteOutcome: Equatable, Sendable {
     /// The reopen landed; the write job did not start. The chapter is
     /// editable again, the previous prose is untouched (hard rule 35), and
     /// this chapter's archive plus its downstream cascade are already invalid
-    /// on the server. The failure notice is published by `generate()`; the
+    /// on the server. Also covers revocation of the original editing context:
+    /// it stops further requests without reporting a generation failure. The
     /// caller still owes the author a refreshed chapter list.
     case reopenedButGenerateFailed
 
@@ -2243,6 +2244,31 @@ enum ChapterLocalDraftPersistencePolicy {
         case .synced, .savingLocally, .localDraft, .restoredLocalDraft, .savingRemotely:
             return false
         }
+    }
+}
+
+/// Async UI results belong to a single visit, even when the author leaves
+/// and comes back to the same chapter before the request completes.
+struct ChapterInteractionContext: Equatable, Sendable, Identifiable {
+    var id: UUID { navigationID }
+    let bookID: String
+    let bookContextID: UUID
+    let chapterID: String
+    let navigationID: UUID
+    let editorContextID: UUID
+
+    func owns(bookID: String?, bookContextID: UUID, chapterID: String?,
+              navigationID: UUID, editorContextID: UUID) -> Bool {
+        self.bookID == bookID && self.bookContextID == bookContextID
+            && self.chapterID == chapterID && self.navigationID == navigationID
+            && self.editorContextID == editorContextID
+    }
+
+    func addingCharacter(_ character: Character, to chapter: Chapter) -> [ChapterLink]? {
+        guard chapter.id == chapterID, chapter.bookId == bookID,
+              character.bookId == bookID, ChapterEditingPolicy.canEdit(chapter) else { return nil }
+        let link = ChapterLink(characterId: character.id)
+        return chapter.characterLinks.contains(link) ? chapter.characterLinks : chapter.characterLinks + [link]
     }
 }
 

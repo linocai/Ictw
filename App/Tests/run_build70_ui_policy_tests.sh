@@ -48,6 +48,7 @@ for marker, source, view, name in [
     ('IOS_WORLD_SAVE', ios, 'V2IOSWorldEditorView', 'saveAndDismiss'),
     ('MAC_PERSON_CREATE', mac, 'V2MacNewPersonSheet', 'create'),
     ('IOS_PERSON_CREATE', ios, 'V2IOSNewCharacterView', 'create'),
+    ('IOS_PERSON_CONTEXT', ios, 'V2IOSNewCharacterView', 'ownsChapterContext'),
     ('IOS_PERSON_SAVE', ios, 'V2IOSCharacterDetailView', 'saveAndDismiss'),
 ]:
     template = template.replace('// BUILD70:' + marker, method(source, view, name))

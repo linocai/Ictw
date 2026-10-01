@@ -971,6 +971,7 @@ final class ChapterEditorStore: ObservableObject {
     private var supersededCheckerJobID: String?
     private var localEditRevision: UInt64 = 0
     private var editorContextID = UUID()
+    var editingSessionID: UUID { editorContextID }
     private var chapterRefreshRequestID: UUID?
 
     init(session: AppSession, sync: ClientSyncStore = ClientSyncStore()) {
@@ -1515,8 +1516,10 @@ final class ChapterEditorStore: ObservableObject {
     /// job and returns immediately once it has been accepted by the server.
     /// Progress is observed via `writingPhase`/`currentChapter`, updated by
     /// the polling task started here.
-    func generate(acknowledgedContextToken: String? = nil) async -> Chapter? {
-        guard let chapter = currentChapter, !writingPhase.isActive else { return nil }
+    func generate(acknowledgedContextToken: String? = nil,
+                  continuationIsCurrent: @MainActor () -> Bool = { true }) async -> Chapter? {
+        guard !Task.isCancelled, continuationIsCurrent(),
+              let chapter = currentChapter, !writingPhase.isActive else { return nil }
         guard chapter.status != "finalized" else {
             // Kept as an internal invariant: normal UI flow reaches a
             // finalized chapter only through `rewrite()`, which reopens it
@@ -1538,11 +1541,14 @@ final class ChapterEditorStore: ObservableObject {
         preflightAcceptanceMessage = nil
         memoryContext = nil
         guard let saved = await save(),
+              !Task.isCancelled, continuationIsCurrent(),
               actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
         guard case let .proceed(token) = await productionReadiness(
-            for: saved, action: .write, acknowledgedContextToken: acknowledgedContextToken
+            for: saved, action: .write, acknowledgedContextToken: acknowledgedContextToken,
+            continuationIsCurrent: continuationIsCurrent
         ) else { return nil }
-        guard actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
+        guard !Task.isCancelled, continuationIsCurrent(),
+              actionIsCurrent(operationID, chapterID: chapter.id, revision: startingRevision) else { return nil }
         return await startWrite(chapter: saved, operationID: operationID, revision: startingRevision,
                                 replaceDraft: replace, acknowledgedContextToken: token)
     }
@@ -1983,14 +1989,16 @@ final class ChapterEditorStore: ObservableObject {
     private func productionReadiness(
         for chapter: Chapter,
         action: ProductionContextAction,
-        acknowledgedContextToken: String?
+        acknowledgedContextToken: String?,
+        continuationIsCurrent: @MainActor () -> Bool = { true }
     ) async -> ProductionReadinessGate {
         if let acknowledgedContextToken { return .proceed(acknowledgedContextToken) }
         let operationID = actionOperationID
         let revision = localEditRevision
         do {
             let readiness = try await session.api.productionReadiness(chapterId: chapter.id)
-            guard currentChapter?.id == chapter.id, actionOperationID == operationID,
+            guard !Task.isCancelled, continuationIsCurrent(),
+                  currentChapter?.id == chapter.id, actionOperationID == operationID,
                   localEditRevision == revision else { return .confirmationRequired }
             guard !readiness.limitations.isEmpty else { return .proceed(nil) }
             pendingProductionContext = PendingProductionContext(
@@ -2068,6 +2076,10 @@ final class ChapterEditorStore: ObservableObject {
         guard let chapter = currentChapter else { return nil }
         let operationID = beginAction()
         let revision = localEditRevision
+        return await reopen(chapter, operationID: operationID, revision: revision)
+    }
+
+    private func reopen(_ chapter: Chapter, operationID: UUID, revision: UInt64) async -> Chapter? {
         do {
             let reopened: Chapter = try await session.api.request("/chapters/\(chapter.id)/reopen", method: "POST", ifMatch: chapter.contentRevision)
             guard actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else { return reopened }
@@ -2109,17 +2121,27 @@ final class ChapterEditorStore: ObservableObject {
     /// the server, and a caller that cannot tell it apart from "nothing
     /// happened" will leave the author looking at a chapter list that still
     /// claims those memories are good.
-    func rewrite() async -> ChapterRewriteOutcome {
-        guard let chapter = currentChapter, !writingPhase.isActive else { return .notStarted }
+    func rewrite(continuationIsCurrent: @MainActor () -> Bool = { true }) async -> ChapterRewriteOutcome {
+        guard !Task.isCancelled, continuationIsCurrent(),
+              let chapter = currentChapter, !writingPhase.isActive else { return .notStarted }
+        let context = editorContextID
+        let revision = localEditRevision
+        let operationID = beginAction()
         var didReopen = false
         if chapter.status == "finalized" {
             // 失败已 publish 通知，直接停：nothing was invalidated.
-            guard await reopen() != nil else { return .notStarted }
+            guard await reopen(chapter, operationID: operationID, revision: revision) != nil else { return .notStarted }
             didReopen = true
         }
-        guard currentChapter?.id == chapter.id else { return didReopen ? .reopenedButGenerateFailed : .notStarted }
+        // A successful reopen is a server fact, not permission to continue in
+        // a new visit to the same chapter. Preserve the partial outcome so
+        // callers refresh the archive state without saving new-session input.
+        guard !Task.isCancelled, continuationIsCurrent(), editorContextID == context,
+              actionIsCurrent(operationID, chapterID: chapter.id, revision: revision) else {
+            return didReopen ? .reopenedButGenerateFailed : .notStarted
+        }
         // generate() 内部 replace 计算为 true，正文被覆盖而非清空
-        guard let rewritten = await generate() else {
+        guard let rewritten = await generate(continuationIsCurrent: continuationIsCurrent) else {
             return didReopen ? .reopenedButGenerateFailed : .notStarted
         }
         return .succeeded(rewritten)

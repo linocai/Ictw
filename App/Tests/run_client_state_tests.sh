@@ -98,7 +98,7 @@ require "macOS banner actions must dispatch themselves" \
 require "iOS chapter transitions must clear chapter-scoped inspiration state" \
   -F 'inspiration.clearIfChapterChanged(to: summary.id)' "$app_dir/LinoI/V2IOS/V2IOSChapterDeskView.swift"
 require "iOS must expose manual checking independently of a failed generation's primary action" \
-  -F 'Task { _ = await editor.rerunChecker() }' "$app_dir/LinoI/V2IOS/V2IOSChapterFaces.swift"
+  -F 'actions.run(editor: editor) { _ = await editor.rerunChecker() }' "$app_dir/LinoI/V2IOS/V2IOSChapterFaces.swift"
 
 chapter_edit_guard_count=$(grep -cF 'guard ChapterEditingPolicy.canEdit(chapter) else { return }' "$app_dir/LinoI/LinoStores.swift")
 if (( chapter_edit_guard_count < 2 )); then
@@ -182,7 +182,7 @@ for confirmation_host in \
   # a grep for the label. These are the two store calls that make the entries
   # real.
   require "Rewrite entry must actually reach the store: $confirmation_host" \
-    -F 'editor.rewrite()' "$confirmation_host"
+    -E 'editor\.rewrite(\(|[[:space:]]*\{)' "$confirmation_host"
   require "Delete entry must actually reach the store: $confirmation_host" \
     -F 'editor.deleteCurrentChapter()' "$confirmation_host"
 done

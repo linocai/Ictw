@@ -443,6 +443,12 @@ class Handler(BaseHTTPRequestHandler):
                     finally:
                         LOCK.acquire()
                 return self.send(200, saved)
+            if action == "reopen":
+                chapter["status"] = "draft_ready"
+                chapter["content_revision"] += 1
+                reopened = copy.deepcopy(chapter)
+                pause_at(options.get("reopen_response_gate"))
+                return self.send(200, reopened)
             if action == "job":
                 STATE["job_calls"][cid] = STATE["job_calls"].get(cid, 0) + 1
                 captured = copy.deepcopy(job(chapter, options.get("job_phase")))
@@ -469,6 +475,7 @@ class Handler(BaseHTTPRequestHandler):
                 failure = {"detail": {"code": "upstream_unavailable", "message": "暂时无法读取任务"}} if options.get("structured_status") else {"detail": "unauthorized"}
                 return self.send(status, captured if status == 200 else failure)
             if action == "production-readiness":
+                pause_at(options.get("readiness_gate"))
                 limitations = options.get("readiness_limitations", [])
                 recovery = options.get("readiness_recovery")
                 return self.send(200, {

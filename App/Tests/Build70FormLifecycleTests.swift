@@ -71,8 +71,32 @@ class NewPersonForm {
 @MainActor final class MacNewPersonForm: NewPersonForm {
     // BUILD70:MAC_PERSON_CREATE
 }
+@MainActor final class FormChapterEditor {
+    var currentChapter: Chapter? = try! formChapter()
+    var editingSessionID = UUID()
+    func setCharacterLinks(_ links: [ChapterLink]) { currentChapter?.characterLinks = links }
+}
+@MainActor final class FormChapterWorkspace {
+    struct Route { var id: String }
+    var chapterPath = [Route(id: "chapter-a")]
+    var chapterNavigationID = UUID()
+}
 @MainActor final class IOSNewPersonForm: NewPersonForm {
+    let editor = FormChapterEditor()
+    let workspace = FormChapterWorkspace()
+    var chapterContext: ChapterInteractionContext?
+    func attachToChapter() {
+        chapterContext = ChapterInteractionContext(bookID: "book-a", bookContextID: session.bookContextID,
+            chapterID: "chapter-a", navigationID: workspace.chapterNavigationID,
+            editorContextID: editor.editingSessionID)
+    }
+    // BUILD70:IOS_PERSON_CONTEXT
     // BUILD70:IOS_PERSON_CREATE
+}
+func formChapter() throws -> Chapter {
+    let value: [String: Any] = ["id": "chapter-a", "book_id": "book-a", "index": 1, "title": "Title", "status": "draft_ready",
+        "draft_text": "Author draft", "user_prompt": "Intent", "summary": "", "source": "manual", "updated_at": "2026-10-01T00:00:00Z", "character_links": [], "content_revision": 1]
+    return try JSONDecoder().decode(Chapter.self, from: JSONSerialization.data(withJSONObject: value))
 }
 @MainActor final class IOSPersonForm {
     let session = FormSession()
@@ -151,6 +175,40 @@ struct Build70FormLifecycleTests {
         try expect(newIOS.characters.createRequests.count == 1, "iOS create must remain single-flight")
         newIOS.profile = "newer profile"; newIOS.characters.complete(true); await settle()
         try expect(newIOS.dismissed == 0 && newIOS.profile == "newer profile", "iOS create success must not discard a different current input")
+        let joined = IOSNewPersonForm(); joined.attachToChapter()
+        joined.create(); joined.create(); await settle()
+        joined.editor.setCharacterLinks([ChapterLink(characterId: "selected-during-request")])
+        joined.characters.complete(true); await settle()
+        try expect(joined.dismissed == 1 && joined.characters.createRequests.count == 1,
+            "Chapter create must be single-flight and close on owned success")
+        try expect(joined.editor.currentChapter?.characterLinks.map(\.characterId) == ["selected-during-request", "person-a"],
+            "Returned person ID must merge into the latest chapter selection")
+        let duplicate = IOSNewPersonForm(); duplicate.attachToChapter()
+        duplicate.editor.setCharacterLinks([ChapterLink(characterId: "person-a")])
+        duplicate.create(); await settle(); duplicate.characters.complete(true); await settle()
+        try expect(duplicate.editor.currentChapter?.characterLinks.count == 1, "Joining an already selected ID must not duplicate it")
+        let failedJoin = IOSNewPersonForm(); failedJoin.attachToChapter()
+        failedJoin.create(); await settle(); failedJoin.characters.complete(false); await settle()
+        try expect(!failedJoin.saving && failedJoin.dismissed == 0 && failedJoin.name == "Author person"
+            && failedJoin.editor.currentChapter?.characterLinks.isEmpty == true, "Failed chapter create must keep fields and selection")
+        for mutation in 0..<5 {
+            let stale = IOSNewPersonForm(); stale.attachToChapter()
+            stale.create(); await settle()
+            switch mutation {
+            case 0: stale.session.bookContextID = UUID()
+            case 1: stale.workspace.chapterPath = [.init(id: "chapter-b")]
+            case 2: stale.workspace.chapterNavigationID = UUID() // leave and reenter same chapter
+            case 3: stale.editor.editingSessionID = UUID()
+            default: stale.editor.currentChapter?.status = "finalized"
+            }
+            stale.characters.complete(true); await settle()
+            try expect(stale.dismissed == 0 && stale.editor.currentChapter?.characterLinks.isEmpty == true,
+                "A stale visit or finalized chapter cannot receive created person or dismiss a newer sheet")
+        }
+        let staleBeforeStart = IOSNewPersonForm(); staleBeforeStart.attachToChapter()
+        staleBeforeStart.create(); staleBeforeStart.workspace.chapterNavigationID = UUID(); await settle()
+        try expect(staleBeforeStart.characters.createRequests.isEmpty && !staleBeforeStart.saving,
+            "Chapter context must be checked again before issuing POST")
         let changedMac = MacNewPersonForm()
         changedMac.create(); await settle(); changedMac.session.currentBook?.id = "book-b"
         changedMac.characters.complete(true); await settle()

@@ -489,7 +489,28 @@ private struct V2IOSCharacterField: View {
     }
 }
 
+struct V2IOSNewChapterCharacterSheet: View {
+    let context: ChapterInteractionContext
+    @StateObject private var leaveCoordinator = V2IOSCharacterSheetLeaveCoordinator()
+
+    var body: some View {
+        NavigationStack { V2IOSNewCharacterView(chapterContext: context) }
+            .environmentObject(leaveCoordinator)
+            .v2IOSPage()
+            .background(V2IOSDismissAttemptObserver(
+                shouldDismiss: { !leaveCoordinator.blocksDismissal },
+                onAttempt: leaveCoordinator.requestLeave))
+            .interactiveDismissDisabled(leaveCoordinator.isSaving)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(V2DeskMetric.sheetCornerRadius)
+    }
+}
+
 private struct V2IOSNewCharacterView: View {
+    var chapterContext: ChapterInteractionContext? = nil
+    @EnvironmentObject private var editor: ChapterEditorStore
+    @EnvironmentObject private var workspace: WorkspaceStore
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var characters: CharactersStore
     @EnvironmentObject private var session: AppSession
@@ -518,14 +539,14 @@ private struct V2IOSNewCharacterView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isDirty || saving)
         .toolbar {
-            if isDirty {
+            if isDirty || chapterContext != nil {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("取消", action: requestDismiss)
                         .disabled(saving)
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button(saving ? "创建中" : "创建", action: create)
+                Button(saving ? "创建中" : (chapterContext == nil ? "创建" : "创建并加入本章"), action: create)
                     .disabled(saving || name.v2IOSTrimmed.isEmpty)
             }
             ToolbarItemGroup(placement: .keyboard) {
@@ -560,16 +581,29 @@ private struct V2IOSNewCharacterView: View {
         sheetLeaveCoordinator.update(isDirty: isDirty, isSaving: saving)
     }
 
+    private func ownsChapterContext(_ context: ChapterInteractionContext) -> Bool {
+        context.owns(bookID: session.currentBook?.id, bookContextID: session.bookContextID,
+            chapterID: editor.currentChapter?.id, navigationID: workspace.chapterNavigationID,
+            editorContextID: editor.editingSessionID)
+            && workspace.chapterPath.last?.id == context.chapterID
+            && ChapterEditingPolicy.canEdit(editor.currentChapter)
+    }
+
     private func create() {
         guard !saving, !name.v2IOSTrimmed.isEmpty else { return }
         guard let bookID = session.currentBook?.id else { return }
         let context = session.bookContextID
+        let chapterReceipt = chapterContext
+        if let chapterReceipt, !ownsChapterContext(chapterReceipt) { return }
         let submittedName = name, submittedRole = role, submittedProfile = profile
         let id = UUID()
         submissionID = id
         saving = true
         Task {
             guard submissionID == id, session.currentBook?.id == bookID, session.bookContextID == context else {
+                saving = false; submissionID = nil; return
+            }
+            if let chapterReceipt, !ownsChapterContext(chapterReceipt) {
                 saving = false; submissionID = nil; return
             }
             let created = await characters.create(
@@ -580,8 +614,15 @@ private struct V2IOSNewCharacterView: View {
             guard submissionID == id else { return }
             saving = false
             submissionID = nil
-            if created != nil, session.currentBook?.id == bookID, session.bookContextID == context,
-               name == submittedName, role == submittedRole, profile == submittedProfile { dismiss() }
+            guard let created, session.currentBook?.id == bookID, session.bookContextID == context,
+                  name == submittedName, role == submittedRole, profile == submittedProfile else { return }
+            if let chapterReceipt {
+                guard ownsChapterContext(chapterReceipt), let chapter = editor.currentChapter,
+                      let links = chapterReceipt.addingCharacter(created, to: chapter) else { return }
+                // Merge into the latest selection, never the pre-request copy.
+                editor.setCharacterLinks(links)
+            }
+            dismiss()
         }
     }
 }
@@ -594,6 +635,7 @@ struct V2IOSInspirationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var editor: ChapterEditorStore
     @EnvironmentObject private var inspiration: InspirationCreatorStore
+    @EnvironmentObject private var chapterActions: V2IOSChapterActionCoordinator
     @Binding var selectedDetent: PresentationDetent
     @State private var addingID: String?
 
@@ -628,7 +670,7 @@ struct V2IOSInspirationSheet: View {
 
     private var sheetContents: some View {
         VStack(alignment: .leading, spacing: 16) {
-            V2IOSSheetHeader(title: "找方向", dismiss: dismiss.callAsFunction)
+            V2IOSSheetHeader(title: "找方向", dismiss: dismiss.callAsFunction, dismissTitle: "完成")
             TextField("本章推进边界（可选）", text: $inspiration.pacingBoundary)
                 .font(V2DeskType.prose(14)).textFieldStyle(.plain).padding(13).v2IOSPaper()
                 .disabled(!canEditChapter)
@@ -651,7 +693,7 @@ struct V2IOSInspirationSheet: View {
                 V2IOSSecondaryButton(title: "撤销这次加入", tone: .accent) { undo() }
                     .disabled(!canEditChapter)
             }
-            V2IOSPrimaryButton(title: isStale ? "按最新内容重想" : (inspiration.cards.isEmpty ? "开始找灵感" : "换三个"), disabled: inspiration.isLoading || !canEditChapter) {
+            V2IOSPrimaryButton(title: isStale ? "按最新内容重想" : (inspiration.cards.isEmpty ? "开始找灵感" : "换三个"), disabled: inspiration.isLoading || !canEditChapter || chapterActions.busy || !chapterActions.canMutate(editor: editor)) {
                 selectedDetent = .large
                 if let chapter = editor.currentChapter { inspiration.generate(for: chapter) }
             }
@@ -680,12 +722,13 @@ struct V2IOSInspirationSheet: View {
 struct V2IOSSheetHeader: View {
     let title: String
     let dismiss: () -> Void
+    var dismissTitle = "取消"
     var trailing: String? = nil
     var trailingAction: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
-            Button("取消", action: dismiss)
+            Button(dismissTitle, action: dismiss)
                 .font(V2DeskType.control(13, weight: .medium))
                 .frame(minWidth: V2DeskMetric.mobileTapTarget, minHeight: V2DeskMetric.mobileTapTarget)
                 .buttonStyle(.plain)

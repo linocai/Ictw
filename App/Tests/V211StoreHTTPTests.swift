@@ -144,6 +144,9 @@ private struct V211StoreHTTPTests {
     @MainActor
     static func main() async {
         let tests: [(String, @MainActor () async throws -> Void)] = [
+            ("Build74 real Store stops stale rewrite after reopen", build74RewriteOwnership),
+            ("Build74 real iOS coordinator revokes every rewrite continuation", build74RewriteNavigation),
+            ("Build74 owned accepted and draft rewrites still start once", build74RewriteSuccess),
             ("Build72 Checker diagnosis reaches Store notices and keeps retry authority", build72CheckerFailurePresentation),
             ("Build72 SOP HTTP request ID reaches the user without repeating accept", build72RequestFailureIdentity),
             ("Build72 unstructured SOP 5xx hides raw server body", build72UnstructuredHTTPFailure),
@@ -252,6 +255,127 @@ private struct V211StoreHTTPTests {
         }
         print("Store HTTP regressions: \(selectedTests.count - failures) passed, \(failures) failed")
         exit(failures == 0 ? 0 : 1)
+    }
+
+    @MainActor static func build74RewriteOwnership() async throws {
+        for change in ["same-chapter", "other-chapter", "book-ABA"] {
+            let h = try await Harness("rewrite-" + change, ["finalized": true, "reopen_response_gate": "reopen"])
+            let chapterID = h.chapters[0].id
+            let originalSession = h.editor.editingSessionID
+            let task = Task { await h.editor.rewrite() }
+            try await eventually("server committed reopen") {
+                try await fixture().chapters[chapterID]?.status == "draft_ready"
+            }
+            switch change {
+            case "same-chapter":
+                await h.load(0)
+                try check(h.editor.editingSessionID != originalSession, "same ID must have a new editor session")
+            case "other-chapter": await h.load(1)
+            case "book-ABA": h.session.currentBook = nil; h.session.currentBook = h.book
+            default: break
+            }
+            // A book round trip leaves the old editor finalized/read-only;
+            // isolate book ownership there without inventing editable input.
+            let intent = change == "book-ABA" ? h.editor.currentChapter!.userPrompt : "New visit intent: " + change
+            let draft = change == "book-ABA" ? h.editor.currentChapter!.draftText
+                : "Author manuscript typed after the original confirmation: " + change
+            h.editor.editString(\.userPrompt, value: intent)
+            h.editor.editString(\.draftText, value: draft)
+            _ = try await fixture("release", ["gate": "reopen"])
+            let outcome = await task.value
+            try check(outcome == .reopenedButGenerateFailed && outcome.requiresChapterListRefresh,
+                      "committed reopen must still require a list refresh after revocation")
+            let state = try await fixture()
+            try check(!state.requests.contains { $0.method == "PATCH" || $0.path.hasSuffix("/write") },
+                      "stale rewrite must neither save new-session input nor start Writer")
+            try check(h.editor.currentChapter?.userPrompt == intent && h.editor.currentChapter?.draftText == draft,
+                      "new edits must survive the delayed reopen response")
+            if change != "book-ABA" {
+                try check(h.editor.saveState == .unsaved, "new input must not be marked synced")
+            }
+            try check(state.chapters[chapterID]?.status == "draft_ready", "server reopen fact must not be rolled back")
+            _ = h.editor.resetBookContext()
+        }
+    }
+
+    @MainActor static func build74RewriteNavigation() async throws {
+        // Navigation-only cases deliberately keep editor identity and edits
+        // unchanged: Store's edit counter alone cannot protect these awaits.
+        for boundary in ["reopen-reentry", "reopen", "patch", "readiness"] {
+            let option = boundary.hasPrefix("reopen") ? "reopen_response_gate"
+                : boundary == "patch" ? "patch_response_gate" : "readiness_gate"
+            var options: [String: Any] = ["finalized": true, option: "held"]
+            if boundary == "readiness" {
+                options["readiness_limitations"] = [["chapter_id": "history", "index": 1, "title": "History",
+                    "reason": "Synthetic missing memory", "effective_status": "none"]]
+            }
+            let h = try await Harness("navigation-" + boundary, options)
+            let workspace = WorkspaceStore(session: h.session, sync: h.sync)
+            await workspace.load(bookId: h.book.id)
+            let summary = try JSONDecoder.lino.decode(ChapterSummary.self, from: JSONEncoder.lino.encode(h.chapters[0]))
+            workspace.chapterPath = [summary]
+            let actions = V2IOSChapterActionCoordinator()
+            actions.startPreview(chapterID: summary.id, bookID: h.book.id, editor: h.editor, session: h.session, workspace: workspace)
+            try await eventually("actual coordinator preview") { actions.showingRewrite }
+            actions.confirm(reopen: false, editor: h.editor, session: h.session, workspace: workspace)
+            try await eventually("held " + boundary) {
+                let state = try await fixture()
+                return state.requests.contains {
+                    boundary.hasPrefix("reopen") ? $0.path.hasSuffix("/reopen")
+                        : boundary == "patch" ? $0.method == "PATCH" : $0.path.hasSuffix("/production-readiness")
+                }
+            }
+            workspace.chapterPath = []
+            actions.invalidate()
+            workspace.chapterPath = [summary]
+            var newDraft: String?
+            if boundary == "reopen-reentry" {
+                await h.load(0)
+                newDraft = "Author's new manuscript in the second editing session."
+                h.editor.editString(\.draftText, value: newDraft!)
+                h.editor.editString(\.userPrompt, value: "New session intent")
+            }
+            let listPath = "/books/" + h.book.id + "/chapters"
+            let listsBefore = try await fixture().requests.filter { $0.path == listPath }.count
+            _ = try await fixture("release", ["gate": "held"])
+            try await eventually("committed reopen still refreshes the chapter list") {
+                try await fixture().requests.filter { $0.path == listPath }.count > listsBefore
+            }
+            let state = try await fixture()
+            try check(!state.requests.contains { $0.path.hasSuffix("/write") }, "invalidated iOS operation must not start Writer")
+            try check(state.requests.filter { $0.method == "PATCH" }.count == (boundary.hasPrefix("reopen") ? 0 : 1),
+                      "only a PATCH already dispatched before leaving may complete")
+            if boundary != "readiness" {
+                try check(!state.requests.contains { $0.path.hasSuffix("/production-readiness") },
+                          "revoked continuation must stop before the next request")
+            }
+            if let newDraft {
+                try check(h.editor.currentChapter?.draftText == newDraft && h.editor.saveState == .unsaved,
+                          "original coordinator must leave new-session manuscript untouched")
+            }
+            try check(!actions.busy, "revoked coordinator must release its lock")
+            try check(h.editor.pendingProductionContext == nil, "revoked readiness must not leave a stale confirmation")
+            _ = h.editor.resetBookContext()
+        }
+    }
+
+    @MainActor static func build74RewriteSuccess() async throws {
+        for finalized in [false, true] {
+            let h = try await Harness("owned-rewrite", ["finalized": finalized])
+            let draft = h.editor.currentChapter!.draftText
+            let outcome = await h.editor.rewrite()
+            try check(outcome.chapter != nil && outcome.requiresChapterListRefresh, "owned rewrite must start normally")
+            let state = try await fixture()
+            try check(state.requests.filter { $0.path.hasSuffix("/reopen") }.count == (finalized ? 1 : 0),
+                      "only accepted chapters reopen, exactly once")
+            try check(state.requests.filter { $0.method == "PATCH" }.count == 1, "owned rewrite saves once")
+            let writes = state.requests.filter { $0.path.hasSuffix("/write") }
+            try check(writes.count == 1, "owned rewrite starts Writer exactly once")
+            let body = try JSONSerialization.jsonObject(with: Data(writes[0].bodyText.utf8)) as! [String: Any]
+            try check(body["replace_draft"] as? Bool == true, "owned rewrite must preserve replacement semantics")
+            try check(h.editor.currentChapter?.draftText == draft, "starting Writer must not clear existing prose")
+            _ = h.editor.resetBookContext()
+        }
     }
 
     @MainActor static func build72CheckerFailurePresentation() async throws {

@@ -1,0 +1,781 @@
+{
+  "date": "2026-10-01",
+  "target": {
+    "version": "2.3.4",
+    "build": 73,
+    "status": "historical Build73 implementation and review; superseded by verified local Build74 quick fix; neither released"
+  },
+  "baseline": "7791b167641aa541bc9810f59a26108283062870",
+  "target_source_sha256": {
+    "App/LinoI.xcodeproj/project.pbxproj": "27ad3f9001132564c27fe94692f217491fcfd86e9a3b7cbf545baef4b13b99f2",
+    "App/LinoI/LinoModels.swift": "52b3f8dfe5e784b20092df6bbfdeed3388d68464ae590cb945e32ffee4404ad1",
+    "App/LinoI/LinoStores.swift": "5d4d039c0cbd24f75196f73906048e4926058f88f60cb246c92bed68eaa74f82",
+    "App/LinoI/V2IOS/V2IOSChapterDeskView.swift": "46070df38dc30fad470204021b054ce2d03d81bd6e2d76b56ffa7afe494c2c1f",
+    "App/LinoI/V2IOS/V2IOSChapterFaces.swift": "da0799e2ba10a7d3001ee8e1cdc90e5b8dbeb8549efe8b981f65568d73c85129",
+    "App/LinoI/V2IOS/V2IOSPeripheralViews.swift": "d0dfb9ee02d32787678d91889cccf2ce8d3e959908db32307a81f8b708dbc3c0",
+    "App/LinoI/V2Shared/V2DeskPresentation.swift": "19caeb2c5b227d9256a64fa0018b2f1725bc7eea9db4f700067e2c215ca2afc8",
+    "App/Tests/Build70FormLifecycleTests.swift": "47cf858f659c7e5001f57b5d489c9e89b66f7b217eb79a6257234f7398049360",
+    "App/Tests/Build73IOSInteractionTests.swift": "98174da9e978b182e6c20feb74a4ed9cc887c582a7587401d0206bd9c5b7289a",
+    "App/Tests/run_build70_ui_policy_tests.sh": "1677e669b749a4c357fc9fe1b4b7afca62bfa8b91bde276bc75c88bf746cb915",
+    "App/Tests/run_build73_ui_policy_tests.sh": "b32da24fd0e81d8fa913d967ebb45740081069c3152eea3599f0e72ce75d61b2",
+    "App/Tests/run_client_state_tests.sh": "c10309c26b98a616228f7d06f33561df475615952601749cee818f89accb6bfa",
+    "Backend/app/main.py": "8940b304070f41b1676f23a835154f355875a4d21d375eb274e313db0101822b",
+    "Backend/tests/test_v1_1_features.py": "2087eebb76bf6d9402307335163be554d6b2315a811f0bae3c440953a8a4f39a"
+  },
+  "review": {
+    "model": "gpt-6.1-sol",
+    "effort": "max",
+    "scope": "frozen uncommitted App/Backend implementation, tests, and owned version changes; protected user modifications excluded",
+    "findings": [],
+    "source_hashes_matched": true,
+    "not_release_review": true,
+    "keyboard_followup": {
+      "file": "App/LinoI/V2IOS/V2IOSChapterDeskView.swift",
+      "from_sha256": "8eb7810b515b4066542197d7415025a6dcc50980573041556dc1187f5ec5e02a",
+      "to_sha256": "46070df38dc30fad470204021b054ce2d03d81bd6e2d76b56ffa7afe494c2c1f",
+      "findings": [],
+      "unchanged_other_frozen_files": true
+    }
+  },
+  "automated_checks": {
+    "client-state.log": {
+      "sha256": "63f0b3a0a020dadca7bb8578081e4d1b137bc007a8fde574f57cc6a3e04c0f3d",
+      "summary": [
+        "Client state tests passed"
+      ]
+    },
+    "store-http.log": {
+      "sha256": "5f477f8f2b5eafbf9be3e269548eec9fb029cd6468d91efc1c6b7448a7d259b7",
+      "summary": [
+        "PASS: v2.2 Extractor Job keeps visible Checker evidence after cold load",
+        "PASS: Build62 visible recheck supersedes generation failures only",
+        "PASS: F6 permanent polling and manual request identities",
+        "PASS: F6 retrying observer records one error and recovers",
+        "PASS: F6 transient polling stops after a finite retry budget",
+        "PASS: F6 malformed job response stops polling",
+        "PASS: F6 reason-only hidden candidate preserves true failure",
+        "PASS: F1/F6 structured HTTP statuses retain retry semantics",
+        "PASS: F8 leaving context keeps old failure in history",
+        "PASS: F8 explicit cancellation does not report failure",
+        "PASS: F9 shelf success reflects HTTP outcome",
+        "PASS: late refresh cannot pollute another chapter",
+        "PASS: late start cannot cancel another chapter monitor",
+        "PASS: late action refusal keeps original chapter and action in history",
+        "Store HTTP regressions: 95 passed, 0 failed"
+      ]
+    },
+    "ui70.log": {
+      "sha256": "59cd501f0794b8df8f1b0a4986912ab3a6c04229804765487ad35c023d3a5e05",
+      "summary": [
+        "Build70 UI drafts: 18 checks passed",
+        "Build70 actual View form lifecycle: 33 checks passed",
+        "Build70 actual export persistence lifecycle: 35 checks passed",
+        "Build70 actual retained-draft recovery lifecycle: 16 checks passed"
+      ]
+    },
+    "ui71.log": {
+      "sha256": "65c8da254f115bfaa94a76b338edeec382c213314b6e69305b3cacae41ed51fc",
+      "summary": [
+        "Build71 actual UI handlers: 19 passed"
+      ]
+    },
+    "ui73.log": {
+      "sha256": "98cf3c01ed14517edf3e9ceeafd940a628ad867ebba85841a786ddb025ccf5ab",
+      "summary": [
+        "Build73 actual iOS coordinator and policies: 55 checks passed"
+      ]
+    },
+    "backend-version.log": {
+      "sha256": "fa79e73c333d9ca60a616c2c269e1911eb6284926a1939ada224213e6f6a57e7",
+      "summary": []
+    },
+    "ios-build.log": {
+      "sha256": "299820ef6dc41790290aaa7d6dcf559a951bf15afdc70e9ec3a601fcac144abb",
+      "summary": [
+        "Ignoring --strip-bitcode because --sign was not passed",
+        "** BUILD SUCCEEDED **"
+      ]
+    },
+    "mac-build.log": {
+      "sha256": "fc14076d376f9511631930c3ee8d8e242bf049322341f2a1deb9eeb3dbbe13bb",
+      "summary": [
+        "Ignoring --strip-bitcode because --sign was not passed",
+        "** BUILD SUCCEEDED **"
+      ]
+    },
+    "ios-keyboard-layout-build.log": {
+      "sha256": "19898b49e3d4d6e028786d2cfa6711e53077bf31ff02922e17e6448e585fa649",
+      "summary": [
+        "** BUILD SUCCEEDED **"
+      ]
+    }
+  },
+  "native": {
+    "authorization": "用户：允许，用 Xcode UI 自动化完成验收",
+    "device": "主模拟器 / iPhone 18 Pro / iOS 27.0",
+    "method": "Xcode UI tests, isolated alternate bundle, synthetic local HTTP fixture",
+    "real_model_calls": 0,
+    "app": {
+      "bundle_id": "com.lino.ictw.build73-native-inspection",
+      "data_container": "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Data/Application/A6709F79-74A9-4E56-BFE4-BE3DE66DE90C",
+      "source_app": "/tmp/ictw-build73/builder/ios-derived-data/Build/Products/Debug-iphonesimulator/LinoI.app",
+      "source_version": "2.3.4",
+      "source_build": "73",
+      "source_executable_sha256": "b7c9da92f80633f6c5fba2b99d95a40d5a9aae103196d051758707c4d72855be",
+      "stage": "final keyboard layout correction"
+    },
+    "completed_runs": [
+      "final-light-v2: 3 tests passed",
+      "final-states-v2: 2 tests passed (5 state scenarios plus accepted rewrite transition)",
+      "final-dark-large: 3 tests passed (accessibility-large, dark appearance, unknown acceptance refresh, character cancel/failure retry, passive inspiration and undo)",
+      "final-pinyin: 1 test passed (actual keyboard keys, candidate selection, tab changes, server save verified)",
+      "keyboard-correction-light: 3 affected tests revalidated; actual Done/inspiration frames do not intersect and inspiration opens directly while editing",
+      "keyboard-correction-dark-large: 2 affected tests passed, including physical Pinyin keys and non-overlapping controls at accessibility-large"
+    ],
+    "screenshots": {
+      "archive/operations/2026-10-01-build73-ios/light-title-character-save.png": "0a63d27f58e51a4a34be3f6ca1ed161a887694e27f954751d20eae606db424fb",
+      "archive/operations/2026-10-01-build73-ios/dark-large-pinyin-composing.png": "a355d00834217d68a7b50cd3c0c99753e8e9bd796b5db3856c4ed90090130519",
+      "archive/operations/2026-10-01-build73-ios/dark-large-unknown-acceptance.png": "6932fd988475f6be4458834e9f6c0ffdbfdc024c42b542f1cdacde948a26e6aa",
+      "archive/operations/2026-10-01-build73-ios/pinyin-title-composing.png": "3cbb1b25e102473b77090aab7871840db11f8daa1f0436b019b8ed4b3134b3f2",
+      "archive/operations/2026-10-01-build73-ios/light-draft-actions.png": "d8a1879c4a7ba42e9d249e49b5cc1b072011c40ffb7507baf0985a024cdb0861",
+      "archive/operations/2026-10-01-build73-ios/dark-large-intent.png": "6e1ebf28f8dbaf7a4b56792a2790977e129d3da232c80b4da39a585b1bb17e9c",
+      "archive/operations/2026-10-01-build73-ios/light-inspiration-completion.png": "e6e9bf9e5b0748c0198d2641900e68a39a3ea3c8367e8900288e466aa6eb9688",
+      "archive/operations/2026-10-01-build73-ios/accepted-rewrite-transition.png": "deb5493db17e5a583174998a2e281ebe8e737e9db497cba574d5d6f0b2bd9970",
+      "archive/operations/2026-10-01-build73-ios/pinyin-manuscript-composing.png": "985db1951b0bb41b5a96b39e5fd475f24509e639ae83e47f36794c20235bb2be",
+      "archive/operations/2026-10-01-build73-ios/dark-large-check.png": "4c3340e631c51aa3a6b0e5e0515736144dad5a52f624d399daa671697793b872",
+      "archive/operations/2026-10-01-build73-ios/light-long-manuscript.png": "5b3dd38c181b71b5abeb2e7ecc499ab9250ec253a347c9939a5fc790becd7a69",
+      "archive/operations/2026-10-01-build73-ios/light-rewrite-confirmation.png": "2ccf9d1272ff76a7ee02a3e76c07b31a85e96c4b15dee45499c8eb2467aec59c"
+    },
+    "settings": {
+      "light": "large (system default)",
+      "dark": "accessibility-large"
+    },
+    "tests_passed": 9,
+    "validated_behaviors": [
+      "intent-only title editor; no world card; tab and swipe navigation",
+      "keyboard completion, long manuscript scrolling/editing, Pinyin composition and committed text survives tabs and server save",
+      "actual save states and explicit save; create character and merge selection; deselect and save",
+      "cancel unsaved character; failed creation retains inputs; retry succeeds",
+      "passive inspiration opening, explicit generate, add-and-complete, independent undo",
+      "draft and accepted rewrite confirmation including downstream impact",
+      "accepted-to-reopened transition remains locked; reopen=1 and write=1; old manuscript preserved",
+      "passed, content violation, visible checker unavailable, retained candidate checker unavailable, active generation",
+      "retry visible check and candidate check only; zero rewrite requests",
+      "unknown acceptance only refreshes; accept=1, write=0",
+      "light/default and dark/accessibility-large readability and reachable controls"
+    ],
+    "limitations": [
+      "Simulator validation only; no physical iOS device installation or page acceptance",
+      "No live production backend/model/end-to-end writing exercised"
+    ],
+    "resolved_test_setup_failures": [
+      "OS27 confirmation popover omits explicit Cancel; dismiss region used after inspecting AX",
+      "Swift dictionary literal generation corrected before tests",
+      "Synthetic completed checks now model terminal job state; asynchronous enablement asserted with bounded waits"
+    ],
+    "run_evidence": {
+      "final-light-v2": {
+        "log_sha256": "dabfb4113eb4fb2c8c2a65a4ff99ab3ed0eeac46ec1c2907db122639111f735b",
+        "results": [
+          "Test Case '-[InspectionUITests.InspectionUITests testDraftAndAcceptedRewrite]' passed (38.205 seconds).",
+          "Test Case '-[InspectionUITests.InspectionUITests testEditingSavingAndCharacter]' passed (34.499 seconds).",
+          "Test Case '-[InspectionUITests.InspectionUITests testInspirationCompletion]' passed (18.531 seconds).",
+          "** TEST SUCCEEDED **"
+        ]
+      },
+      "final-states-v2": {
+        "log_sha256": "03e02ab21dfde49efc4bdfa21616e2d9b5fb564b1e5f39bd90b68437453441ca",
+        "results": [
+          "Test Case '-[InspectionUITests.InspectionUITests testAcceptedRewriteTransition]' passed (17.907 seconds).",
+          "Test Case '-[InspectionUITests.InspectionUITests testStateMatrix]' passed (47.961 seconds).",
+          "** TEST SUCCEEDED **"
+        ]
+      },
+      "final-dark-large": {
+        "log_sha256": "2c17db4fd6c5902352691b64603aed6aa10bf1ce99df4271dd50a759c60dcafb",
+        "results": [
+          "Test Case '-[InspectionUITests.InspectionUITests testAcceptanceUnknownRefreshOnly]' passed (13.709 seconds).",
+          "Test Case '-[InspectionUITests.InspectionUITests testCharacterCancelAndFailedRetry]' passed (24.032 seconds).",
+          "Test Case '-[InspectionUITests.InspectionUITests testVisualAndInspirationPassive]' passed (15.435 seconds).",
+          "** TEST SUCCEEDED **"
+        ]
+      },
+      "final-pinyin": {
+        "log_sha256": "7d76d21e5eaa0d6aeb1d34b0f2d8979f712947f7c60bf1c45c0a058e626a7a96",
+        "results": [
+          "Test Case '-[InspectionUITests.InspectionUITests testPinyinComposition]' passed (24.029 seconds).",
+          "** TEST SUCCEEDED **"
+        ]
+      },
+      "keyboard-correction-light": {
+        "log_sha256": "20b0bc1d9044b9fa155786325c1d10d4067d5f5a408f62036b854fdbe0487422",
+        "results": [
+          "Test Case '-[InspectionUITests.InspectionUITests testEditingSavingAndCharacter]' passed (32.159 seconds).",
+          "Test Case '-[InspectionUITests.InspectionUITests testInspirationCompletion]' passed (15.520 seconds).",
+          "Test Case '-[InspectionUITests.InspectionUITests testPinyinComposition]' passed (25.778 seconds).",
+          "** TEST SUCCEEDED **"
+        ]
+      },
+      "keyboard-correction-dark-large": {
+        "log_sha256": "2b2535ed05aee64125fe8a97f1ad1473fb189d747b29650482921df3c7f95c6d",
+        "results": [
+          "Test Case '-[InspectionUITests.InspectionUITests testPinyinComposition]' passed (27.740 seconds).",
+          "Test Case '-[InspectionUITests.InspectionUITests testVisualAndInspirationPassive]' passed (15.729 seconds).",
+          "** TEST SUCCEEDED **"
+        ]
+      }
+    },
+    "visual_followup": {
+      "finding": "OS27 floating Done overlaps inspiration button while manuscript keyboard is visible",
+      "fix_status": "closed; independent delta review and 3 light + 2 dark-large native checks passed",
+      "before_screenshot_sha256": "58b65e25031279d5a484aa78b557b32621ee0fa5c9d309731a9c8283871fca8c",
+      "after_evidence": "archive/operations/2026-10-01-build73-ios/pinyin-manuscript-composing.png"
+    },
+    "keyboard_followup_complete": true,
+    "production_calls": 0
+  },
+  "device_support": {
+    "checked_at": "2026-10-01T02:56:06.396079+00:00",
+    "devices": [
+      {
+        "model": "iPhone17,3",
+        "os": "",
+        "build": "",
+        "validated": false,
+        "reason": "No local support cache; this connection record needs no cleanup"
+      },
+      {
+        "model": "iPhone18,4",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "0c2a1a965f1ed87612fec9272ae1bc508d8aef72d81ec7c62e8f52040291d5b8",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "dca7116f518c99b0b2ec01f91cad6edda9efb7d07061c804d1ca1c2f6e39306c",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "65303e9403b9caf37e85eae43fb16667b4404582fc3df8e758b9ab0b5cee0a54"
+        }
+      },
+      {
+        "model": "iPhone19,2",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "ce718b23beb9210cfeea20547ad797b8c893ebc1f2513878c3603ac6262c7327",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "448d9b4f685ea5b83c5acff545e36dbaaf7a8894dc684fcd12f6b14b025434c3",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "3b8e1bf966e44c6b01812f1f331affb81a085e82e60eaca67411426af5acedb6"
+        }
+      }
+    ],
+    "candidates": [],
+    "deleted": [],
+    "user_confirmed_unused_models": [],
+    "unused_reason": "",
+    "pending_devices": [],
+    "status": "audited"
+  },
+  "release": {
+    "deployed_version": "2.3.3",
+    "deployed_build": 72,
+    "deployed_source": "1e5eb8e10b0894d4113df5ad9899731f1a163a6e",
+    "alembic_head": "20260929_0015",
+    "commit": false,
+    "push": false,
+    "deployment": false,
+    "installed_mac_replaced": false,
+    "device_installation_verified": false
+  },
+  "protected_files": {
+    "unchanged": true,
+    "pbxproj_only_owned_changes": "four Debug/Release marketing/build version pairs; original user ordering preserved",
+    "baseline_sha256": {
+      ".learnings/ERRORS.md": "df5e2bca2856dce99d4990417a2b5af44208bd7e6c50e7d9463bb30d604795e5",
+      "App/LinoI.xcodeproj/project.pbxproj": "ff764f570fea8a838b60a723f08fb24354441bbc2e6d282c5269e73646b8f918",
+      "App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme": "78853f0899c1c97363cf48dbeae0e8e615cfb2e79f52710d78bbe76e0cd9b2b8"
+    }
+  },
+  "cleanup": {
+    "status": "complete",
+    "task_root": "/tmp/ictw-build73",
+    "task_root_logical_bytes_before": 684922362,
+    "task_root_allocated_kib_before": 700852,
+    "task_root_bytes_after": 0,
+    "deleted_file_count": 9164,
+    "inventory_sha256": "c773fade608553d8b98d8932f6afbe0af57c81f36183bbb542b45e1d0afe443b",
+    "deleted_by_directory_logical_bytes": {
+      "simulator-owned-container-metadata.json": 1096,
+      "simulator-content-size-before.txt": 6,
+      "tmp-name-audit.json": 101,
+      "simulator-apps-after.plist": 60963,
+      "native-cleanup-result.json": 1332,
+      "simulator-before.json": 511,
+      "simulator-owned-containers.json": 1097,
+      "final-apple-device-support.log": 60,
+      "cleanup_native.py": 2835,
+      "simulator-appearance-before.txt": 6,
+      "baseline.json": 744,
+      "final-apple-device-support.json": 1627,
+      "simulator-apps-before.plist": 58086,
+      "cleanup_owned.py": 3297,
+      "native-fixture": 7328,
+      "baseline": 102006,
+      "review": 92731,
+      "native-harness": 343933721,
+      "builder": 340654815
+    },
+    "native_environment": {
+      "isolated_apps_removed": [
+        {
+          "bundle_id": "com.lino.ictw.build73-inspection-tests.xctrunner",
+          "paths": [
+            "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Bundle/Application/C26768B9-81EE-47CC-8EB7-F0C66DA8493F/InspectionUITests-Runner.app",
+            "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Data/Application/6A82F22E-A5A2-418D-BEB7-91C9539E7C40"
+          ],
+          "bytes_before": 1053837,
+          "bytes_after": 0
+        },
+        {
+          "bundle_id": "com.lino.ictw.build73-native-inspection",
+          "paths": [
+            "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Bundle/Application/024AE609-0150-480F-9A34-926B590081AE/ICTW-NativeInspection.app",
+            "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Data/Application/A6709F79-74A9-4E56-BFE4-BE3DE66DE90C"
+          ],
+          "bytes_before": 49836318,
+          "bytes_after": 0
+        }
+      ],
+      "bytes_before": 50890155,
+      "bytes_after": 0,
+      "original_app_set_preserved": true,
+      "simulator_restored": {
+        "state": "Shutdown",
+        "appearance": "light",
+        "content_size": "large"
+      },
+      "fixture_stopped": true
+    },
+    "earlier_builder_cleanup_logical_bytes": [
+      15324822,
+      34708070,
+      190269992
+    ],
+    "retained": {
+      "purpose": "final synthetic screenshots and compact validation/version records; source regressions stay in App/Tests",
+      "screenshots": 12,
+      "screenshot_logical_bytes": 3037331
+    },
+    "user_tmp_named_residue": [],
+    "remote_artifacts": "none created; no production access",
+    "release_artifacts_and_rollback_backups": "untouched",
+    "task_root_verified_absent": true,
+    "known_total_removed_logical_bytes": 976115401
+  },
+  "final_integrity": {
+    "source_matches_reviewed_snapshots": true,
+    "protected_user_changes_preserved": true,
+    "staging_empty": true,
+    "temporary_root_absent": true
+  },
+  "independent_review_2026_10_01": {
+    "model": "gpt-6.1-sol",
+    "effort": "max",
+    "scope": {
+      "from_commit": "1e5eb8e10b0894d4113df5ad9899731f1a163a6e",
+      "from_tag": "v2.3.3-build72",
+      "head": "7791b167641aa541bc9810f59a26108283062870",
+      "target": "current uncommitted Build73 code, tests and owned version values; includes untracked tests; 14 target_source_sha256 entries",
+      "excluded": "original user ERRORS changes, pbx ordering and protected Mac scheme"
+    },
+    "findings": [
+      {
+        "priority": "P1",
+        "status": "resolved by local Build74; original review evidence retained in this record",
+        "title": "Stale rewrite continues across same-chapter editor reentry",
+        "locations": [
+          "App/LinoI/V2IOS/V2IOSChapterDeskView.swift:646",
+          "App/LinoI/LinoStores.swift:2118-2123"
+        ],
+        "trigger": "Confirmed rewrite of finalized chapter; server commits reopen but delays response; leave and reenter same chapter, create new editing session and edit intent plus manuscript; release old response.",
+        "observed": "Old invalidated operation sends one PATCH containing both new inputs and one POST /write with replace_draft:true without new confirmation.",
+        "impact": "Newly edited author manuscript may be replaced when the unintended write passes checks. No final model output replacement was simulated.",
+        "origin": "Store continuation gap existed in Build72; new Build73 context protection does not cover this middle await.",
+        "recommended_fix": "Revalidate original editing/book/navigation/action ownership after reopen and before save or generate; preserve and report committed reopen without resuming stale generation. Add actual Store/API same-ID reentry regression.",
+        "resolution": "Fixed in local Build74; see build74_quick_fix. Original finding remains historical evidence."
+      }
+    ],
+    "validation": {
+      "actual_store_api_coordinator_reproduction": "passed: unwanted continuation reproduced using local synthetic HTTP fixture",
+      "models_or_production_access": false,
+      "full_builds_repeated": false,
+      "prior_build_test_evidence_checked": true,
+      "source_hashes_unchanged": true,
+      "native_hit_area_probe": "Not a reportable defect: actual offset taps demonstrate minimum 44pt tolerance despite small AX label bounds; far-column-edge difference treated as optional."
+    },
+    "retained_evidence": {
+      "files": {
+        "archive/operations/2026-10-01-build73-rewrite-reproducer/probe.swift": {
+          "bytes": 15746,
+          "sha256": "5ebad323342703bcb5e5a3857fb19ef8323bf9aeedfdbb0ed85c84ea2d0546a9"
+        },
+        "archive/operations/2026-10-01-build73-rewrite-reproducer/fixture.py": {
+          "bytes": 40912,
+          "sha256": "836580f3fa59b6c5dc909a371c99bac3b3e56a3d5aa9aa51035af78b8bd9a76e"
+        },
+        "archive/operations/2026-10-01-build73-rewrite-reproducer/run.py": {
+          "bytes": 2234,
+          "sha256": "4dcb8e3ebcb0cc0a45bac1fcfb6e814568c767bba11b5fd83c1fdcf46bc3fde5"
+        },
+        "archive/operations/2026-10-01-build73-rewrite-reproducer/result.log": {
+          "bytes": 900,
+          "sha256": "e01340aa5df8b1c597c3a7dd899d59ef4920fc0e57832eedd07c389247c99e90"
+        }
+      },
+      "purpose": "Exact unresolved reproduction snapshots and output, not a live regression suite; retained until fix is covered by App/Tests and this proof can be retired.",
+      "logical_bytes": 59792,
+      "retirement": {
+        "reason": "P1 independently verified fixed; live Store/API/coordinator regressions now retained in App/Tests",
+        "removed_snapshot_bytes": 59792,
+        "directory_verified_absent": true
+      }
+    },
+    "device_support": {
+      "checked_at": "2026-10-01T03:14:00.580606+00:00",
+      "devices": [
+        {
+          "model": "iPhone17,3",
+          "os": "",
+          "build": "",
+          "validated": false,
+          "reason": "No local support cache; this connection record needs no cleanup"
+        },
+        {
+          "model": "iPhone18,4",
+          "os": "27.0",
+          "build": "24A437",
+          "validated": true,
+          "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+          "symbol_sha256": {
+            "usr/lib/dyld": "0c2a1a965f1ed87612fec9272ae1bc508d8aef72d81ec7c62e8f52040291d5b8",
+            "System/Library/Frameworks/Foundation.framework/Foundation": "dca7116f518c99b0b2ec01f91cad6edda9efb7d07061c804d1ca1c2f6e39306c",
+            "System/Library/Frameworks/UIKit.framework/UIKit": "65303e9403b9caf37e85eae43fb16667b4404582fc3df8e758b9ab0b5cee0a54"
+          }
+        },
+        {
+          "model": "iPhone19,2",
+          "os": "27.0",
+          "build": "24A437",
+          "validated": true,
+          "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+          "symbol_sha256": {
+            "usr/lib/dyld": "ce718b23beb9210cfeea20547ad797b8c893ebc1f2513878c3603ac6262c7327",
+            "System/Library/Frameworks/Foundation.framework/Foundation": "448d9b4f685ea5b83c5acff545e36dbaaf7a8894dc684fcd12f6b14b025434c3",
+            "System/Library/Frameworks/UIKit.framework/UIKit": "3b8e1bf966e44c6b01812f1f331affb81a085e82e60eaca67411426af5acedb6"
+          }
+        }
+      ],
+      "candidates": [],
+      "deleted": [],
+      "user_confirmed_unused_models": [],
+      "unused_reason": "",
+      "pending_devices": [],
+      "status": "audited"
+    },
+    "cleanup": {
+      "status": "complete",
+      "root": "/tmp/ictw-build73-independent-review",
+      "logical_bytes_before": 158627163,
+      "allocated_kib_before": 162204,
+      "logical_bytes_after": 0,
+      "removed_file_or_symlink_count": 2393,
+      "inventory_sha256": "c6811daa37dba626149202bb3927a0b691ef94c3ebd5f2a1c6a3296e4179c395",
+      "removed_by_top_directory": {
+        "DerivedData": 84165385,
+        "ICTWBuild73HitProbe.xcodeproj": 16801,
+        "Probe.original.swift": 887,
+        "Probe.swift": 921,
+        "ProbeTests.swift": 902,
+        "appearance-before.txt": 6,
+        "apple-device-support.json": 1627,
+        "apple-device-support.log": 60,
+        "apps-before.plist": 59423,
+        "cleanup_owned.py": 4022,
+        "content_size-before.txt": 6,
+        "native-cleanup.json": 1160,
+        "probe-offsets.log": 38606,
+        "probe-offsets.xcresult": 179423,
+        "probe-shape-control.log": 38028,
+        "probe-shape-control.xcresult": 181375,
+        "probe.log": 110742,
+        "probe.xcresult": 157269,
+        "project.yml": 835,
+        "purpose.json": 276,
+        "reviewer": 73668888,
+        "simulator-before.json": 521
+      },
+      "retained_evidence_verified": true,
+      "source_and_inventory_rechecked_before_deletion": true,
+      "lsof_no_open_files": true,
+      "native_environment": {
+        "removed": [
+          {
+            "bundle_id": "com.lino.ictw.build73-hit-probe",
+            "paths": [
+              "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Bundle/Application/82F64F66-D84B-44DA-8DE9-7E3540074425/HitProbe.app",
+              "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Data/Application/1AF8FFBC-896A-4785-9741-ABD8861F9456"
+            ],
+            "logical_bytes_before": 222859,
+            "bytes_after": 0
+          },
+          {
+            "bundle_id": "com.lino.ictw.build73-hit-probe-tests.xctrunner",
+            "paths": [
+              "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Bundle/Application/B3DBC8F5-F8ED-4B89-8045-5FF297845E8E/HitProbeUITests-Runner.app",
+              "/Users/linotsai/Library/Developer/CoreSimulator/Devices/0415D5BA-594C-4288-A110-E947FB31EB4E/data/Containers/Data/Application/08C10876-FA47-4C24-88A9-647DF7ABEB77"
+            ],
+            "logical_bytes_before": 195462,
+            "bytes_after": 0
+          }
+        ],
+        "original_app_set_restored": true,
+        "simulator_state_restored": "Booted",
+        "final_observed_state": "Shutdown",
+        "final_state_handling": "Later read-only check found Shutdown after earlier restored Booted; kept current state, did not reboot. Original app set restoration was verified in native cleanup."
+      },
+      "native_removed_logical_bytes": 418321,
+      "total_removed_logical_bytes": 159045484,
+      "user_and_system_tmp_named_residue": [],
+      "remote_artifacts": "none created; no production access"
+    },
+    "product_source_modified_by_review": false,
+    "final_integrity": {
+      "14_source_hashes_unchanged": true,
+      "protected_files_preserved": true,
+      "staging_empty": true,
+      "git_diff_check": "passed",
+      "temporary_root_absent": true,
+      "plan_lines": 69,
+      "plan_bytes": 8578
+    }
+  },
+  "build74_quick_fix": {
+    "date": "2026-10-01",
+    "target_version": "2.3.4",
+    "target_build": 74,
+    "status": "local fix, verification, independent repair review and cleanup complete; not released",
+    "request": "quick fix the independent-review P1",
+    "baseline_head": "7791b167641aa541bc9810f59a26108283062870",
+    "baseline_source_sha256": {
+      "App/LinoI.xcodeproj/project.pbxproj": "27ad3f9001132564c27fe94692f217491fcfd86e9a3b7cbf545baef4b13b99f2",
+      "App/LinoI/LinoModels.swift": "52b3f8dfe5e784b20092df6bbfdeed3388d68464ae590cb945e32ffee4404ad1",
+      "App/LinoI/LinoStores.swift": "5d4d039c0cbd24f75196f73906048e4926058f88f60cb246c92bed68eaa74f82",
+      "App/LinoI/V2IOS/V2IOSChapterDeskView.swift": "46070df38dc30fad470204021b054ce2d03d81bd6e2d76b56ffa7afe494c2c1f",
+      "App/Tests/Build73IOSInteractionTests.swift": "98174da9e978b182e6c20feb74a4ed9cc887c582a7587401d0206bd9c5b7289a",
+      "App/Tests/V211StoreHTTPTests.swift": "9c2e111a1b11430742492d88b3ce8a32d4a57a73b24de60dc042aff2dd09d01b",
+      "App/Tests/run_client_state_tests.sh": "c10309c26b98a616228f7d06f33561df475615952601749cee818f89accb6bfa",
+      "App/Tests/run_store_http_tests.sh": "ab23f85b8c8314eb75d5c050983309639220329dfeb94e67e3e8e5ff2b83c6c4",
+      "App/Tests/v211_http_fixture.py": "6162596b95caed1f57411a617e6de3cba51dfb3505a9881ab01b96a86dcb44bd"
+    },
+    "target_source_sha256": {
+      "App/LinoI.xcodeproj/project.pbxproj": "0ada2d02bad093d0e6cccfd0cea62b47ca455f51f90926f754212546ee35e55d",
+      "App/LinoI/LinoModels.swift": "f3b13354909a37004f3a7613ff055d2407bd19466917cbbf21e7fab4be486e66",
+      "App/LinoI/LinoStores.swift": "2c2fe67a215d6139f416bffad22dbcad8a077f6556ec7a6ef8503693940a36e4",
+      "App/LinoI/V2IOS/V2IOSChapterDeskView.swift": "9a7994ad1ba8a7d9c9580d65da988b15e716a8ca7873803582dd69776dfe4f2d",
+      "App/Tests/Build73IOSInteractionTests.swift": "3494d0bfbcbe64f9cdd77a33ac220447ea4953ea00b760204714e5bfe5c9e85e",
+      "App/Tests/V211StoreHTTPTests.swift": "6fb57efdc588e933182a3b2ef3b2524fa36ae877f64dea9fbbf6f39291cf00f3",
+      "App/Tests/run_client_state_tests.sh": "26036e104c4ffefb8acfe72fe018b7f1ead83525ab6f8661fb4d322cfe33d17d",
+      "App/Tests/run_store_http_tests.sh": "a1b4d73551e7f40a7b71ed7751e493c187e4b52835e6ca8a2ebdbe1a59797b96",
+      "App/Tests/v211_http_fixture.py": "d0fdd3197d9970f8ccc24f353d27428e94bce42d7f7973326448d505c89aca9b"
+    },
+    "fix": "Preserve rewrite operation/editor/revision ownership across reopen; carry coordinator request/book/navigation/editor revocation into save and readiness continuations; stop stale generation while retaining committed reopen and list refresh.",
+    "validation": {
+      "store-full": {
+        "sha256": "68551431be42704caf6534d1f197adfaee3646ba19205237bf55dafe0e19a359",
+        "result_lines": [
+          "PASS: Build74 real Store stops stale rewrite after reopen",
+          "PASS: Build74 real iOS coordinator revokes every rewrite continuation",
+          "PASS: Build74 owned accepted and draft rewrites still start once",
+          "Store HTTP regressions: 98 passed, 0 failed"
+        ]
+      },
+      "baseline-regression": {
+        "sha256": "cfea2975d6d6c14c521f53dd3a93baf1a935f6af330f1e913cd99867d25887ef",
+        "result_lines": [
+          "FAIL: Build74 real Store stops stale rewrite after reopen: committed reopen must still require a list refresh after revocation",
+          "FAIL: Build74 real iOS coordinator revokes every rewrite continuation: invalidated iOS operation must not start Writer",
+          "PASS: Build74 owned accepted and draft rewrites still start once",
+          "Store HTTP regressions: 1 passed, 2 failed"
+        ]
+      },
+      "ui73": {
+        "sha256": "7276e47fe665b857bc0075bbe07c43fc8482d9d8e880a9f0570e98c4654b7533",
+        "result_lines": [
+          "Build73 actual iOS coordinator and policies: 55 checks passed"
+        ]
+      },
+      "client-state": {
+        "sha256": "63f0b3a0a020dadca7bb8578081e4d1b137bc007a8fde574f57cc6a3e04c0f3d",
+        "result_lines": [
+          "Client state tests passed"
+        ]
+      },
+      "ios-build": {
+        "sha256": "8880c60b5dd63ce4cc641f2b8a8e775fa061a7b4073ae03f488f0cf953c7f8af",
+        "result_lines": [
+          "** BUILD SUCCEEDED **"
+        ]
+      },
+      "mac-build": {
+        "sha256": "7adca6bbfe142ed99d338b35f36d2b31ef40d533a9da779e1b4488906775dd56",
+        "result_lines": [
+          "** BUILD SUCCEEDED **"
+        ]
+      }
+    },
+    "test_scenarios": {
+      "real_store_ownership": [
+        "same-ID new editor + new manuscript",
+        "different chapter",
+        "book ABA without new edits"
+      ],
+      "real_coordinator_boundaries": [
+        "reopen then same-ID new editor and edits",
+        "reopen then navigation-only invalidation",
+        "PATCH then navigation-only invalidation",
+        "readiness with limitations then navigation-only invalidation"
+      ],
+      "normal": [
+        "draft rewrite once",
+        "accepted rewrite once"
+      ]
+    },
+    "build_environment": {
+      "xcode": "27.0 (27A266a)",
+      "sdk": [
+        "iphonesimulator27.0",
+        "macosx27.0"
+      ],
+      "deployment_target": "27.0",
+      "both_built_bundles_version": "2.3.4 (74)",
+      "signing": "Debug verification with signing disabled; no release artifacts"
+    },
+    "device_support": {
+      "checked_at": "2026-10-01T03:31:34.443493+00:00",
+      "devices": [
+        {
+          "model": "iPhone17,3",
+          "os": "",
+          "build": "",
+          "validated": false,
+          "reason": "No local support cache; this connection record needs no cleanup"
+        },
+        {
+          "model": "iPhone18,4",
+          "os": "27.0",
+          "build": "24A437",
+          "validated": true,
+          "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+          "symbol_sha256": {
+            "usr/lib/dyld": "0c2a1a965f1ed87612fec9272ae1bc508d8aef72d81ec7c62e8f52040291d5b8",
+            "System/Library/Frameworks/Foundation.framework/Foundation": "dca7116f518c99b0b2ec01f91cad6edda9efb7d07061c804d1ca1c2f6e39306c",
+            "System/Library/Frameworks/UIKit.framework/UIKit": "65303e9403b9caf37e85eae43fb16667b4404582fc3df8e758b9ab0b5cee0a54"
+          }
+        },
+        {
+          "model": "iPhone19,2",
+          "os": "27.0",
+          "build": "24A437",
+          "validated": true,
+          "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+          "symbol_sha256": {
+            "usr/lib/dyld": "ce718b23beb9210cfeea20547ad797b8c893ebc1f2513878c3603ac6262c7327",
+            "System/Library/Frameworks/Foundation.framework/Foundation": "448d9b4f685ea5b83c5acff545e36dbaaf7a8894dc684fcd12f6b14b025434c3",
+            "System/Library/Frameworks/UIKit.framework/UIKit": "3b8e1bf966e44c6b01812f1f331affb81a085e82e60eaca67411426af5acedb6"
+          }
+        }
+      ],
+      "candidates": [],
+      "deleted": [],
+      "user_confirmed_unused_models": [],
+      "unused_reason": "",
+      "pending_devices": [],
+      "status": "audited"
+    },
+    "review": {
+      "model": "gpt-6.1-sol",
+      "effort": "max",
+      "scope": "frozen Build73 baseline to Build74 nine-file delta, including regression and version changes; unrelated Build73 features excluded",
+      "previous_P1": "closed",
+      "new_findings": [],
+      "source_hashes_matched": true,
+      "validation": "read-only source and existing verification logs; no repeated full tests, production or physical device run",
+      "temporary_artifacts": "none"
+    },
+    "cleanup": {
+      "status": "complete",
+      "root": "/tmp/ictw-build74-quickfix",
+      "logical_bytes_before": 529182822,
+      "allocated_kib_before": 534616,
+      "logical_bytes_after": 0,
+      "file_or_symlink_count": 5573,
+      "inventory_sha256": "436901cceb70882bfde424a380532ec0f402075a68a4cb226a06fdbffdfe582f",
+      "by_top_directory": {
+        "apple-device-support.json": 1627,
+        "baseline.json": 2462,
+        "baseline": 829919,
+        "cleanup_owned.py": 4369,
+        "ios-derived": 337870600,
+        "logs": 202171,
+        "mac-derived": 190266495,
+        "review-target.json": 1093,
+        "run-baseline.sh": 4086
+      },
+      "verified_no_open_files": true,
+      "verified_hashes_before_delete": true,
+      "earlier_test_run_cleanup": [
+        {
+          "log": "store74.log",
+          "logical_bytes": 76065321
+        },
+        {
+          "log": "ui73.log",
+          "logical_bytes": 33066706
+        },
+        {
+          "log": "store-full.log",
+          "logical_bytes": 84412395
+        },
+        {
+          "log": "baseline-regression.log",
+          "logical_bytes": 75820493
+        }
+      ],
+      "retired_review_snapshots_bytes": 59792,
+      "total_removed_logical_bytes": 798607529,
+      "user_and_system_tmp_named_residue": [],
+      "retained": "live regression source, compact validation and version record; previous Build73 screenshots and Build72 release/rollback assets unchanged",
+      "remote_resources": "none; no production access",
+      "simulator": "no new installs or state changes during Build74"
+    },
+    "limitations": [
+      "No new simulator or physical device UI run; logic verified by actual Store/API and extracted shipping coordinator",
+      "No model invocation, production access, backend change or deployment",
+      "No commit, push, tag or installed Mac replacement"
+    ],
+    "test_adjustments": [
+      "Initial ownership test attempted editing a finalized read-only chapter; corrected the scenario to isolate book ownership without invented input.",
+      "Existing source gate matched only rewrite() spelling; extended to Swift trailing closure syntax, with actual coordinator/Store tests proving invocation."
+    ],
+    "final_integrity": {
+      "source_hash_count": 17,
+      "all_target_hashes_match": true,
+      "protected_user_files_preserved": true,
+      "staging_empty": true,
+      "git_diff_check": "passed",
+      "plan_lines": 69,
+      "plan_bytes": 8671,
+      "temporary_root_absent": true
+    }
+  }
+}

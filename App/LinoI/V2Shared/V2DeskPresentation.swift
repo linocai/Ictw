@@ -16,6 +16,27 @@ enum V2DeskChapterFace: String, CaseIterable, Equatable, Sendable {
     }
 }
 
+/// iOS alone folds a fresh-generation action with existing prose into the
+/// confirmed rewrite path. The shared Mac presentation remains unchanged.
+enum V2IOSChapterInteractionPolicy {
+    static func mergesPrimaryIntoRewrite(_ primary: V2DeskPrimaryAction, hasDraft: Bool) -> Bool {
+        hasDraft && (primary == .generate || primary == .retryGeneration)
+    }
+
+    static func blocksChapterMutation(phase: ChapterWritingPhase, saving: Bool, checking: Bool) -> Bool {
+        if saving || checking || phase.isActive { return true }
+        if case .failed(_, _, let stage) = phase, stage == nil { return true }
+        return false
+    }
+
+    static func saveTitle(state: ChapterSaveState, online: Bool) -> String? {
+        switch state {
+        case .synced, .savingLocally, .savingRemotely: return nil
+        default: return online ? "保存" : "保存到本机"
+        }
+    }
+}
+
 enum V2DeskTone: Equatable, Sendable {
     case neutral
     case accent

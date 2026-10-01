@@ -51,14 +51,29 @@ export LINOI_DEBUG_BASE_URL="http://127.0.0.1:$(cat "$test_root/port")"
 export LINOI_DEBUG_TOKEN="synthetic-test-token"
 export LINOI_DEBUG_DATA_ROOT="$test_root/data"
 export LINOI_DEBUG_DEFAULTS_SUITE="$fixture_suite"
-xcrun swiftc -swift-version 6 -D DEBUG -parse-as-library \
+# Compile the shipping iOS coordinator with the real Store/API, so tests can
+# revoke navigation between its requests rather than stub the whole rewrite.
+python3 - "$app_dir" "$test_root/coordinator.swift" <<'PY'
+import pathlib, sys
+source = (pathlib.Path(sys.argv[1]) / 'LinoI/V2IOS/V2IOSChapterDeskView.swift').read_text()
+start = source.index('@MainActor\nfinal class V2IOSChapterActionCoordinator:')
+end = source.index('{', start) + 1
+depth = 1
+while depth:
+    depth += (source[end] == '{') - (source[end] == '}')
+    end += 1
+pathlib.Path(sys.argv[2]).write_text('import Foundation\nimport Combine\n'
+    'extension String { var v2IOSTrimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) } }\n'
+    + source[start:end])
+PY
+xcrun swiftc -swift-version 6 -D DEBUG -parse-as-library -module-cache-path "$test_root/module-cache" \
   "$app_dir/LinoI/LinoModels.swift" "$app_dir/LinoI/LinoAPI.swift" \
   "$app_dir/LinoI/ChapterDraftCache.swift" "$app_dir/LinoI/ClientSyncStore.swift" \
   "$app_dir/LinoI/InspirationCreator.swift" "$app_dir/LinoI/V2Shared/V2DeskPresentation.swift" \
   "$app_dir/LinoI/V2Shared/V2DeskTokens.swift" "$app_dir/LinoI/V2Shared/V2DeskStatusViews.swift" \
   "$app_dir/LinoI/LinoTheme.swift" "$app_dir/LinoI/LinoErrorPresenter.swift" \
   "$app_dir/LinoI/NoticeBus.swift" "$app_dir/LinoI/LinoStores.swift" \
-  "$test_dir/V211StoreHTTPTests.swift" -o "$test_root/tests"
+  "$test_root/coordinator.swift" "$test_dir/V211StoreHTTPTests.swift" -o "$test_root/tests"
 python3 - "$test_root/tests" <<'PY'
 import subprocess, sys
 try:
