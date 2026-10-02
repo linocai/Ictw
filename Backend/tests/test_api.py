@@ -52,6 +52,8 @@ class TextLLM:
         return self.text
 
     def complete_json(self, **kwargs):
+        if "selected_source_ids" in kwargs.get("schema", {}).get("properties", {}):
+            return {"selected_source_ids": [], "conflict_source_ids": []}
         return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
 
 
@@ -62,9 +64,8 @@ def test_memory_manifest_reports_actual_packed_brief_count(client, auth_headers,
             start = user.index("[M") + 1
             source_id = user[start : user.index("]", start)]
             return {
-                "briefs": [{"text": "旧事实仍然成立", "source_ids": [source_id]}],
-                "conflicts": [],
-                "previous_ending_start_id": None,
+                "selected_source_ids": [source_id],
+                "conflict_source_ids": [],
             }
 
     book = client.post("/api/v1/books", headers=auth_headers, json={"title": "书"}).json()
@@ -84,6 +85,12 @@ def test_memory_manifest_reports_actual_packed_brief_count(client, auth_headers,
         db.commit()
     finally:
         db.close()
+    middle = client.post(f"/api/v1/books/{book['id']}/chapters", headers=auth_headers, json={"user_prompt": "紧邻章"}).json()
+    with db_module.SessionLocal() as db:
+        row = db.get(Chapter, middle["id"])
+        row.status = "finalized"; row.legacy_archive_eligible = True
+        row.long_summary = "紧邻落点。"; row.draft_text = "落点。"
+        db.commit()
     current = client.post(
         f"/api/v1/books/{book['id']}/chapters",
         headers=auth_headers,
@@ -101,7 +108,7 @@ def test_memory_manifest_reports_actual_packed_brief_count(client, auth_headers,
     ).raise_for_status()
     status = wait_for_terminal(client, current["id"], auth_headers)
     assert status["phase"] == "done"
-    assert status["memory_context"]["memory_non_whitespace_count"] == len("旧事实仍然成立")
+    assert status["memory_context"]["memory_non_whitespace_count"] == len("第1章摘要：历史事实")
     assert len(status["memory_context"]["memory_brief"]) == 1
     assert len(status["memory_context"]["sources"]) == 1
 
@@ -391,7 +398,8 @@ def test_writer_defers_longest_name_and_unselected_identity_to_checker(client, a
         headers=auth_headers,
         json={"user_prompt": "林进入废城", "character_links": [{"character_id": long["id"]}]},
     ).json()
-    response = client.post(f"/api/v1/chapters/{bad['id']}/write", headers=auth_headers)
+    readiness = client.get(f"/api/v1/chapters/{bad['id']}/production-readiness", headers=auth_headers).json()
+    response = client.post(f"/api/v1/chapters/{bad['id']}/write", headers=auth_headers, json={"acknowledged_context_token": readiness["context_token"]})
     assert response.status_code == 200
     # The default fake Checker deliberately cannot classify the remaining
     # unselected one-character use, but the pipeline has started and reaches
@@ -1814,6 +1822,7 @@ class SnapshotExtractor:
         span_id = re.search(r"\[(P\d{4}-S\d{2})\]", user).group(1)
         return {
             "summary": "梗概。",
+            "continuity": {key: [] for key in ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")},
             "facts": [{
                 "fact_ref": "F1",
                 "type": "状态",

@@ -47,7 +47,7 @@ class SnapshotExtractor:
             }
             for slot in ("当前位置", "当前行动", "情绪状态")
         ]
-        return {"summary": "梗概。", "facts": [fact], "end_state_delta": deltas}
+        return {"summary": "梗概。", "facts": [fact], "end_state_delta": deltas, "continuity": {key: [] for key in ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")}}
 
 
 class BlockingWriter:
@@ -195,7 +195,8 @@ def test_accepted_delete_cancels_the_live_write_job(client, auth_headers):
 
     writer = CancellableWriter()
     client.app.dependency_overrides[get_writer_client] = lambda: writer
-    started = client.post(f"/api/v1/chapters/{last['id']}/write", headers=auth_headers).json()
+    readiness = client.get(f"/api/v1/chapters/{last['id']}/production-readiness", headers=auth_headers).json()
+    started = client.post(f"/api/v1/chapters/{last['id']}/write", headers=auth_headers, json={"acknowledged_context_token": readiness["context_token"]}).json()
     assert started["job_id"]
     assert writer.started.wait(timeout=3)
     job = write_registry.get(last["id"])

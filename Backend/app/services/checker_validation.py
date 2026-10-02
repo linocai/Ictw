@@ -13,6 +13,12 @@ SOURCE_KINDS = {
 NAME_CLASSIFICATIONS = {"character", "ordinary_word", "uncertain"}
 MISSING_REQUIREMENT_KIND = "missing_requirement"
 IDENTITY_ISSUE_KINDS = {"unselected_character", "ambiguous_character", "uncertain_character"}
+CONTINUITY_SOURCE_KINDS = {
+    "continuity_repeated_progress": {"history", "draft"},
+    "continuity_known_reset": {"history"},
+    "continuity_timeline_conflict": {"history", "draft"},
+    "required_order_conflict": {"bible"},
+}
 
 # Stable, public-safe reasons. Never interpolate the model's prose or excerpts
 # into these messages: a rejected Writer candidate is private to the server.
@@ -23,6 +29,7 @@ CHECKER_REASON_MESSAGES = {
     "invalid_issue_values": "检查器的问题记录缺少有效类型、理由或来源，尚未形成检查结论",
     "invalid_verdict_issues": "检查器的结论与所列问题自相矛盾，尚未形成检查结论",
     "source_not_found": "检查器引用的参考资料不存在或类型不符，尚未形成检查结论",
+    "continuity_source_mismatch": "检查器的承接问题引用了错误类别的资料，尚未形成检查结论",
     "uncertain_state_source": "检查器把待定状态当成确定事实，尚未形成检查结论",
     "source_evidence_not_found": "检查器引用的资料文字与原资料不一致，尚未形成检查结论",
     "empty_bible_cited": "本章 Bible 为空，检查器却引用了 Bible，尚未形成检查结论",
@@ -130,7 +137,7 @@ def _catalog(snapshot: dict[str, Any]) -> dict[str, dict[str, str]]:
             raise CheckerValidationError("冻结来源目录条目无效", reason_code="invalid_source_catalog")
         if source_id in result:
             raise CheckerValidationError("冻结来源目录含重复 ID", reason_code="invalid_source_catalog")
-        result[source_id] = {"kind": kind, "text": text}
+        result[source_id] = {"kind": kind, "text": text, "uncertain": entry.get("uncertain") is True}
     return result
 
 
@@ -162,6 +169,10 @@ def _issue_error(issue: Any, sources: dict[str, dict[str, str]], *, bible_empty:
     source = sources.get(source_id)
     if source is None or source["kind"] != source_kind:
         return problem("issue 引用了不存在或类型不符的来源", "source_not_found", field="source_id")
+    if kind in CONTINUITY_SOURCE_KINDS and source_kind not in CONTINUITY_SOURCE_KINDS[kind]:
+        return problem("承接问题引用了错误类别的来源", "continuity_source_mismatch", field="source_kind")
+    if kind in CONTINUITY_SOURCE_KINDS and source.get("uncertain"):
+        return problem("未决来源不能作为确定矛盾证据", "uncertain_state_source")
     if source_id == "prior_state:unknown":
         return problem("待定状态只说明资料范围，不能单独作为正文矛盾或必需事件的证据", "uncertain_state_source")
     if not _contains_exact(source["text"], source_evidence):

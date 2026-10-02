@@ -41,8 +41,11 @@ from app.services.content_revisions import begin_sqlite_write_cas
 
 
 ARCHIVE_SCHEMA_VERSION = 2
-ARCHIVE_CONTRACT_VERSION = "archive-v2.1"
+ARCHIVE_CONTRACT_VERSION = "archive-v2.2"
+STATE_ARCHIVE_CONTRACT_VERSION = "archive-v2.1"
 LEGACY_ARCHIVE_CONTRACT_VERSION = "archive-v2.0"
+SUPPORTED_ARCHIVE_CONTRACTS = {LEGACY_ARCHIVE_CONTRACT_VERSION, STATE_ARCHIVE_CONTRACT_VERSION, ARCHIVE_CONTRACT_VERSION}
+CONTINUITY_KEYS = ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")
 SOURCE_SPAN_VERSION = "sentence-v1"
 MAX_FACTS = 8
 RECOMMENDED_FACT_SPAN_SENTENCES = 4
@@ -176,6 +179,7 @@ class ValidatedArchive:
     deltas: tuple[ValidatedDelta, ...]
     state_uncertainties: tuple[ValidatedUncertainty, ...] = ()
     diagnostics: tuple[dict[str, Any], ...] = ()
+    continuity: dict[str, list[str]] | None = None
 
 
 def segment_source(text: str) -> list[SourceSpan]:
@@ -242,7 +246,7 @@ def archive_input_fingerprint_for_projection(
     # selected characters.  Hashing unrelated characters would make an
     # independent story line stale even though none of its model input changed.
     prior_fields = {character_id: projected.get(character_id, {}) for character_id in character_ids}
-    if contract_version not in {LEGACY_ARCHIVE_CONTRACT_VERSION, ARCHIVE_CONTRACT_VERSION}:
+    if contract_version not in SUPPORTED_ARCHIVE_CONTRACTS:
         raise ValueError("unsupported archive contract version")
     payload: dict[str, Any] = {
         "contract": contract_version,
@@ -253,7 +257,7 @@ def archive_input_fingerprint_for_projection(
         "character_ids": character_ids,
         "prior_state": prior_fields,
     }
-    if contract_version == ARCHIVE_CONTRACT_VERSION:
+    if contract_version != LEGACY_ARCHIVE_CONTRACT_VERSION:
         payload["prior_state_uncertainties"] = [
             _fingerprint_uncertainty(item)
             for item in _relevant_prior_state_uncertainties(
@@ -342,6 +346,11 @@ def build_archive_user_message(
                 "relationship delta 所引用 fact 的 participant_names 必须恰好两人；"
                 "delta 不要重复输出 character_name 或 other_character_name，后端直接从 fact 推导关系双方。"
                 "没有明确章末净变化就不输出 delta，不得填未知或占位值。"
+                "continuity 必须包含 completed_fact_refs、known_fact_refs、last_landing_fact_refs、open_fact_refs 四个数组，允许全空；"
+                "只引用本次已输出的 fact_ref，不复写事实。同一fact_ref可同时被多个continuity类别引用，"
+                "只要分别满足类别条件；类别内不得重复引用。已发生进展不包含未决事实，不把决定增强为已执行；"
+                "已知只引用认知事实，不把参与者名单当作人人已知；最后落点必须有明确章末依据，不能按数组或段落顺序猜；"
+                "未决只引用未决事实。不能明确分类则留空，事实仍保留。"
             ),
         "# 已接受正文（稳定句号）\n" + numbered_text,
     ]
@@ -701,10 +710,10 @@ def _uncertainty_for_slot(
     return ValidatedUncertainty(character_id, other_id, scope, slot, payload)
 
 
-def _validate_archive_output_v21(chapter: Chapter, output: dict[str, Any]) -> ValidatedArchive:
+def _validate_archive_output_v21(chapter: Chapter, output: dict[str, Any], *, with_continuity: bool = False) -> ValidatedArchive:
     if not isinstance(output, dict):
         raise ArchiveV2ValidationError("archive output must be an object")
-    if set(output) != {"summary", "facts", "end_state_delta"}:
+    if set(output) != {"summary", "facts", "end_state_delta"} | ({"continuity"} if with_continuity else set()):
         raise ArchiveV2ValidationError("archive output contains unsupported fields")
     summary = _clean_text(output.get("summary"), field="summary", maximum=MAX_SUMMARY_CHARS)
     raw_facts, raw_deltas = output.get("facts"), output.get("end_state_delta")
@@ -850,7 +859,34 @@ def _validate_archive_output_v21(chapter: Chapter, output: dict[str, Any]) -> Va
     if len(deltas) > MAX_STATE_DELTAS:
         raise ArchiveV2ValidationError(f"end_state_delta exceeds limit {MAX_STATE_DELTAS}")
     diagnostics = tuple(item.payload for item in uncertainties)
-    return ValidatedArchive(summary, tuple(facts), tuple(deltas), tuple(uncertainties), diagnostics)
+    continuity = validate_continuity(output.get("continuity"), facts_by_source_ref) if with_continuity else None
+    return ValidatedArchive(summary, tuple(facts), tuple(deltas), tuple(uncertainties), diagnostics, continuity)
+
+
+def validate_continuity(value: Any, facts_by_ref: dict[str, ValidatedFact]) -> dict[str, list[str]]:
+    """Validate classification references, rebinding aliases without inventing prose."""
+    if not isinstance(value, dict) or set(value) != set(CONTINUITY_KEYS):
+        raise ArchiveV2ValidationError("continuity must contain exactly four reference arrays")
+    result: dict[str, list[str]] = {}
+    for key in CONTINUITY_KEYS:
+        refs = value[key]
+        if not isinstance(refs, list):
+            raise ArchiveV2ValidationError("continuity references must be arrays")
+        canonical: list[str] = []
+        for ref in refs:
+            if not isinstance(ref, str) or ref not in facts_by_ref:
+                raise ArchiveV2ValidationError("continuity references an unknown fact")
+            fact = facts_by_ref[ref]
+            if ((key == "known_fact_refs" and fact.fact_type != "认知")
+                or (key == "open_fact_refs" and fact.fact_type != "未决")
+                or (key == "completed_fact_refs" and fact.fact_type == "未决")):
+                raise ArchiveV2ValidationError("continuity classification does not match fact type")
+            if fact.fact_ref not in canonical:
+                canonical.append(fact.fact_ref)
+        if len(canonical) > MAX_FACTS:
+            raise ArchiveV2ValidationError("continuity exceeds canonical fact limit")
+        result[key] = canonical
+    return result
 
 
 def validate_archive_output(
@@ -863,9 +899,9 @@ def validate_archive_output(
     try:
         if contract_version == LEGACY_ARCHIVE_CONTRACT_VERSION:
             return _validate_archive_output_v20(chapter, output)
-        if contract_version != ARCHIVE_CONTRACT_VERSION:
+        if contract_version not in {STATE_ARCHIVE_CONTRACT_VERSION, ARCHIVE_CONTRACT_VERSION}:
             raise ArchiveV2ValidationError("unsupported archive contract version")
-        return _validate_archive_output_v21(chapter, output)
+        return _validate_archive_output_v21(chapter, output, with_continuity=contract_version == ARCHIVE_CONTRACT_VERSION)
     except ArchiveV2ValidationError as exc:
         if exc.diagnostics:
             raise
@@ -962,6 +998,10 @@ def activate_archive_revision(
         raise ArchiveV2ValidationError(
             f"end_state_delta and state uncertainties exceed limit {MAX_STATE_DELTAS}"
         )
+    if revision.contract_version == ARCHIVE_CONTRACT_VERSION:
+        validate_continuity(validated.continuity, {fact.fact_ref: fact for fact in validated.facts})
+    elif validated.continuity is not None:
+        raise ArchiveV2ValidationError("old archive contract cannot carry continuity")
 
     db.execute(
         update(ChapterArchiveRevision)
@@ -969,6 +1009,7 @@ def activate_archive_revision(
         .values(is_active=False)
     )
     revision.summary = validated.summary
+    revision.continuity = validated.continuity
     revision.model_name = model_name
     revision.diagnostics = [dict(item) for item in validated.diagnostics]
     revision.state_uncertainties = [dict(item.payload) for item in validated.state_uncertainties]
@@ -1488,6 +1529,9 @@ def archive_read_model(db: Session, chapter: Chapter) -> dict[str, Any]:
             "schema": "v2",
             "revision_id": active.id,
             "revision": active.revision,
+            "contract_version": active.contract_version,
+            "continuity": ({key: [next(fact.id for fact in active.facts if fact.fact_ref == ref) for ref in refs]
+                            for key, refs in active.continuity.items()} if active.continuity is not None else None),
             "summary": active.summary,
             "facts": [
                 {

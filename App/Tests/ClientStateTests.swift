@@ -2112,6 +2112,47 @@ private func testBookModelSettingsDraftCapabilitiesAndPayload() throws {
     try expect(missing.payload == nil, "deleted profile must never remain saveable")
 }
 
+private func testBuild75ContinuityAndQualityPriority() throws {
+    let legacy = try JSONDecoder().decode(ChapterArchive.self, from: Data(#"{"status":"complete","summary":"旧摘要","facts":[]}"#.utf8))
+    try expect(legacy.contractVersion == nil && legacy.continuity == nil, "old archives must remain readable without invented classifications")
+    let archive = try JSONDecoder().decode(ChapterArchive.self, from: Data(#"{"status":"complete","contract_version":"archive-v2.2","continuity":{"completed_fact_refs":["f1"],"known_fact_refs":["f1"],"last_landing_fact_refs":[],"open_fact_refs":[]},"facts":[{"id":"f1","type":"event","importance":3,"text":"小舟已经抵岸。","participant_ids":[],"start_id":"s1","end_id":"s1"}]}"#.utf8))
+    try expect(archive.continuity?.completedFactRefs == ["f1"] && archive.continuity?.knownFactRefs == ["f1"], "new continuity must preserve shared fact references")
+    let oldMemory = try JSONDecoder().decode(MemoryContext.self, from: Data(#"{"memory_brief":[]}"#.utf8))
+    try expect(oldMemory.previousChapterContext == nil, "legacy memory must not invent a previous chapter")
+    let memory = try JSONDecoder().decode(MemoryContext.self, from: Data(#"{"previous_chapter_context":{"chapter_id":"c1","chapter_index":1,"mode":"v2","contract_version":"archive-v2.2","sources":[{"id":"history:previous:c1:fact:0","text":"小舟已经抵岸。","kind":"fact","labels":["已发生起点","已知事实"],"participant_ids":["p1","p2"]}],"previous_ending":"两人走上码头。"}}"#.utf8))
+    try expect(memory.previousChapterContext?.sources.first?.participantIDs == ["p1", "p2"], "continuity must preserve both participants and exact original text")
+    try expect(memory.previousChapterContext?.sources.first?.text == "小舟已经抵岸。", "client must not rewrite source text")
+    for (kind, label) in [("continuity_repeated_progress", "重复推进"), ("continuity_known_reset", "已知信息倒退"), ("continuity_timeline_conflict", "时间承接冲突"), ("required_order_conflict", "指定顺序冲突"), ("older_kind", "older_kind")] {
+        try expect(CheckerIssue.label(for: kind) == label, "checker labels must support new and unknown kinds")
+    }
+    func capabilities(toggle: Bool, required: Bool = false, temp: Bool = false, levels: [String] = []) throws -> ModelCapabilities {
+        try JSONDecoder().decode(ModelCapabilities.self, from: JSONSerialization.data(withJSONObject: [
+            "thinking_toggle_supported": toggle, "thinking_required": required,
+            "temperature_effective_when_thinking": temp, "reasoning_effort_levels": levels]))
+    }
+    let high = try capabilities(toggle: true, levels: ["high", "max"])
+    let preset = QualityPriorityPreset(role: "writer", profileID: "same-profile", profileExists: true, capabilities: high, temperature: 0.7)
+    let payload = try JSONSerialization.jsonObject(with: JSONEncoder().encode(preset.payload!)) as! [String: Any]
+    try expect(payload["llm_profile_id"] as? String == "same-profile" && payload["thinking_enabled"] as? Bool == true && payload["reasoning_effort"] as? String == "high" && payload["temperature"] is NSNull && payload.count == 4, "quality action must send one complete compatible binding without switching profiles")
+    let required = QualityPriorityPreset(role: "checker", profileID: "same-profile", profileExists: true, capabilities: try capabilities(toggle: false, required: true, temp: true), temperature: 0.35)
+    try expect(required.payload?.thinkingEnabled == nil && required.payload?.reasoningEffort == nil && required.payload?.temperature == 0.35, "required reasoning uses default effort and keeps effective temperature")
+    for blocked in [
+        QualityPriorityPreset(role: "extractor", profileID: "p", profileExists: true, capabilities: high, temperature: nil),
+        QualityPriorityPreset(role: "writer", profileID: nil, profileExists: false, capabilities: high, temperature: nil),
+        QualityPriorityPreset(role: "writer", profileID: "p", profileExists: true, capabilities: nil, temperature: nil),
+        QualityPriorityPreset(role: "writer", profileID: "p", profileExists: true, capabilities: .unsupported, temperature: nil)
+    ] { try expect(blocked.payload == nil && blocked.unavailableReason != nil, "unsupported preset must be disabled with a reason") }
+    let profile = try JSONDecoder().decode(LLMProfile.self, from: Data(#"{"id":"p","capabilities":{"thinking_toggle_supported":true,"thinking_can_disable":true,"reasoning_effort_levels":["high"],"temperature_effective_when_thinking":false}}"#.utf8))
+    var original = BookModelSettingsDraft(role: "writer")
+    original.selectProfile("p", profiles: [profile], row: nil)
+    original.thinking = false
+    original.temperature = 0.7
+    let baseline = original.payload
+    var editing = original
+    try expect(editing.applyQualityPriority() && editing.payload?.thinkingEnabled == true && editing.payload?.reasoningEffort == "high", "book action modifies the editing draft")
+    try expect(original.payload == baseline && original.payload?.thinkingEnabled == false, "discarding the editing draft preserves original book settings")
+}
+
 private func testV2ActionNetworkPolicyKeepsSettingsLocal() throws {
     try expect(!V2DeskPrimaryAction.openSettings.requiresNetwork, "model settings is local navigation and must stay available offline")
     try expect(V2DeskPrimaryAction.rerunChecker.requiresNetwork, "Checker recovery still requires a server request")
@@ -2122,6 +2163,7 @@ private func testV2ActionNetworkPolicyKeepsSettingsLocal() throws {
 private struct ClientStateTestRunner {
     @MainActor
     static func main() throws {
+        try testBuild75ContinuityAndQualityPriority()
         try testV2ActionNetworkPolicyKeepsSettingsLocal()
         try testBookModelSettingsDraftCapabilitiesAndPayload()
         try testProtocolErrorReasonsRemainVisible()

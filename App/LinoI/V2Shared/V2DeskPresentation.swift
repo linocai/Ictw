@@ -199,6 +199,7 @@ struct V2DeskEvidenceItem: Identifiable, Equatable, Sendable {
     let sourceKind: String
     let sourceEvidence: String
     let reason: String
+    var kindLabel: String { CheckerIssue.label(for: kind) }
 
     init(_ issue: CheckerIssue) {
         id = issue.id

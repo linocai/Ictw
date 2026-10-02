@@ -3441,6 +3441,7 @@ final class AgentSettingsStore: ObservableObject {
     @Published private(set) var bookPersonasBookID: String?
     @Published private(set) var bookModelBindings: [BookAgentModelBinding] = []
     @Published private(set) var bookModelBindingsBookID: String?
+    @Published private(set) var qualityPrioritySavingRoles: Set<String> = []
 
     private var personaReadID = UUID()
     private var modelReadID = UUID()
@@ -3756,6 +3757,51 @@ final class AgentSettingsStore: ObservableObject {
                 )
             }
             session.notices.publish(error)
+        }
+    }
+
+    func qualityPriorityPreset(role: String) -> QualityPriorityPreset {
+        let current = bindings.first { $0.agentRole == role }
+        let profile = profiles.first { $0.id == current?.llmProfileId }
+        return QualityPriorityPreset(
+            role: role, profileID: current?.llmProfileId, profileExists: profile != nil,
+            capabilities: profile?.capabilities ?? current?.capabilities,
+            temperature: current?.temperature
+        )
+    }
+
+    /// A deliberate global setting action: one complete PATCH, no model call.
+    @discardableResult
+    func applyQualityPriority(role: String) async -> Bool {
+        guard sync.networkActionsAvailable, !qualityPrioritySavingRoles.contains(role),
+              let current = bindings.first(where: { $0.agentRole == role }),
+              let payload = qualityPriorityPreset(role: role).payload else { return false }
+        qualityPrioritySavingRoles.insert(role)
+        defer { qualityPrioritySavingRoles.remove(role) }
+        let base = AgentBindingPayload(
+            llmProfileId: current.llmProfileId, thinkingEnabled: current.thinkingEnabled,
+            reasoningEffort: current.reasoningEffort, temperature: current.temperature
+        )
+        do {
+            let binding: AgentBinding = try await session.api.request(
+                "/agent-model-bindings/\(role)", method: "PATCH", body: payload,
+                ifMatch: current.contentRevision
+            )
+            if let index = bindings.firstIndex(where: { $0.agentRole == role }) { bindings[index] = binding }
+            else { bindings.append(binding) }
+            session.notices.publish("\(role == "writer" ? "写作" : "检查")已启用质量优先推理。")
+            return true
+        } catch {
+            if let conflict = error as? APIError, case .writeConflict = conflict {
+                await sync.recordWriteConflict(
+                    kind: .modelBinding, id: role, path: "/agent-model-bindings/\(role)", method: "PATCH",
+                    readPath: "/agent-model-bindings/\(role)", readStrategy: .direct,
+                    baseRevision: current.contentRevision, payload: payload, baseSnapshot: base,
+                    error: conflict, api: session.api
+                )
+            }
+            session.notices.publish(error)
+            return false
         }
     }
 

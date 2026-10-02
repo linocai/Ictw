@@ -359,7 +359,10 @@ def test_v1_6_migration_preserves_notes_custom_persona_and_child_rows(tmp_path, 
         ).scalar_one() == "writer persona"
         assert migrated.execute(
             text("SELECT system_prompt FROM agent_personas WHERE agent_role='memory_selector'")
-        ).scalar_one() == DEFAULT_PERSONAS["memory_selector"]
+        ).scalar_one() == (
+            "你是严谨的小说记忆编辑。只压缩有明确来源的既有历史事实，为本章写作提供短而密集、可追溯的记忆简报。"
+            "绝不推断人物动机、补足因果、续写事件或预测未来。"
+        )
         assert migrated.execute(
             text("SELECT llm_profile_id FROM agent_model_bindings WHERE agent_role='memory_selector'")
         ).scalar_one() == "lp"

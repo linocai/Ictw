@@ -36,7 +36,7 @@ from app.services.production_context import (
 )
 
 
-def _story(*, duplicate_name: bool = False) -> tuple[str, str, str]:
+def _story(*, duplicate_name: bool = False, distant: bool = False) -> tuple[str, str, str]:
     with db_module.SessionLocal() as db:
         book = Book(title="快照书", world_setting="现代，没有超自然力量。")
         db.add(book)
@@ -57,6 +57,13 @@ def _story(*, duplicate_name: bool = False) -> tuple[str, str, str]:
         db.flush()
         current.character_links.append(ChapterCharacter(character_id=selected.id))
         db.commit()
+        if distant:
+            future.index = 4; db.flush()
+            current.index = 3; db.flush()
+            prior.index = 2; db.flush()
+            db.add(Chapter(book_id=book.id, index=1, status="finalized", legacy_archive_eligible=True,
+                           long_summary="较早的中性事实。", draft_text="较早的事件。"))
+            db.commit()
         return current.id, prior.id, future.id
 
 
@@ -334,7 +341,7 @@ def test_snapshot_follows_prior_sources_not_future_changes_and_hidden_candidate_
         }
         # A frozen generated candidate is intentionally compared by its caller
         # against its private candidate row, not the still-visible chapter text.
-        selected = freeze_selected_write_input(db, chapter, hidden_text, memory_manifest=manifest)
+        selected = freeze_selected_write_input(db, chapter, hidden_text, memory_manifest=manifest, protocol_version="production-input-v2")
         assert selected["draft"]["source"] == "candidate"
         assert selected["name_hits"]
         assert is_frozen_input_current(db, chapter, selected)
@@ -378,7 +385,7 @@ def test_selected_write_input_freezes_before_writer_and_binds_candidate_without_
             "memory_brief": [], "conflicts": [], "previous_ending_start_id": None,
             "selection_mode": "test",
         }
-        prepared = prepare_selected_write_input(db, chapter, memory_manifest=manifest)
+        prepared = prepare_selected_write_input(db, chapter, memory_manifest=manifest, protocol_version="production-input-v2")
         assert prepared["draft"] == {"sha256": hashlib.sha256(b"").hexdigest(), "source": "candidate_pending"}
         reference_context = prepared["reference_context"]
         candidate = bind_selected_candidate_draft(prepared, "夏天说道：雨后回家。")
@@ -477,7 +484,7 @@ def test_selector_manifest_rebinds_only_equivalent_v2_sources(client, monkeypatc
         assert chapter is not None
         monkeypatch.setattr(production_context_service, "_history_blocks", lambda _db, _chapter: current)
         prepared = prepare_selected_write_input(
-            db, chapter, memory_manifest=manifest, selector_candidates=old,
+            db, chapter, memory_manifest=manifest, selector_candidates=old, protocol_version="production-input-v2",
         )
         assert prepared["memory_manifest"]["memory_brief"][0]["source_ids"] == ["new-fact"]
         assert prepared["memory_manifest"]["sources"][0]["id"] == "new-fact"
@@ -488,7 +495,7 @@ def test_selector_manifest_rebinds_only_equivalent_v2_sources(client, monkeypatc
         )]
         monkeypatch.setattr(production_context_service, "_history_blocks", lambda _db, _chapter: changed)
         with pytest.raises(ProductionInputChanged):
-            prepare_selected_write_input(db, chapter, memory_manifest=manifest, selector_candidates=old)
+            prepare_selected_write_input(db, chapter, memory_manifest=manifest, selector_candidates=old, protocol_version="production-input-v2")
 
 
 def test_selector_validation_uses_independent_700_and_2400_budgets_and_one_correction() -> None:

@@ -1,0 +1,390 @@
+{
+  "date": "2026-10-02",
+  "status": "local_engineering_complete_review_findings_open",
+  "scope": "v2.4.0 Build75 local engineering implementation only",
+  "baseline_commit": "05a7eb3aadb18457d12f27f9010531ba506a8be7",
+  "production_unchanged": {
+    "version": "2.3.4",
+    "build": 74,
+    "source_commit": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+    "alembic_head": "20260929_0015"
+  },
+  "workflow_roles": {
+    "planner": "gpt-6-astra/xhigh",
+    "builder": "gpt-6.1-sol/xhigh"
+  },
+  "client": {
+    "state_gate": "passed",
+    "store_http": {
+      "passed": 100,
+      "failed": 0
+    },
+    "ios_native": {
+      "passed": 3,
+      "failed": 0,
+      "device": "主模拟器 / iPhone18Pro / iOS27",
+      "cases": [
+        "global explicit quality preset saves once",
+        "book draft discard and explicit save",
+        "continuity issue label and exact history quote"
+      ]
+    },
+    "mac_native": {
+      "method": "CUA isolated debug app",
+      "passed": [
+        "global Checker quality preset",
+        "book draft no write before Save",
+        "unsaved-leave protection",
+        "book explicit Save",
+        "continuity labels and original history quote",
+        "evidence card width and multiline layout after narrow fix"
+      ]
+    },
+    "builds": {
+      "iOS": "Debug App target LinoI passed",
+      "macOS": "Debug App target LinoIMac passed",
+      "toolchain": "Xcode27.0 (27A266a)",
+      "deployment_targets": "27.0",
+      "marketing_version": "2.4.0",
+      "build_number": 75,
+      "signing_release_or_device_install": false
+    },
+    "source_sha256": {
+      "App/LinoI.xcodeproj/project.pbxproj": "776b969adcda6faf49d906411215528c5b4203a17911f33b0e62c535ad394cb7",
+      "App/LinoI/LinoModels.swift": "129b4411a5db3ecbb0d1552da2c295b3c365f0007c084205e12b9a409c651cb9",
+      "App/LinoI/LinoStores.swift": "8f5c1bb7eed55b6967b1bcd754800c29718ec1bdb12e6a2be7b294a9f5ac5080",
+      "App/LinoI/V2IOS/V2IOSChapterFaces.swift": "6199ffeac571d1f90c6174b31b472992026695da3bf7805767bb23f787b249dd",
+      "App/LinoI/V2IOS/V2IOSSettingsAndExport.swift": "29550e0b24d0352c4205beddf331d71e8c2337a3fc49e2237fe2daacb1ad7755",
+      "App/LinoI/V2Shared/V2DeskPresentation.swift": "94c58831422ec9aa17e212c77ef984598243abfbe0a9444bbe61e6b0db60a4c7",
+      "App/LinoI/V2Shared/V2DeskStatusViews.swift": "7a3108cb69d112b7940868b983504631a148a41d7918be3157324f3d17b5876d",
+      "App/LinoIMac/V2/V2MacDeskEditor.swift": "911a0c7978eee9a5a81d9d58a6f421bcac0099748433eec8f530bea2935675e8",
+      "App/LinoIMac/V2/V2MacDeskSheets.swift": "0f6decc5e4b073ee6ec486acf5edfeb5af123b249cd299a0320def0f4f09c34f",
+      "App/Tests/ClientStateTests.swift": "abd1f08458e8a55376b19a062497b924798d9f900b16ac1ca378118d4a2d8c0a",
+      "App/Tests/V211StoreHTTPTests.swift": "2d640157fe8d66c4ea26de136b9db4593cdf778cde3d7cd0a7eb9b0076869f03",
+      "App/Tests/v211_http_fixture.py": "281dfbcbfc2d31342e80332d056e398b61c23ab31ded6ff4c6ef944a38930ea3"
+    }
+  },
+  "boundaries": {
+    "real_model_calls": 0,
+    "real_book_generation_or_reextraction": 0,
+    "literary_acceptance": "user only; not performed by agent",
+    "independent_review": "completed on 2026-10-02; two P2 findings open",
+    "commit_push_deploy_or_mac_replacement": false
+  },
+  "protected": {
+    ".learnings/ERRORS.md": true,
+    "App/LinoI.xcodeproj/xcshareddata/xcschemes/LinoIMac.xcscheme": true,
+    "pbx_sorting_preserved": true
+  },
+  "retained_images": [
+    {
+      "path": "archive/operations/2026-10-02-build75-ios/book-quality.png",
+      "bytes": 245037,
+      "sha256": "34ed01c3029cdf92e901b03b46d6e65b0715d40157bbfa5d355663ca7a35ed9d"
+    },
+    {
+      "path": "archive/operations/2026-10-02-build75-ios/continuity-evidence.png",
+      "bytes": 188265,
+      "sha256": "44305d0ba94201d1acc068569b58743ce59f521f79b235dcabd97aa77750762a"
+    },
+    {
+      "path": "archive/operations/2026-10-02-build75-ios/global-quality.png",
+      "bytes": 169038,
+      "sha256": "fc7908d39fe10e859fb4356bbb5b3884200ca166482761d1634e73bd47882af4"
+    }
+  ],
+  "apple_device_support": {
+    "status": "partial",
+    "pending_devices": [
+      "iPhone18,4"
+    ],
+    "action": "read-only; existing cache retained; no prepare/apply"
+  },
+  "resources": {
+    "simulator": {
+      "owned_bundles_before": 2,
+      "owned_bundles_after": 0,
+      "owned_containers_removed": true,
+      "bytes_before": null,
+      "bytes_before_note": "Pre-removal inventory calculated in memory but receipt was not written after asynchronous uninstall check failed; exact size is unavailable. Do not include in byte totals.",
+      "bytes_after": 0,
+      "external_app_inventory_delta": {
+        "removed": [
+          "top.linotsai.neckline.qa"
+        ],
+        "added": []
+      },
+      "external_delta_note": "Only the two com.lino.ictw.build75 bundles were uninstalled by this task; unrelated inventory changes were not restored.",
+      "state_restored": "Shutdown"
+    },
+    "mac_user_library": [
+      {
+        "path": "/Users/linotsai/Library/Preferences/com.lino.ictw.build75.mac.plist",
+        "bytes_before": null,
+        "bytes_after": 0,
+        "note": "Verified owned preference removed before first receipt write; not included in byte totals."
+      },
+      {
+        "path": "/Users/linotsai/Library/Preferences/com.lino.ictw.build75.mac-check.plist",
+        "bytes_before": 42,
+        "files": 1,
+        "manifest_sha256": "e200f6a8fc168b4d07d5f9d8b49ee1c12970adb92981917f2c269d143753bf8f",
+        "bytes_after": 0
+      },
+      {
+        "path": "/Users/linotsai/Library/Caches/com.lino.ictw.build75.mac",
+        "bytes_before": 1665436,
+        "files": 11,
+        "manifest_sha256": "4cf7dfe3534108548f40a5cd7dfeb0b648610c63bc8fe0e544ffd991fe45c871",
+        "bytes_after": 0
+      }
+    ],
+    "closed_test_diagnostic": {
+      "path": "/Users/linotsai/Library/Logs/DiagnosticReports/ictw-client-state-tests.hztheU-2026-10-02-115812.ips",
+      "bytes_before": 5578,
+      "sha256": "5130d185116c8dbad9bf67ca00913e5a8901311adbd52bbd752777a7d2f09779",
+      "reason": "Exact process/time matches this task first client-state fixture decode failure; OS redacts parent temp directory; final gate passed.",
+      "bytes_after": 0
+    },
+    "temporary_root": "/tmp/ictw-build75",
+    "temporary_root_cleanup": "complete",
+    "production_backup_and_delivery_sets": "untouched",
+    "remote_resources_created": false,
+    "frontend_scratch": {
+      "exact_roots": [
+        "/tmp/ictw-build75/ios-derived-data",
+        "/tmp/ictw-build75/mac-derived-data",
+        "/tmp/ictw-build75/ui-derived-data",
+        "/tmp/ictw-build75/ui-tests",
+        "/tmp/ictw-build75/ui-global.xcresult",
+        "/tmp/ictw-build75/ui-global-final.xcresult",
+        "/tmp/ictw-build75/ui-book.xcresult",
+        "/tmp/ictw-build75/ui-check.xcresult",
+        "/tmp/ictw-build75/ui-check-final.xcresult",
+        "/tmp/ictw-build75/ui-final.xcresult",
+        "/tmp/ictw-build75/screens-global",
+        "/tmp/ictw-build75/screens-book",
+        "/tmp/ictw-build75/screens-check",
+        "/tmp/ictw-build75/screens-final",
+        "/tmp/ictw-build75/mac-ui-data",
+        "/tmp/ictw-build75/mac-ui-check-data"
+      ],
+      "files": 8093,
+      "symlinks": 0,
+      "bytes_before": 772406998,
+      "manifest_sha256": "dc642df34edf28c6bb36e802d327a887c82ee9c03620bab7e99d1773fef2a52a",
+      "state": "removed_and_verified",
+      "bytes_after": 0
+    },
+    "remaining_scratch": {
+      "root": "/tmp/ictw-build75",
+      "files": 229,
+      "symlinks": 121,
+      "bytes_before": 67270605,
+      "manifest_sha256": "f17fbce33721291687fe6c7919d8d05b02dd31e1d057ee25e00f73e405c22202",
+      "state": "removed_and_verified",
+      "bytes_after": 0
+    },
+    "cleanup_helper_files": [
+      {
+        "path": "/tmp/ictw-build75-final-cleanup.py",
+        "bytes_before": 1846,
+        "sha256": "290d63f1b4672a0fb724f81861d96828e30e2043f2f80bc5ccbf09d0588bc5a6",
+        "bytes_after": 0
+      },
+      {
+        "path": "/tmp/ictw-build75-final-removal.json",
+        "bytes_before": 73760,
+        "sha256": "f17fbce33721291687fe6c7919d8d05b02dd31e1d057ee25e00f73e405c22202",
+        "bytes_after": 0
+      }
+    ],
+    "final_temp_inventory": {
+      "/tmp": [],
+      "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T": []
+    },
+    "cleanup_complete": true,
+    "temporary_root_measured_bytes_removed": 839677603,
+    "cleanup_helper_files_state": "removed_and_verified"
+  },
+  "backend": {
+    "final_suite": {
+      "passed": 616,
+      "failed": 0,
+      "skipped": 12,
+      "skip_reason": "existing legacy v1.6 multi-array/salvage contract superseded by v1.8 atomic fact ledger",
+      "elapsed_seconds": 58.16
+    },
+    "alembic_head": "20261002_0016 (head)",
+    "processes_stopped": true,
+    "isolation": "synthetic data and fake LLM; Settings env_file disabled; owned basetemp under /tmp/ictw-build75/backend-tests",
+    "contracts": [
+      "archive-v2.2",
+      "production-input-v3",
+      "project-package-v4"
+    ],
+    "production_migration_performed": false,
+    "earlier_full_suite": "614 passed /1 failed /12 skipped; immutable historical prompt expectation updated, then final full suite rerun after portable continuity normalization fix",
+    "handoff": "complete; no remaining engineering failures",
+    "new_build75_tests": 43,
+    "last_targeted_passed": 124,
+    "migration_and_packages": [
+      "0015 old data retained with continuity NULL",
+      "0016 refuses downgrade with v2.2 revisions without changing DB bytes",
+      "isolated backup restore verified integrity/foreign keys/head",
+      "v4 normalizes duplicate portable fact positions and atomically imports",
+      "v1/v2/v3 packages remain importable; invalid packages fail atomically"
+    ],
+    "source_sha256": {
+      "Backend/alembic/versions/20261002_0016_archive_continuity.py": "4555dbf3ea3494d35a71d9d2b7241013e24f27760ab089b238ad119bd1d28cbd",
+      "Backend/app/agents/extractor.py": "28fc794cf986f7f1aef71796a304628a4fcb898861d86d9b7d2336a8566a5438",
+      "Backend/app/agents/memory_selector.py": "6295a98989fc0c4602b6f3af77f01d6d6f073acfea165de4c127324f951feacc",
+      "Backend/app/main.py": "8dbf2a8d54b126a854936c2a40d2e03eea341d3ee9292b59aefa79090b9af503",
+      "Backend/app/models/entities.py": "34938074d727eae09648ff92a127be403294e30527794e34f6ba95ad95a1dd63",
+      "Backend/app/routers/chapters.py": "a7a422bc3c563f2c246e28b665449fac8367829378521a94a35ecc40455d613b",
+      "Backend/app/schemas/chapter.py": "7e1a382d93ce1d1ff6c744af74673c8103875d91a1bb87f1545b9b3675dc2aa7",
+      "Backend/app/services/archive_v2.py": "8cdcd85ae2980119716a12d54bff5bcf2ab3d499e4aca98f2e348efad4ad8ca0",
+      "Backend/app/services/chapter_continuity.py": "1bc057543a8a11add157872a24695de0e7f4a5084ef041997e841c6c8e88f833",
+      "Backend/app/services/checker_validation.py": "eed7fbf3283403116efa9a354e566c3eb0917d32a31c98ea28c8c3fd482504e5",
+      "Backend/app/services/context.py": "b2f59bdfd8a082d8b5c7dbe6b1b1bfaa1387f30f49ce011daea4569c9a04d330",
+      "Backend/app/services/personas.py": "247e1966fbcc48aa4402517e0c5daceeb5314a9741a2a42b5d4987163deb8c7c",
+      "Backend/app/services/production_context.py": "ba0e20da6357e3dc2ed4c281ffcbcab90cd0e504a0fb1ce5295be3f403f721be",
+      "Backend/app/services/project_packages.py": "af72d18a107d7e6ed29e4d0a66c46df1a62d0bcc9c75cbcdbf5d625a09b7b71d",
+      "Backend/app/services/write_jobs.py": "2534a6a796498b4888dcfa85c93a0be9bfc916d593d22c9971328928108de720",
+      "Backend/tests/conftest.py": "d6b4d52bd6d15493a6409f47511f9a833c73e5a3d28232550653019b9a6103cf",
+      "Backend/tests/test_api.py": "5f31010753339e314f8fd5d7421a2ece2f8e2dd0388addc211918ddd13ac37a9",
+      "Backend/tests/test_build61_sop_flow.py": "3c25156c9672169f72728404a1b6eefff1cfe83f198cc9aad1ede072b08af72c",
+      "Backend/tests/test_build67_rewrite_reference.py": "9a1f59d86f3eae20b9473efaf5538db99da1815cce4523d2e9b9fbf870f270cb",
+      "Backend/tests/test_build69_memory_data.py": "b227a491decae60a79dd1677d36d581fca20b2839b502fe1d22973ea30eb276b",
+      "Backend/tests/test_build71_recovery.py": "c20ac501dc93f961158b280b8d3b7b1bffae5cfb0c469761e6be34d3cab3c948",
+      "Backend/tests/test_build75_continuity.py": "63ef75f05a9cb69992dda6786c05d10337486676053545a52de9586b2d98c6b2",
+      "Backend/tests/test_v1_1_features.py": "9453f1570fabb8c431bc0a321aa9ebcfdf414310313501490e01a83861bf911d",
+      "Backend/tests/test_v1_2_field_revert.py": "cc5cc8c181256e267d9128f48dea464e93ab2271afe2cd9ff930e7d0b0926017",
+      "Backend/tests/test_v1_6_agent_foundation.py": "51197852991d53cf1ce60f9184c6fcdc8c647e5eea2474e65fa0405f39faf7ec",
+      "Backend/tests/test_v1_8_archive.py": "4c23c28e4099855511a13f423b598c5e90125663b5006318493b48bbd7700480",
+      "Backend/tests/test_v1_9_inspiration.py": "111bc1cf330c07d1a6fc5bd0a1f2f581b0ba76ef44beccab1608ccb91274a19d",
+      "Backend/tests/test_v1_schema_and_settings.py": "38742fff3633ab8c56d8ce5ef988623b7b12e8252cf3c5f572d5feca83c056ff",
+      "Backend/tests/test_v2_0_4_rewrite_and_delete.py": "a827b76043efc3a77fce30a354909f3359fb19a85b9248593e0a1f1c404ee5d2",
+      "Backend/tests/test_v2_2_archive_recovery.py": "26b4c4fc32cdd44a32347fe659a50c87074b66c54a7ee7cfc44711ae276fe9af",
+      "Backend/tests/test_v2_2_checker_context.py": "26f79bbb471bc667cd85cd120c61e5c62cbd2a205936dfaab3b559324b7c1e0c"
+    }
+  },
+  "final_integrity": {
+    "source_hashes_match_tested_files": true,
+    "protected_user_changes_preserved": true,
+    "git_diff_check": "passed",
+    "head_unchanged": true,
+    "nothing_staged": true,
+    "owned_runtime_processes_stopped": true,
+    "shared_simulator_state": "Shutdown"
+  },
+  "independent_review": {
+    "date": "2026-10-02",
+    "reviewer": "gpt-6.1-sol/max",
+    "status": "two_P2_findings_open",
+    "baseline_commit": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+    "head_commit": "05a7eb3aadb18457d12f27f9010531ba506a8be7",
+    "scope": "All Build75 tracked unstaged and untracked changes from deployed Build74; index empty. Excludes existing ERRORS user changes and pbx sorting; protects Mac scheme.",
+    "scope_sha256": "0f28977a7bca8c87cc55652ec84f7337d3c3e134a3be2b1766f4ebdfd6279e45",
+    "scope_target_paths_unchanged": true,
+    "tested_source_hashes": "Same files as backend.source_sha256 and client.source_sha256 above; reverified before review closure. Only review documentation changed afterward.",
+    "findings": [
+      {
+        "id": "R75-1",
+        "priority": "P2",
+        "status": "open",
+        "file": "Backend/app/services/archive_v2.py",
+        "line": 1152,
+        "related_file": "Backend/app/routers/chapters.py",
+        "related_line": 856,
+        "title": "Metadata-only PATCH invalidates active old-contract archives",
+        "impact": "Build74 v2.1 archive becomes stale and loses active revision when only author_note changes; usable memory is excluded and dependent archives may cascade.",
+        "fix_direction": "Compute pre/post archive input fingerprints with the same active contract; cover old-contract author-note and empty PATCH."
+      },
+      {
+        "id": "R75-2",
+        "priority": "P2",
+        "status": "open",
+        "file": "Backend/app/services/chapter_continuity.py",
+        "line": 36,
+        "title": "Quoted ending can become an isolated closing quote",
+        "impact": "An oversized final quoted sentence returns only the closing quote, then becomes an accepted ending without unavailable warning.",
+        "fix_direction": "Keep closing quotation marks with the sentence; omit an oversized final sentence as a whole and report the limitation."
+      }
+    ],
+    "reproductions": [
+      {
+        "name": "old_contract_fingerprint_invalidates_metadata_patch",
+        "setup": "Existing test_build75_continuity._story(db, old=True); finalized previous chapter with active archive-v2.1.",
+        "request": "PATCH /api/v1/chapters/{id}, If-Match=current revision, body={\"author_note\":\"中性备注\"}",
+        "before": {
+          "chapter_status": "finalized",
+          "archive_status": "complete",
+          "active_contract": "archive-v2.1",
+          "default_fingerprint_matches_stored": false,
+          "same_contract_fingerprint_matches_stored": true
+        },
+        "after": {
+          "http_status": 200,
+          "chapter_status": "finalized",
+          "archive_status": "stale",
+          "active_revision_present": false,
+          "revision_status": "stale",
+          "prose_unchanged": true
+        },
+        "locations": [
+          "Backend/app/services/archive_v2.py:44",
+          "Backend/app/routers/chapters.py:856",
+          "Backend/app/services/archive_v2.py:1152"
+        ]
+      },
+      {
+        "name": "quoted_ending_split",
+        "input_expression": "\"他说：“\" + \"长\" * 705 + \"。”\"",
+        "input_nonspace_chars": 711,
+        "complete_ending_result": "”",
+        "result_nonspace_chars": 1,
+        "locations": [
+          "Backend/app/services/chapter_continuity.py:36",
+          "Backend/app/services/chapter_continuity.py:99",
+          "Backend/app/services/chapter_continuity.py:129"
+        ]
+      }
+    ],
+    "verification": "Neutral local function checks plus isolated synthetic TestClient; Settings env_file=None before app imports; no real LLM/DB/env/SSH/App operations; no pytest/build rerun.",
+    "not_covered": [
+      "real model literary quality",
+      "real book data",
+      "device acceptance",
+      "production migration/deployment"
+    ],
+    "repository_code_changed": false,
+    "resources": {
+      "root": "/tmp/ictw-build75-review-20261002",
+      "bytes_before": 8784,
+      "exact_files": [
+        {
+          "path": "/tmp/ictw-build75-review-20261002/review-evidence.json",
+          "bytes_before": 2188,
+          "sha256": "bea35bbf22bfb406928b0affebfd8037857a58cbe5c5a6a59cfff5deaf95a0f5",
+          "bytes_after": 0
+        },
+        {
+          "path": "/tmp/ictw-build75-review-20261002/scope.json",
+          "bytes_before": 6596,
+          "sha256": "0f28977a7bca8c87cc55652ec84f7337d3c3e134a3be2b1766f4ebdfd6279e45",
+          "bytes_after": 0
+        }
+      ],
+      "state": "removed_and_verified",
+      "background_processes": "none",
+      "synthetic_databases": "disposed and removed",
+      "remote_resources": "none",
+      "bytes_after": 0,
+      "final_temp_inventory": {
+        "/tmp": [],
+        "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T": []
+      }
+    }
+  }
+}

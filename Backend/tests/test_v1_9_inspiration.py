@@ -576,7 +576,7 @@ def test_missing_inspiration_profile_uses_safe_configuration_error(client, auth_
     }
 
 
-def test_exact_shipped_short_idea_persona_migrates_but_custom_persona_is_preserved(client) -> None:
+def test_shipped_and_custom_idea_personas_are_preserved(client) -> None:
     with db_module.SessionLocal() as db:
         persona = db.get(AgentPersona, "inspiration_creator")
         assert persona is not None
@@ -585,7 +585,7 @@ def test_exact_shipped_short_idea_persona_migrates_but_custom_persona_is_preserv
             db.commit()
             seed_defaults(db)
             db.refresh(persona)
-            assert persona.system_prompt == DEFAULT_PERSONAS["inspiration_creator"]
+            assert persona.system_prompt == legacy_prompt
 
         persona.system_prompt = "用户自定义的灵感人格"
         db.commit()

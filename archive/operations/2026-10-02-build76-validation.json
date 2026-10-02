@@ -1,0 +1,156 @@
+{
+  "date": "2026-10-02",
+  "version": "2.4.0",
+  "build": 76,
+  "status": "local_fix_verified_and_review_closed",
+  "baseline_commit": "05a7eb3aadb18457d12f27f9010531ba506a8be7",
+  "baseline": "Build75 reviewed working tree; exact four-file before/after diff captured before independent re-review",
+  "fixes": [
+    "R75-1 active contract preserved across PATCH fingerprints",
+    "R75-2 final punctuation and closing quotes remain in the same ending unit"
+  ],
+  "source_sha256": {
+    "Backend/app/routers/chapters.py": "5e1950793267b34245f448cbae8f5e9dca96a7b0e328977202272c49e021da40",
+    "Backend/app/services/chapter_continuity.py": "58f0185223248adf465ef98bf26016529ee60eefa9e4ce2baafbaea1840e47a6",
+    "Backend/tests/test_build75_continuity.py": "670575ada081ce71e585c8c1aec4a8ac43d61bf93c00e34b69352961f5f0455c",
+    "App/LinoI.xcodeproj/project.pbxproj": "0a2377df7065ad061f54ee00077fa073372b27a4d9cc2c0a6c6beb2aba7213cc"
+  },
+  "fix_diff_sha256": "84e5117e92d1e9da6d42e25efe79537cfb8ff360d956e109caf2a6ef779f24b2",
+  "baseline_source_sha256": {
+    "Backend/app/routers/chapters.py": "a7a422bc3c563f2c246e28b665449fac8367829378521a94a35ecc40455d613b",
+    "Backend/app/services/chapter_continuity.py": "1bc057543a8a11add157872a24695de0e7f4a5084ef041997e841c6c8e88f833",
+    "Backend/tests/test_build75_continuity.py": "63ef75f05a9cb69992dda6786c05d10337486676053545a52de9586b2d98c6b2",
+    "App/LinoI.xcodeproj/project.pbxproj": "776b969adcda6faf49d906411215528c5b4203a17911f33b0e62c535ad394cb7"
+  },
+  "backend": {
+    "new_regression_cases": 24,
+    "before_fix": {
+      "failed": 15,
+      "passed": 9,
+      "note": "After correcting the new test fixture chapter ID lookup; actual two product regressions confirmed."
+    },
+    "targeted": {
+      "passed": 130,
+      "failed": 0
+    },
+    "full": {
+      "passed": 640,
+      "failed": 0,
+      "skipped": 12,
+      "warnings": 151,
+      "elapsed_seconds": 59.43
+    },
+    "isolation": "Settings env_file=None, synthetic env/DB and fake LLM, all temporary DBs under owned root",
+    "alembic_head": "20261002_0016 (unchanged)"
+  },
+  "apple_settings": [
+    {
+      "target": "LinoI",
+      "configuration": "Debug",
+      "version": "2.4.0",
+      "build": "76",
+      "deployment_target": "27.0",
+      "sdk": "27.0"
+    },
+    {
+      "target": "LinoIMac",
+      "configuration": "Debug",
+      "version": "2.4.0",
+      "build": "76",
+      "deployment_target": "27.0",
+      "sdk": "27.0"
+    },
+    {
+      "target": "LinoI",
+      "configuration": "Release",
+      "version": "2.4.0",
+      "build": "76",
+      "deployment_target": "27.0",
+      "sdk": "27.0"
+    },
+    {
+      "target": "LinoIMac",
+      "configuration": "Release",
+      "version": "2.4.0",
+      "build": "76",
+      "deployment_target": "27.0",
+      "sdk": "27.0"
+    }
+  ],
+  "validation_boundary": "Backend-only behavior fix plus four project build numbers. No Swift changes; no new client build/UI/device validation. Build75 client evidence remains scoped to its unchanged client source, not a claim of Build76 artifact validation.",
+  "protected_user_changes": "Only registered four files changed; pbx matches Build75 byte-for-byte after reversing build76→75; ERRORS and Mac scheme untouched",
+  "production_unchanged": {
+    "version": "2.3.4",
+    "build": 74,
+    "source": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+    "head": "20260929_0015"
+  },
+  "boundaries": {
+    "commit_push_deploy": false,
+    "real_model_calls": 0,
+    "real_book_write_or_reextraction": false,
+    "literary_acceptance": "user only",
+    "installed_app_replaced": false
+  },
+  "resources": {
+    "temporary_root": "/tmp/ictw-build76",
+    "status": "removed_and_verified",
+    "remote_created": false,
+    "files": 77,
+    "symlinks": 36,
+    "bytes_before": 20347170,
+    "manifest_sha256": "60c05d97a30d4ee00e83c9d0cab92208e216f434ad6d520cfa25011957cde24d",
+    "manifest_bytes": 21951,
+    "all_owned_processes_stopped": true,
+    "production_backups_deliveries_and_shared_caches": "untouched",
+    "bytes_after": 0,
+    "final_temp_inventory": {
+      "/tmp": [],
+      "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T": []
+    }
+  },
+  "logs_sha256": {
+    "regression-before.log": "bd20201934ddb3bb37b9f5a028175d3a2d34dacdc581592cd4b222faf9bcc3ec",
+    "targeted.log": "9dd243e80829bfc35e5f865385109d1b8b115f453081f682ab130713a418ad15",
+    "backend-full.log": "bae8a524ce43bb6f3077ebb9ff931d63c7a9f0715d7ab22db17f811737efb6e7",
+    "review/targeted-fixed-env.log": "b6f93729cd250ab0e0addc29485952a9f74659944068041294fdd23424fe7f3c"
+  },
+  "independent_review": {
+    "version": "v2.4.0-build76",
+    "head": "05a7eb3aadb18457d12f27f9010531ba506a8be7",
+    "diff_sha256": "84e5117e92d1e9da6d42e25efe79537cfb8ff360d956e109caf2a6ef779f24b2",
+    "target_source_hashes_unchanged": true,
+    "protected_scheme_unchanged": true,
+    "pbx_only_four_build_increments": true,
+    "closed": [
+      "R75-1",
+      "R75-2"
+    ],
+    "new_findings": [],
+    "independent_validation": {
+      "added_regressions": "24 passed",
+      "additional_function_checks": "700 chars retained, 701 omitted for closed quotation and nested quotation with consecutive punctuation",
+      "environment": "Settings env_file disabled before app imports; synthetic fixture auth and database; no real model/env/data/App/SSH"
+    },
+    "superseded_environment_run": "15 HTTP401 failures and 9 passed solely because reviewer synthetic APP_TOKEN mismatched fixed fixture auth_headers; corrected run all passed; original failure log removed.",
+    "main_session_full_suite": "640 passed / 12 existing skipped, reported by main session; not independently rerun",
+    "resources": {
+      "superseded_log_bytes_removed": 28459,
+      "synthetic_db_remnants": [],
+      "background_processes": "none launched",
+      "retained": [
+        "targeted-fixed-env.log",
+        "review-evidence.json"
+      ],
+      "retention": "main-session closure and cleanup"
+    }
+  },
+  "final_integrity": {
+    "source_hashes_unchanged_since_tests_and_review": true,
+    "protected_user_files_unchanged": true,
+    "pbx_change_only_four_build_numbers": true,
+    "nothing_staged": true,
+    "head_unchanged": true,
+    "git_diff_check": "passed"
+  }
+}

@@ -108,7 +108,7 @@ def test_checker_factory_is_available() -> None:
     assert callable(get_checker_client)
 
 
-def test_seed_defaults_migrates_only_exact_legacy_extractor_settings(tmp_path) -> None:
+def test_seed_defaults_preserves_legacy_and_custom_extractor_settings(tmp_path) -> None:
     engine = make_engine(f"sqlite:///{tmp_path / 'personas.db'}")
     Base.metadata.create_all(engine)
     with Session(engine) as db:
@@ -120,8 +120,8 @@ def test_seed_defaults_migrates_only_exact_legacy_extractor_settings(tmp_path) -
         db.commit()
 
         seed_defaults(db)
-        assert db.get(AgentPersona, "extractor").system_prompt == DEFAULT_PERSONAS["extractor"]
-        assert db.get(AgentModelBinding, "extractor").temperature == 0.1
+        assert db.get(AgentPersona, "extractor").system_prompt in LEGACY_EXTRACTOR_PERSONAS
+        assert db.get(AgentModelBinding, "extractor").temperature == 0.3
 
         db.get(AgentPersona, "extractor").system_prompt = "用户自己的 Extractor 人格"
         db.get(AgentModelBinding, "extractor").temperature = 0.3

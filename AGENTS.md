@@ -38,7 +38,9 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 - 只有确定性校验和 Checker 均通过、且任务仍持有本章所有权时，Writer 新正文才能与 JobRun 终态在同一事务提升。
 - 自动写作的 Checker 必须使用与 Writer 相同的既有事实快照；手动复查也须提供世界观、已选人物卡、章前状态与有效历史。既有关系不因 Bible 未重复说明而视为新增；围绕本章意图的自然互动与渐进发展不要求逐项授权，明确冲突和未经授权的重大转折仍须检查，历史不授权未选人物。
 - 正文接受与归档独立：接受后章节立即 `finalized`；Extractor 失败不得撤销正文接受或重跑 Checker。
-- v2 Extractor 每个 revision 只调用一次；v2.0沿用原完整契约，v2.1仅完整验证的 `summary + canonical facts + end_state_delta + state_uncertainties` 可原子激活。未知槽必须遮蔽旧状态，不按数组顺序猜章末结论。
+- v2 Extractor 每个 revision 只调用一次；v2.0/v2.1保留各自完整合同与指纹，v2.2增加四类canonical fact引用，全部校验后才能原子激活。同一事实可被多个承接类别引用，正文只存一份；未知槽遮蔽旧状态，不按数组顺序猜章末结论。
+- 新写作使用production-input-v3：紧邻上一章有效资料机械直送，远历史Selector只选原文source ID；Writer/Checker共享冻结引用。旧v1/v2候选检查按原快照验证，不能因升级强行改写输入；等价重归档可重绑定，事实类型及承接分类变化必须失效。
+- 项目包v4保存可移植承接引用，并兼容旧v1/2/3。0016库含任何v2.2 revision时拒绝破坏性downgrade；不得用旧代码或发布前整库覆盖新业务数据。
 - `partial`、`failed`、`stale` revision 不得进入 Selector、人物故事线或状态投影。
 - 历史章节每章只选择一个记忆来源：活跃 v2 优先，否则仅在 `legacy_archive_eligible` 时使用 legacy。
 - 历史重提必须来自只读报告、正文哈希复核和用户精确 ID 确认；不得自动全量或按观察项调用模型。

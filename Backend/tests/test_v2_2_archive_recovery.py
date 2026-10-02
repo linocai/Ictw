@@ -1,4 +1,6 @@
 from __future__ import annotations
+from functools import partial
+
 
 import hashlib
 import io
@@ -20,7 +22,7 @@ from app.models import (
 )
 from app.agents.extractor import extractor_v2_schema
 from app.services.archive_v2 import (
-    ARCHIVE_CONTRACT_VERSION,
+    STATE_ARCHIVE_CONTRACT_VERSION as ARCHIVE_CONTRACT_VERSION,
     LEGACY_ARCHIVE_CONTRACT_VERSION,
     MAX_RAW_FACTS,
     MAX_RAW_STATE_DELTAS,
@@ -38,6 +40,9 @@ from app.services.character_state_projection import (
     project_state_changes,
 )
 
+
+# This suite tests the retained v2.1 validator, not the new v2.2 root fields.
+validate_archive_output = partial(validate_archive_output, contract_version="archive-v2.1")
 
 def _chapter() -> SimpleNamespace:
     character = SimpleNamespace(id="character-a", name="甲")
@@ -456,6 +461,11 @@ def _repack(entries: dict[str, bytes]) -> bytes:
 def _refresh_manifest(entries: dict[str, bytes], *, format_version: int) -> None:
     manifest = json.loads(entries["manifest.json"])
     manifest["format_version"] = format_version
+    if format_version < 4:
+        archives = json.loads(entries["archives.json"])
+        for archive in archives:
+            archive.pop("continuity", None)
+        entries["archives.json"] = json.dumps(archives, ensure_ascii=False).encode()
     if format_version < 3:
         chapters = json.loads(entries["chapters.json"])
         for chapter in chapters:
@@ -499,7 +509,7 @@ def test_current_project_preserves_unknown_slot_ids_and_old_formats_still_import
 
     package = client.get(f"/api/v1/books/{source_book['id']}/project-export", headers=auth_headers).content
     entries = _zip_entries(package)
-    assert json.loads(entries["manifest.json"])["format_version"] == 3
+    assert json.loads(entries["manifest.json"])["format_version"] == 4
     exported_issue = json.loads(entries["archives.json"])[0]["state_uncertainties"][0]
     assert exported_issue["character_name"] == "甲（改名后）"
     assert exported_issue["message"] == "本章中甲（改名后）的当前目标有多个不一致或不完整的结果，当前无法确定章末状态。"

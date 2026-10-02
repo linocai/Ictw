@@ -35,7 +35,13 @@ from app.services.context import (
 
 PRODUCTION_INPUT_V1 = "production-input-v1"
 PRODUCTION_INPUT_V2 = "production-input-v2"
-PRODUCTION_INPUT_VERSION = PRODUCTION_INPUT_V2
+PRODUCTION_INPUT_V3 = "production-input-v3"
+PRODUCTION_INPUT_VERSION = PRODUCTION_INPUT_V3
+
+from app.services.chapter_continuity import (
+    SELECTOR_CONTRACT_VERSION, distant_candidates, previous_chapter_context,
+    previous_context_identity, pack_source_selection,
+)
 
 
 class ProductionInputChanged(ValueError):
@@ -260,6 +266,7 @@ def _display_unknown_state_slots(
 
 
 def _history_blocks(db: Session, chapter: Chapter) -> list[MemoryBlock]:
+    """Original v2 range, deliberately retained for old frozen inputs."""
     selected_ids = {item.id for item in _selected(chapter)}
     return prefilter_memory_candidates(
         memory_candidates(db, chapter), chapter=chapter, selected_character_ids=selected_ids,
@@ -294,7 +301,7 @@ def _candidate_range_v1(blocks: list[MemoryBlock]) -> list[dict[str, Any]]:
 def _candidate_range(blocks: list[MemoryBlock], *, version: str = PRODUCTION_INPUT_VERSION) -> list[dict[str, Any]]:
     if version == PRODUCTION_INPUT_V1:
         return _candidate_range_v1(blocks)
-    if version != PRODUCTION_INPUT_V2:
+    if version not in {PRODUCTION_INPUT_V2, PRODUCTION_INPUT_V3}:
         raise ValueError("unknown production input version")
     rows = [
         {
@@ -518,7 +525,9 @@ def freeze_selector_input(
     identities = _relationship_identities(prior_state, all_characters, unknown_slots)
     displayed_unknown_slots = _display_unknown_state_slots(unknown_slots, identities, all_characters)
     return {
-        "protocol_version": PRODUCTION_INPUT_V2,
+        "protocol_version": PRODUCTION_INPUT_V3,
+        "selector_contract_version": SELECTOR_CONTRACT_VERSION,
+        "previous_chapter_identity": previous_chapter_context(db, chapter)["semantic_identity"],
         "chapter": {"id": chapter.id, "index": chapter.index, "title": chapter.title},
         "bible": chapter.user_prompt,
         "selected_characters": _selected_payload(selected),
@@ -527,7 +536,7 @@ def freeze_selector_input(
         "unknown_state_slots": displayed_unknown_slots,
         "unknown_state_slot_identity": unknown_slots,
         "relationship_identities": identities,
-        "selector_candidate_range": _candidate_range(candidates, version=PRODUCTION_INPUT_V2),
+        "selector_candidate_range": _candidate_range(candidates, version=PRODUCTION_INPUT_V3),
     }
 
 
@@ -535,10 +544,9 @@ def rewrite_reference_key(db: Session, chapter: Chapter, candidates: list[Memory
     """Bind reusable selection to author inputs and exact available sources, never draft prose."""
     from app.services.personas import get_persona
     return _sha256(_stable_json({
-        "version": 1,
+        "version": 2,
         "selector_input": freeze_selector_input(db, chapter, candidates),
         "world": chapter.book.world_setting,
-        "source_ids": sorted(block.id for block in candidates),
         "selector_persona": get_persona(db, "memory_selector", book_id=chapter.book_id),
         "budget": MEMORY_BUDGET_CHARS,
     }))
@@ -553,16 +561,18 @@ def reusable_write_memory(db: Session, chapter: Chapter, key: str) -> dict[str, 
     ).order_by(JobRun.created_at.desc(), JobRun.id.desc()).limit(1)).first()
     if run is None or not isinstance(run.input_snapshot, dict):
         return None
-    if run.input_snapshot.get("rewrite_reference_key") != key or not isinstance(run.memory_context, dict):
+    if (run.input_snapshot.get("protocol_version") != PRODUCTION_INPUT_V3
+        or run.input_snapshot.get("rewrite_reference_key") != key or not isinstance(run.memory_context, dict)):
         return None
     try:
         # Revalidate stored references and selection before skipping the model.
-        prepared = prepare_selected_write_input(db, chapter, memory_manifest=run.memory_context)
+        manifest = _rebind_saved_source_manifest(run.memory_context, distant_candidates(db, chapter))
+        prepared = prepare_selected_write_input(db, chapter, memory_manifest=manifest)
     except (ValueError, TypeError, KeyError):
         return None
     if prepared["reference_context"] != run.input_snapshot.get("reference_context"):
         return None
-    return json.loads(_stable_json(run.memory_context))
+    return prepared["memory_manifest"]
 
 
 def is_frozen_selector_input_current(
@@ -571,9 +581,9 @@ def is_frozen_selector_input_current(
     frozen: dict[str, Any],
 ) -> bool:
     """Prove Selector's model-facing inputs did not materially change in flight."""
-    if not isinstance(frozen, dict) or frozen.get("protocol_version") != PRODUCTION_INPUT_V2:
+    if not isinstance(frozen, dict) or frozen.get("protocol_version") != PRODUCTION_INPUT_V3:
         return False
-    return frozen == freeze_selector_input(db, chapter, _history_blocks(db, chapter))
+    return frozen == freeze_selector_input(db, chapter, distant_candidates(db, chapter))
 
 
 def _lookup_used_sources(
@@ -591,9 +601,11 @@ def _lookup_used_sources(
         block = by_id.get(source_id)
         if block is None:
             raise ValueError(f"selected history source is unavailable: {source_id}")
-        entries.append(_catalog_entry(
+        entry = _catalog_entry(
             "history", f"history:{source_id}", block.text, semantic_id=_block_semantic_id(block),
-        ))
+        )
+        entry["uncertain"] = block.fact_type == "未决" or block.memory_type == "unresolved_item"
+        entries.append(entry)
     if previous_ending:
         # Ending paragraphs are not model-compressed.  Keep every emitted
         # candidate paragraph as an individually addressable source.
@@ -838,9 +850,11 @@ def _input_fingerprint(snapshot: dict[str, Any]) -> str:
         "name_groups": snapshot["name_groups"],
         "name_candidate_groups": snapshot["name_candidate_groups"],
     }
-    if snapshot["protocol_version"] == PRODUCTION_INPUT_V2:
+    if snapshot["protocol_version"] in {PRODUCTION_INPUT_V2, PRODUCTION_INPUT_V3}:
         payload["relationship_identities"] = snapshot.get("relationship_identities", {})
         payload["unknown_state_slot_identity"] = snapshot.get("unknown_state_slot_identity", [])
+    if snapshot["protocol_version"] == PRODUCTION_INPUT_V3:
+        payload["previous_chapter_identity"] = previous_context_identity(snapshot["previous_chapter_context"])
     return _sha256(_stable_json(payload))
 
 
@@ -902,6 +916,14 @@ def _limitations(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
             "chapter_id": item.id, "chapter_index": item.index, "title": item.title,
             "kind": "missing_memory", "reason": reason,
         })
+    previous = previous_chapter_context(db, chapter)
+    result.extend(previous["limitations"])
+    oversized_chapters = {block.source_chapter_id for block in memory_candidates(db, chapter)
+                          if block.chapter_index <= chapter.index - 2 and nonspace_len(block.text) > MEMORY_BUDGET_CHARS}
+    for item in prior:
+        if item.id in oversized_chapters:
+            result.append({"chapter_id": item.id, "chapter_index": item.index, "title": item.title,
+                           "kind": "history_source_over_budget", "reason": "此历史条目超过当前原文预算，未用于本次参考"})
     return result
 
 
@@ -920,12 +942,13 @@ def production_readiness(db: Session, chapter: Chapter) -> dict[str, Any]:
         "context_token": token,
         "context_limitations": limitations,
         "is_complete": not limitations,
-        "recommended_recovery": limitations[0] if limitations else None,
+        "recommended_recovery": next((item for item in limitations if item["kind"] in {"missing_memory", "partial_state"}), None),
     }
 
 
 def _memory_from_manifest(
     blocks: list[MemoryBlock], memory_manifest: dict[str, Any],
+    *, protocol_version: str = PRODUCTION_INPUT_VERSION,
 ) -> tuple[list[MemoryBlock], list[MemoryBlock], str]:
     raw_briefs = memory_manifest.get("memory_brief", [])
     raw_conflicts = memory_manifest.get("conflicts", [])
@@ -946,10 +969,13 @@ def _memory_from_manifest(
 
     briefs = selection_rows(raw_briefs)
     conflicts = selection_rows(raw_conflicts)
-    context = pack_selector_context(
-        blocks, briefs, conflicts, start_id if isinstance(start_id, str) else None,
-        budget=MEMORY_BUDGET_CHARS,
-    )
+    if protocol_version == PRODUCTION_INPUT_V3:
+        if memory_manifest.get("selector_contract_version") != SELECTOR_CONTRACT_VERSION:
+            raise ValueError("new requests require source-only selection")
+        context = pack_source_selection(blocks, briefs, conflicts, budget=MEMORY_BUDGET_CHARS)
+    else:
+        context = pack_selector_context(blocks, briefs, conflicts, start_id if isinstance(start_id, str) else None,
+                                        budget=MEMORY_BUDGET_CHARS)
     return context.memories, list(context.conflicts or []), context.previous_ending
 
 
@@ -964,6 +990,7 @@ def _snapshot(
     candidate_blocks: list[MemoryBlock],
     memory_manifest: dict[str, Any],
     draft_source: str,
+    protocol_version: str = PRODUCTION_INPUT_VERSION,
 ) -> dict[str, Any]:
     selected = _selected(chapter)
     exemptions = normalized_exemptions(chapter.exempted_character_names or [])
@@ -974,13 +1001,25 @@ def _snapshot(
     displayed_prior_state = _display_prior_state(prior_state, relationship_identities)
     displayed_unknown_slots = _display_unknown_state_slots(unknown_slots, relationship_identities, all_characters)
     limitations = production_readiness(db, chapter)
+    previous = previous_chapter_context(db, chapter) if protocol_version == PRODUCTION_INPUT_V3 else None
+    memory_manifest = json.loads(_stable_json(memory_manifest))
+    if previous is not None:
+        memory_manifest["previous_chapter_context"] = previous
+        memory_manifest["previous_ending"] = previous["previous_ending"]
+        memory_manifest["source_semantic_ids"] = {block.id: _block_semantic_id_v2(block) for block in candidate_blocks}
     reference_context = writing_reference_context(
         chapter.book, chapter, memories, previous_ending,
         conflicts=conflicts, dynamic_fields_by_character=displayed_prior_state,
         unknown_state_slots=displayed_unknown_slots,
+        previous_chapter_context=previous,
     )
     catalog = _base_catalog(chapter, draft_text, selected, displayed_prior_state, displayed_unknown_slots, exemptions)
     catalog.extend(_lookup_used_sources(candidate_blocks, memories, conflicts, previous_ending))
+    if previous is not None:
+        catalog.extend(_catalog_entry("history", source["id"], source["text"],
+                       semantic_id="history:" + _sha256(_stable_json({key: value for key, value in source.items() if key not in {"id", "original_source_id"}})))
+                       | {"uncertain": source.get("fact_type") == "未决" or "未决事项" in source.get("labels", [])}
+                       for source in previous["sources"])
     hits = _name_hits(
         [("draft", draft_text), ("bible", chapter.user_prompt)], all_characters,
         {item.id for item in selected}, set(exemptions),
@@ -989,7 +1028,7 @@ def _snapshot(
         hits, {"draft": draft_text, "bible": chapter.user_prompt},
     )
     snapshot: dict[str, Any] = {
-        "protocol_version": PRODUCTION_INPUT_VERSION,
+        "protocol_version": protocol_version,
         "chapter": {"id": chapter.id, "index": chapter.index, "title": chapter.title},
         "draft": {"sha256": _sha256(draft_text), "source": draft_source},
         "bible": chapter.user_prompt,
@@ -1002,7 +1041,7 @@ def _snapshot(
         "unknown_state_slot_identity": unknown_slots,
         "reference_context": reference_context,
         "source_catalog": catalog,
-        "selector_candidate_range": _candidate_range(candidate_blocks, version=PRODUCTION_INPUT_VERSION),
+        "selector_candidate_range": _candidate_range(candidate_blocks, version=protocol_version),
         "memory_manifest": memory_manifest,
         "context_limitations": limitations["context_limitations"],
         "context_token": limitations["context_token"],
@@ -1019,30 +1058,56 @@ def _snapshot(
             for item in all_characters
         ],
     }
+    if previous is not None:
+        snapshot["previous_chapter_context"] = previous
     snapshot["input_fingerprint"] = _input_fingerprint(snapshot)
     return snapshot
 
 
-def freeze_manual_checker_input(db: Session, chapter: Chapter, draft_text: str) -> dict[str, Any]:
+def freeze_manual_checker_input(db: Session, chapter: Chapter, draft_text: str, *,
+                                protocol_version: str = PRODUCTION_INPUT_VERSION) -> dict[str, Any]:
     """Freeze a manual check without invoking Selector or any model."""
-    candidates = _history_blocks(db, chapter)
-    source_ids = [block.id for block in candidates if block.memory_type != "previous_ending"]
-    packed = pack_writer_context(candidates, source_ids, None, MEMORY_BUDGET_CHARS)
+    if protocol_version != PRODUCTION_INPUT_V3:
+        candidates = _history_blocks_v1(db, chapter) if protocol_version == PRODUCTION_INPUT_V1 else _history_blocks(db, chapter)
+        packed = pack_writer_context(candidates, [block.id for block in candidates if block.memory_type != "previous_ending"], None, MEMORY_BUDGET_CHARS)
+        manifest = {"memory_brief": [{"text": block.text, "source_ids": block.id.split("|")} for block in packed.memories],
+                    "conflicts": [], "previous_ending_start_id": None, "previous_ending": packed.previous_ending,
+                    "selection_mode": "manual_deterministic"}
+        return _snapshot(db, chapter, draft_text, memories=packed.memories, conflicts=[],
+                         previous_ending=packed.previous_ending, candidate_blocks=candidates,
+                         memory_manifest=manifest, draft_source="chapter", protocol_version=protocol_version)
+    candidates = distant_candidates(db, chapter)
+    chosen = []
+    used = 0
+    for block in candidates:
+        if used + nonspace_len(block.text) > MEMORY_BUDGET_CHARS or len(chosen) >= 8:
+            continue
+        chosen.append(block)
+        used += nonspace_len(block.text)
     manifest = {
         "memory_brief": [
             {"text": block.text, "source_ids": block.id.split("|")}
-            for block in packed.memories
+            for block in chosen
         ],
         "conflicts": [],
         "previous_ending_start_id": None,
-        "previous_ending": packed.previous_ending,
+        "previous_ending": "",
+        "selector_contract_version": SELECTOR_CONTRACT_VERSION,
         "selection_mode": "manual_deterministic",
     }
-    return _snapshot(
-        db, chapter, draft_text, memories=packed.memories, conflicts=[],
-        previous_ending=packed.previous_ending, candidate_blocks=candidates,
+    snapshot = _snapshot(
+        db, chapter, draft_text, memories=chosen, conflicts=[],
+        previous_ending="", candidate_blocks=candidates,
         memory_manifest=manifest, draft_source="chapter",
     )
+    if len(chosen) < len(candidates):
+        omitted = sorted({block.source_chapter_id for block in candidates if block not in chosen})
+        for source_id in omitted:
+            source = db.get(Chapter, source_id)
+            snapshot["context_limitations"].append({"chapter_id": source_id, "chapter_index": source.index,
+                "title": source.title, "kind": "manual_history_budget", "reason": "手动检查原文预算有限，部分远历史整条来源未采用"})
+        snapshot["input_fingerprint"] = _input_fingerprint(snapshot)
+    return snapshot
 
 
 def freeze_selected_write_input(
@@ -1051,9 +1116,10 @@ def freeze_selected_write_input(
     draft_text: str,
     *,
     memory_manifest: dict[str, Any],
+    protocol_version: str = PRODUCTION_INPUT_VERSION,
 ) -> dict[str, Any]:
     """Freeze the exact validated Selector output shared by Writer and Checker."""
-    prepared = prepare_selected_write_input(db, chapter, memory_manifest=memory_manifest)
+    prepared = prepare_selected_write_input(db, chapter, memory_manifest=memory_manifest, protocol_version=protocol_version)
     return bind_selected_candidate_draft(prepared, draft_text)
 
 
@@ -1063,6 +1129,7 @@ def prepare_selected_write_input(
     *,
     memory_manifest: dict[str, Any],
     selector_candidates: list[MemoryBlock] | None = None,
+    protocol_version: str = PRODUCTION_INPUT_VERSION,
 ) -> dict[str, Any]:
     """Freeze all pre-Writer dependencies before a candidate model call.
 
@@ -1071,15 +1138,16 @@ def prepare_selected_write_input(
     input for Writer; :func:`bind_selected_candidate_draft` is the only
     follow-up operation and does no database read.
     """
-    candidates = _history_blocks(db, chapter)
+    candidates = (distant_candidates(db, chapter) if protocol_version == PRODUCTION_INPUT_V3 else
+                  _history_blocks_v1(db, chapter) if protocol_version == PRODUCTION_INPUT_V1 else _history_blocks(db, chapter))
     rebound_manifest = memory_manifest
     if selector_candidates is not None:
         rebound_manifest = _rebind_selector_manifest(selector_candidates, candidates, memory_manifest)
-    memories, conflicts, ending = _memory_from_manifest(candidates, rebound_manifest)
+    memories, conflicts, ending = _memory_from_manifest(candidates, rebound_manifest, protocol_version=protocol_version)
     return _snapshot(
         db, chapter, "", memories=memories, conflicts=conflicts,
         previous_ending=ending, candidate_blocks=candidates, memory_manifest=rebound_manifest,
-        draft_source="candidate_pending",
+        draft_source="candidate_pending", protocol_version=protocol_version,
     )
 
 
@@ -1142,9 +1210,35 @@ def _rebind_selector_manifest(
     return rebound
 
 
+def _rebind_saved_source_manifest(manifest: dict[str, Any], current: list[MemoryBlock]) -> dict[str, Any]:
+    identities = manifest.get("source_semantic_ids")
+    if not isinstance(identities, dict) or manifest.get("selector_contract_version") != SELECTOR_CONTRACT_VERSION:
+        raise ProductionInputChanged("旧选择合同不可复用")
+    current_by_semantic: dict[str, list[str]] = defaultdict(list)
+    old_by_semantic: dict[str, list[str]] = defaultdict(list)
+    for block in current:
+        current_by_semantic[_block_semantic_id_v2(block)].append(block.id)
+    for source_id, identity in identities.items():
+        if not isinstance(source_id, str) or not isinstance(identity, str):
+            raise ProductionInputChanged("选择来源无效")
+        old_by_semantic[identity].append(source_id)
+    if {key: len(value) for key, value in old_by_semantic.items()} != {key: len(value) for key, value in current_by_semantic.items()}:
+        raise ProductionInputChanged("历史来源已变化")
+    mapping = {old: new for key, old_ids in old_by_semantic.items()
+               for old, new in zip(sorted(old_ids), sorted(current_by_semantic[key]), strict=True)}
+    rebound = json.loads(_stable_json(manifest))
+    for key in ("memory_brief", "conflicts"):
+        for row in rebound.get(key, []):
+            row["source_ids"] = [mapping[value] for value in row["source_ids"]]
+    for source in rebound.get("sources", []):
+        source["id"] = mapping[source["id"]]
+    rebound["source_semantic_ids"] = {block.id: _block_semantic_id_v2(block) for block in current}
+    return rebound
+
+
 def bind_selected_candidate_draft(prepared: dict[str, Any], draft_text: str) -> dict[str, Any]:
     """Bind Writer output to a prepared snapshot without observing new state."""
-    if not isinstance(prepared, dict) or prepared.get("protocol_version") not in {PRODUCTION_INPUT_V1, PRODUCTION_INPUT_V2}:
+    if not isinstance(prepared, dict) or prepared.get("protocol_version") not in {PRODUCTION_INPUT_V1, PRODUCTION_INPUT_V2, PRODUCTION_INPUT_V3}:
         raise ValueError("prepared selected input is invalid")
     # JSON cloning preserves only the DB-safe protocol fields and prevents a
     # caller from mutating the pre-Writer object while a model request runs.
@@ -1194,7 +1288,7 @@ def bind_selected_candidate_draft(prepared: dict[str, Any], draft_text: str) -> 
 
 def is_frozen_input_current(db: Session, chapter: Chapter, snapshot: dict[str, Any]) -> bool:
     """Check real dependencies without replacing a frozen reference with today’s text."""
-    if not isinstance(snapshot, dict) or snapshot.get("protocol_version") not in {PRODUCTION_INPUT_V1, PRODUCTION_INPUT_V2}:
+    if not isinstance(snapshot, dict) or snapshot.get("protocol_version") not in {PRODUCTION_INPUT_V1, PRODUCTION_INPUT_V2, PRODUCTION_INPUT_V3}:
         return False
     version = snapshot["protocol_version"]
     try:
@@ -1225,7 +1319,7 @@ def is_frozen_input_current(db: Session, chapter: Chapter, snapshot: dict[str, A
     prior_state, unknown_slots = _referenced_prior_state(projected_state, projected_unknown_slots, selected)
     if snapshot.get("prior_state") != prior_state:
         return False
-    if version == PRODUCTION_INPUT_V2:
+    if version in {PRODUCTION_INPUT_V2, PRODUCTION_INPUT_V3}:
         identities = _relationship_identities(prior_state, _all_characters(db, chapter), unknown_slots)
         if (
             snapshot.get("relationship_identities") != identities
@@ -1243,8 +1337,12 @@ def is_frozen_input_current(db: Session, chapter: Chapter, snapshot: dict[str, A
     if version == PRODUCTION_INPUT_V1:
         if not _v1_rearchive_range_is_proved_current(db, chapter, frozen_range):
             return False
-    elif frozen_range != _candidate_range(_history_blocks(db, chapter), version=version):
+    elif frozen_range != _candidate_range(distant_candidates(db, chapter) if version == PRODUCTION_INPUT_V3 else _history_blocks(db, chapter), version=version):
         return False
+    if version == PRODUCTION_INPUT_V3:
+        previous = snapshot.get("previous_chapter_context")
+        if not isinstance(previous, dict) or previous_context_identity(previous) != previous_chapter_context(db, chapter)["semantic_identity"]:
+            return False
     # Readiness warnings are presentation/acknowledgement metadata. All real
     # model dependencies were compared above; changing warning classification
     # must not strand an otherwise identical retained candidate after upgrade.

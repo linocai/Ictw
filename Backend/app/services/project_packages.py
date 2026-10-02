@@ -35,6 +35,11 @@ from app.models import (
 from app.services.archive_v2 import (
     ARCHIVE_CONTRACT_VERSION,
     LEGACY_ARCHIVE_CONTRACT_VERSION,
+    SUPPORTED_ARCHIVE_CONTRACTS,
+    CONTINUITY_KEYS,
+    ValidatedFact,
+    ArchiveV2ValidationError,
+    validate_continuity,
     MAX_STATE_DELTAS,
     archive_health_summaries,
     archive_input_fingerprint,
@@ -50,7 +55,7 @@ from app.services.search_index import rebuild_book_search_index
 
 
 PROJECT_MEDIA_TYPE = "application/vnd.ictw.project+zip"
-PROJECT_FORMAT_VERSION = 3
+PROJECT_FORMAT_VERSION = 4
 PROJECT_ENTRY_NAMES = (
     "book.json",
     "characters.json",
@@ -416,6 +421,19 @@ def _package_entries(db: Session, book: Book) -> dict[str, bytes]:
             for fact in facts_by_revision.get(revision.id, [])
         ]
         fact_positions = {fact.id: position for position, fact in enumerate(facts_by_revision.get(revision.id, []), start=1)}
+        continuity = None
+        if revision.contract_version == ARCHIVE_CONTRACT_VERSION:
+            ref_positions = {fact.fact_ref: position for position, fact in enumerate(facts_by_revision.get(revision.id, []), start=1)}
+            try:
+                validated_continuity = validate_continuity(revision.continuity, {
+                    fact.fact_ref: ValidatedFact(fact.fact_ref, fact.fact_type, fact.importance, fact.fact_text, (), fact.start_id, fact.end_id)
+                    for fact in facts_by_revision.get(revision.id, [])
+                })
+                continuity = {key: [ref_positions[ref] for ref in refs] for key, refs in validated_continuity.items()}
+            except (ArchiveV2ValidationError, KeyError) as exc:
+                raise ProjectPackageError("invalid archive continuity") from exc
+        elif revision.continuity is not None:
+            raise ProjectPackageError("old archive contract cannot carry continuity")
         state_uncertainties = _canonical_archive_issue_names(
             getattr(revision, "state_uncertainties", []), character_names=character_names
         )
@@ -428,6 +446,7 @@ def _package_entries(db: Session, book: Book) -> dict[str, bytes]:
             {
                 "chapter_id": chapter.id,
                 "contract_version": revision.contract_version,
+                "continuity": continuity,
                 "summary": revision.summary,
                 "facts": facts,
                 "deltas": [
@@ -575,7 +594,7 @@ def _read_project_package(payload: bytes) -> dict[str, Any]:
         manifest["format"] != "ictwbook"
         or not isinstance(manifest["format_version"], int)
         or isinstance(manifest["format_version"], bool)
-        or manifest["format_version"] not in {1, 2, PROJECT_FORMAT_VERSION}
+        or manifest["format_version"] not in {1, 2, 3, PROJECT_FORMAT_VERSION}
     ):
         raise ProjectPackageError("unsupported project package format")
     _string(manifest["created_at"], field="manifest creation time", maximum=100, allow_empty=False)
@@ -598,7 +617,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
     if (
         not isinstance(package_format, int)
         or isinstance(package_format, bool)
-        or package_format not in {1, 2, PROJECT_FORMAT_VERSION}
+        or package_format not in {1, 2, 3, PROJECT_FORMAT_VERSION}
     ):
         raise ProjectPackageError("unsupported project package format")
     book = _mapping(decoded["book.json"], field="book", exact_keys={"title", "world_setting"})
@@ -688,6 +707,8 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
         archive_keys = {"chapter_id", "summary", "facts", "deltas"}
         if package_format >= 2:
             archive_keys |= {"contract_version", "state_uncertainties", "diagnostics"}
+        if package_format >= 4:
+            archive_keys.add("continuity")
         row = _mapping(item, field="archive", exact_keys=archive_keys)
         chapter_id = _string(row["chapter_id"], field="archive chapter", maximum=200, allow_empty=False)
         if chapter_id not in chapter_ids or chapter_id in archive_chapters:
@@ -700,7 +721,7 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
             contract_version = _string(
                 row["contract_version"], field="archive contract version", maximum=32, allow_empty=False
             )
-            if contract_version not in {LEGACY_ARCHIVE_CONTRACT_VERSION, ARCHIVE_CONTRACT_VERSION}:
+            if contract_version not in SUPPORTED_ARCHIVE_CONTRACTS or (package_format < 4 and contract_version == ARCHIVE_CONTRACT_VERSION):
                 raise ProjectPackageError("unsupported archive contract version")
             if contract_version == LEGACY_ARCHIVE_CONTRACT_VERSION and (
                 row["state_uncertainties"] or row["diagnostics"]
@@ -754,6 +775,27 @@ def _validated_records(decoded: dict[str, Any]) -> dict[str, Any]:
                 raise ProjectPackageError("duplicate canonical archive fact")
             canonical_facts.add(canonical_key)
             fact_participants.append(set(participants))
+        if contract_version == ARCHIVE_CONTRACT_VERSION:
+            continuity = _mapping(row["continuity"], field="archive continuity", exact_keys=set(CONTINUITY_KEYS))
+            ref_continuity = {}
+            for key, positions in continuity.items():
+                refs = []
+                for position in _list(positions, field="continuity positions"):
+                    if type(position) is not int or not 1 <= position <= len(facts):
+                        raise ProjectPackageError("archive continuity references unknown fact position")
+                    refs.append(facts[position - 1]["fact_ref"])
+                ref_continuity[key] = refs
+            try:
+                canonical_continuity = validate_continuity(ref_continuity, {
+                    fact["fact_ref"]: ValidatedFact(fact["fact_ref"], fact["type"], fact["importance"], fact["text"], (), fact["start_id"], fact["end_id"])
+                    for fact in facts
+                })
+                positions_by_ref = {fact["fact_ref"]: position for position, fact in enumerate(facts, start=1)}
+                row["continuity"] = {key: [positions_by_ref[ref] for ref in refs] for key, refs in canonical_continuity.items()}
+            except ArchiveV2ValidationError as exc:
+                raise ProjectPackageError("invalid archive continuity classification") from exc
+        elif row.get("continuity") is not None:
+            raise ProjectPackageError("old archive contract cannot carry continuity")
         deltas = _list(row["deltas"], field="archive deltas")
         if len(deltas) > MAX_STATE_DELTAS:
             raise ProjectPackageError("archive has too many state deltas")
@@ -1001,6 +1043,11 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
                     ],
                     character_names=target_character_names,
                 )
+            if records["package_format"] >= 4:
+                fact_ref_map = {fact["fact_ref"]: f"F{position}" for position, fact in enumerate(item["facts"], start=1)}
+                for issue in remapped_uncertainties + remapped_diagnostics:
+                    if "fact_refs" in issue:
+                        issue["fact_refs"] = [fact_ref_map[ref] for ref in issue["fact_refs"]]
             revision = ChapterArchiveRevision(
                 chapter_id=chapter.id,
                 revision=1,
@@ -1017,6 +1064,8 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
                 ),
                 state_uncertainties=remapped_uncertainties,
                 diagnostics=remapped_diagnostics,
+                continuity=({key: [f"F{position}" for position in positions] for key, positions in item["continuity"].items()}
+                            if item.get("continuity") is not None else None),
             )
             db.add(revision)
             db.flush()
@@ -1025,7 +1074,7 @@ def import_project_package(db: Session, payload: bytes) -> tuple[Book, list[dict
                 row = ChapterArchiveFact(
                     revision_id=revision.id,
                     position=position,
-                    fact_ref=fact["fact_ref"],
+                    fact_ref=(f"F{position}" if records["package_format"] >= 4 else fact["fact_ref"]),
                     fact_type=fact["type"],
                     importance=fact["importance"],
                     fact_text=fact["text"],

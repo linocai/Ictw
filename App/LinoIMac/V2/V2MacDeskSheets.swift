@@ -697,17 +697,28 @@ private struct V2MacBindingRow: View {
         Binding(get: { binding?.llmProfileId ?? "" }, set: { value in Task { await agents.bind(role: role, profileId: value.isEmpty ? nil : value) } })
     }
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(role.v2AgentLabel).font(V2DeskType.control(12.5, weight: .medium))
-                if role == "extractor" || role == "inspiration_creator" { Text("深度思考 · 不可用").font(V2DeskType.control(10.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)) }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(role.v2AgentLabel).font(V2DeskType.control(12.5, weight: .medium))
+                    if role == "extractor" || role == "inspiration_creator" { Text("深度思考 · 不可用").font(V2DeskType.control(10.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme)) }
+                }
+                Spacer()
+                Picker(role, selection: selected) {
+                    Text("未绑定").tag("")
+                    ForEach(agents.profiles) { profile in Text(profile.name).tag(profile.id) }
+                }
+                .labelsHidden().pickerStyle(.menu).frame(width: 150)
+                .disabled(agents.qualityPrioritySavingRoles.contains(role))
             }
-            Spacer()
-            Picker(role, selection: selected) {
-                Text("未绑定").tag("")
-                ForEach(agents.profiles) { profile in Text(profile.name).tag(profile.id) }
+            if QualityPriorityPreset.supports(role: role) {
+                V2QualityPriorityControl(
+                    preset: agents.qualityPriorityPreset(role: role),
+                    isSaving: agents.qualityPrioritySavingRoles.contains(role),
+                    canEdit: agents.sync.networkActionsAvailable,
+                    currentState: binding?.reasoningStateLabel
+                ) { Task { await agents.applyQualityPriority(role: role) } }
             }
-            .labelsHidden().pickerStyle(.menu).frame(width: 150)
         }
         .padding(.vertical, 5)
     }
@@ -792,6 +803,9 @@ private struct V2MacBookModelSettings: View {
                     ForEach(agents.profiles) { profile in Text("\(profile.name) · \(profile.modelName)").tag(profile.id) }
                 }
                 Toggle("深度思考", isOn: thinking).disabled(!draft.thinkingAdjustable)
+                if QualityPriorityPreset.supports(role: selectedRole) {
+                    V2QualityPriorityControl(preset: draft.qualityPriority) { draft.applyQualityPriority() }
+                }
                 if let explanation = draft.thinkingExplanation { Text(explanation).font(.footnote).foregroundStyle(.secondary) }
                 if !draft.effortLevels.isEmpty {
                     Picker("思考强度", selection: $draft.effort) {

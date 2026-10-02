@@ -26,7 +26,7 @@ class PatchExtractor:
                 "scope": "snapshot", "slot": slot,
                 "operation": "set" if value else "clear", "value": value,
             })
-        return {"summary": "梗概。", "facts": [fact], "end_state_delta": deltas}
+        return {"summary": "梗概。", "facts": [fact], "end_state_delta": deltas, "continuity": {key: [] for key in ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")}}
 
 
 def _setup_book(client, auth_headers, initial_fields: dict | None = None):
@@ -103,7 +103,8 @@ def test_reopening_an_earlier_chapter_stales_dependent_archive_until_retry(clien
     client.app.dependency_overrides[get_extractor_client] = lambda: PatchExtractor(
         character["id"], {"当前位置": "南港"}
     )
-    client.post(f"/api/v1/chapters/{second['id']}/archive/retry", headers=auth_headers).raise_for_status()
+    readiness = client.get(f"/api/v1/chapters/{second['id']}/production-readiness", headers=auth_headers).json()
+    client.post(f"/api/v1/chapters/{second['id']}/archive/retry", headers=auth_headers, json={"acknowledged_context_token": readiness["context_token"]}).raise_for_status()
     assert wait_for_terminal(client, second["id"], auth_headers)["phase"] == "done"
     assert _fields(client, auth_headers, character["id"]) == {"当前位置": "南港"}
 

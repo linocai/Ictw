@@ -6,6 +6,10 @@ from typing import Any
 from app.llm.base import LLMClient
 from app.services.character_state_projection import PERSISTENT_SLOTS, SNAPSHOT_SLOTS
 from app.services.archive_v2 import (
+    ARCHIVE_CONTRACT_VERSION,
+    SUPPORTED_ARCHIVE_CONTRACTS,
+    CONTINUITY_KEYS,
+    MAX_FACTS,
     FACT_TYPES,
     MAX_FACT_REF_CHARS,
     MAX_FACT_TEXT_CHARS,
@@ -30,7 +34,7 @@ class ExtractorContractError(ValueError):
     pass
 
 
-def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
+def extractor_v2_schema(selected_character_names: list[str], *, contract_version: str = ARCHIVE_CONTRACT_VERSION) -> dict[str, Any]:
     """Single-call v2 ledger contract; evidence is represented by source IDs."""
     name = {"type": "string", "enum": selected_character_names}
     participant_array: dict[str, Any] = {
@@ -124,7 +128,7 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
     }
     delta = {"oneOf": [character_delta, relationship_delta]}
     empty_when_no_characters = {"maxItems": 0} if not selected_character_names else {}
-    return {
+    schema = {
         "type": "object",
         "properties": {
             "summary": {"type": "string", "minLength": 1, "maxLength": MAX_SUMMARY_CHARS},
@@ -146,6 +150,18 @@ def extractor_v2_schema(selected_character_names: list[str]) -> dict[str, Any]:
         "required": ["summary", "facts", "end_state_delta"],
         "additionalProperties": False,
     }
+    if contract_version not in SUPPORTED_ARCHIVE_CONTRACTS:
+        raise ExtractorContractError("unsupported archive contract version")
+    if contract_version == ARCHIVE_CONTRACT_VERSION:
+        schema["properties"]["continuity"] = {
+            "type": "object",
+            "properties": {key: {"type": "array", "items": {"type": "string"}, "maxItems": MAX_FACTS}
+                           for key in CONTINUITY_KEYS},
+            "required": list(CONTINUITY_KEYS),
+            "additionalProperties": False,
+        }
+        schema["required"].append("continuity")
+    return schema
 
 
 def _operation_schema() -> dict[str, Any]:
@@ -388,16 +404,17 @@ class ExtractorAgent:
         self.system_prompt = compose_system_prompt("extractor", editable_persona)
 
     def extract_v2(
-        self, user_message: str, selected_characters: list[SelectedCharacter] | None = None
+        self, user_message: str, selected_characters: list[SelectedCharacter] | None = None,
+        *, contract_version: str = ARCHIVE_CONTRACT_VERSION,
     ) -> dict[str, Any]:
         selected = selected_characters or []
         names = [name.strip() for _, name in selected]
         if any(not name for name in names) or len(set(names)) != len(names):
             raise ExtractorContractError("selected character names must be non-empty and unique")
         return self.llm.complete_json(
-            system=self.system_prompt,
+            system=self.system_prompt + (f"\n本次保存合同为{contract_version}，不输出continuity，严格遵循本次schema。" if contract_version != ARCHIVE_CONTRACT_VERSION else ""),
             user=user_message,
-            schema=extractor_v2_schema(names),
+            schema=extractor_v2_schema(names, contract_version=contract_version),
             temperature=0.1,
             timeout=EXTRACTOR_TIMEOUT_SECONDS,
             hard_timeout=True,

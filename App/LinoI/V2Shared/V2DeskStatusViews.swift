@@ -1,5 +1,26 @@
 import SwiftUI
 
+/// Kept in the existing settings forms; it changes only the chosen role.
+struct V2QualityPriorityControl: View {
+    let preset: QualityPriorityPreset
+    var isSaving = false
+    var canEdit = true
+    var currentState: String?
+    let apply: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(isSaving ? "正在保存" : "质量优先", action: apply)
+                .disabled(!canEdit || isSaving || preset.payload == nil)
+            if let currentState { Text(currentState).font(.footnote).foregroundStyle(.secondary) }
+            Text(preset.preview).font(.footnote).foregroundStyle(.secondary)
+            Text(QualityPriorityPreset.explanation)
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 /// Reusable state marks and stripes. Builders should use these rather than
 /// inventing color-only status indicators on either platform.
 struct V2DeskStatusMark: View {

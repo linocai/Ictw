@@ -82,7 +82,7 @@ def test_revision_ledger_migration_preserves_books_and_requires_backup_for_downg
     try:
         with sqlite3.connect(path) as db:
             db.execute("INSERT INTO books (id,title,world_setting,created_at,updated_at) VALUES ('book','原书','原世界','2026-09-01','2026-09-01')")
-        command.upgrade(config, 'head')
+        command.upgrade(config, '20260929_0015')
         with sqlite3.connect(path) as db:
             assert db.execute('SELECT title,world_setting FROM books').fetchall()==[('原书','原世界')]
             db.execute("INSERT INTO book_override_revisions VALUES ('book','persona','writer',19)")
@@ -94,7 +94,7 @@ def test_revision_ledger_migration_preserves_books_and_requires_backup_for_downg
         assert _sha256(path)==before
         _authorize(monkeypatch,path,['20260929_0015'])
         command.downgrade(config,'20260923_0014')
-        command.upgrade(config,'head')
+        command.upgrade(config,'20260929_0015')
         with sqlite3.connect(path) as db:
             assert db.execute('SELECT title FROM books').fetchall()==[('原书',)]
             db.execute('PRAGMA foreign_keys=ON')

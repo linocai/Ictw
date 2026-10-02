@@ -255,6 +255,7 @@ class ChapterArchiveRevision(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    continuity: Mapped[dict[str, list[str]] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     contract_version: Mapped[str] = mapped_column(String(32), default="archive-v2.0", nullable=False)
     validation_errors: Mapped[list[str]] = mapped_column(

@@ -24,8 +24,8 @@ from app.services.content_revisions import bump_content_revision
 # reads it back to confirm the running build. `EXPECTED_ALEMBIC_HEAD` is
 # asserted against the real migration head by the test suite, so it cannot
 # drift silently.
-APP_VERSION = "2.3.4"
-EXPECTED_ALEMBIC_HEAD = "20260929_0015"
+APP_VERSION = "2.4.0"
+EXPECTED_ALEMBIC_HEAD = "20261002_0016"
 logger = logging.getLogger(__name__)
 
 

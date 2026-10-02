@@ -395,6 +395,21 @@ struct ChapterArchiveLatestAttempt: Codable, Hashable, Sendable {
     }
 }
 
+/// Public references point to facts[].id, not Extractor's temporary F1 labels.
+struct ChapterContinuity: Codable, Hashable, Sendable {
+    var completedFactRefs: [String]
+    var knownFactRefs: [String]
+    var lastLandingFactRefs: [String]
+    var openFactRefs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case completedFactRefs = "completed_fact_refs"
+        case knownFactRefs = "known_fact_refs"
+        case lastLandingFactRefs = "last_landing_fact_refs"
+        case openFactRefs = "open_fact_refs"
+    }
+}
+
 struct ChapterArchive: Codable, Hashable, Sendable {
     var status: String
     var archiveSchema: String
@@ -415,6 +430,8 @@ struct ChapterArchive: Codable, Hashable, Sendable {
     var stateUncertainties: [ChapterArchiveDiagnostic] = []
     var diagnostics: [ChapterArchiveDiagnostic] = []
     var latestAttempt: ChapterArchiveLatestAttempt?
+    var contractVersion: String?
+    var continuity: ChapterContinuity?
 
     enum CodingKeys: String, CodingKey {
         case status, summary, facts, revision
@@ -431,6 +448,8 @@ struct ChapterArchive: Codable, Hashable, Sendable {
         case stateUncertainties = "state_uncertainties"
         case diagnostics
         case latestAttempt = "latest_attempt"
+        case contractVersion = "contract_version"
+        case continuity
     }
 
     init(
@@ -441,7 +460,8 @@ struct ChapterArchive: Codable, Hashable, Sendable {
         effectiveStatus: String = "none", stateStatus: String = "none",
         stateUncertainties: [ChapterArchiveDiagnostic] = [],
         diagnostics: [ChapterArchiveDiagnostic] = [],
-        latestAttempt: ChapterArchiveLatestAttempt? = nil
+        latestAttempt: ChapterArchiveLatestAttempt? = nil,
+        contractVersion: String? = nil, continuity: ChapterContinuity? = nil
     ) {
         self.status = status; self.archiveSchema = archiveSchema
         self.revisionId = revisionId; self.revision = revision
@@ -451,6 +471,7 @@ struct ChapterArchive: Codable, Hashable, Sendable {
         self.effectiveStatus = effectiveStatus; self.stateStatus = stateStatus
         self.stateUncertainties = stateUncertainties; self.diagnostics = diagnostics
         self.latestAttempt = latestAttempt
+        self.contractVersion = contractVersion; self.continuity = continuity
     }
 
     init(from decoder: Decoder) throws {
@@ -475,6 +496,8 @@ struct ChapterArchive: Codable, Hashable, Sendable {
         stateUncertainties = try c.decodeIfPresent([ChapterArchiveDiagnostic].self, forKey: .stateUncertainties) ?? []
         diagnostics = try c.decodeIfPresent([ChapterArchiveDiagnostic].self, forKey: .diagnostics) ?? []
         latestAttempt = try c.decodeIfPresent(ChapterArchiveLatestAttempt.self, forKey: .latestAttempt)
+        contractVersion = try c.decodeIfPresent(String.self, forKey: .contractVersion)
+        continuity = try c.decodeIfPresent(ChapterContinuity.self, forKey: .continuity)
     }
 }
 
@@ -1319,6 +1342,20 @@ struct BookModelSettingsDraft {
             : "开启深度思考时温度不生效；关闭后可调整。"
     }
 
+    var qualityPriority: QualityPriorityPreset {
+        QualityPriorityPreset(role: role, profileID: profileID, profileExists: profileExists,
+                              capabilities: capabilities, temperature: temperature)
+    }
+
+    @discardableResult
+    mutating func applyQualityPriority() -> Bool {
+        guard let values = qualityPriority.payload else { return false }
+        thinking = values.thinkingEnabled
+        effort = values.reasoningEffort ?? ""
+        temperature = values.temperature
+        return true
+    }
+
     mutating func selectProfile(_ id: String, profiles: [LLMProfile], row: BookAgentModelBinding?) {
         guard profileID != id else { return }
         profileID = id
@@ -1348,6 +1385,57 @@ struct BookModelSettingsDraft {
             effectiveThinkingEnabled: nil, effectiveReasoningEffort: nil,
             effectiveTemperature: nil, contentRevision: nil
         )
+    }
+}
+
+/// One pure capability-based choice for both platforms and both setting scopes.
+/// Constructing a preset never mutates saved settings or changes the model.
+struct QualityPriorityPreset {
+    static let explanation = "启用当前模型的推理，可能更慢；文学效果由作者判断。"
+    let role: String
+    let profileID: String?
+    let profileExists: Bool
+    let capabilities: ModelCapabilities?
+    let temperature: Double?
+
+    static func supports(role: String) -> Bool { role == "writer" || role == "checker" }
+
+    var unavailableReason: String? {
+        guard Self.supports(role: role) else { return "此角色不提供质量优先预设。" }
+        guard profileExists, let profileID, !profileID.isEmpty else { return "请先选择一个可用模型。" }
+        guard let capabilities else { return "模型能力尚未载入，请重新加载设置。" }
+        guard capabilities.thinkingToggleSupported || capabilities.thinkingRequired else {
+            return "当前模型未声明支持推理，无法应用此预设。"
+        }
+        return nil
+    }
+
+    var preview: String {
+        if let unavailableReason { return unavailableReason }
+        return capabilities?.reasoningEffortLevels.contains("high") == true
+            ? "将开启推理 · 强度高" : "将开启推理 · 模型默认强度"
+    }
+
+    var payload: AgentModelBindingValues? {
+        guard unavailableReason == nil, let capabilities else { return nil }
+        return AgentModelBindingValues(
+            llmProfileId: profileID,
+            thinkingEnabled: capabilities.thinkingToggleSupported ? true : nil,
+            reasoningEffort: capabilities.reasoningEffortLevels.contains("high") ? "high" : nil,
+            temperature: capabilities.temperatureEffectiveWhenThinking ? temperature : nil,
+            effectiveThinkingEnabled: nil, effectiveReasoningEffort: nil,
+            effectiveTemperature: nil, contentRevision: nil
+        )
+    }
+}
+
+extension AgentBinding {
+    var reasoningStateLabel: String {
+        let enabled = effectiveThinkingEnabled ?? thinkingEnabled ?? capabilities.thinkingRequired
+        guard enabled else { return "当前推理：关闭" }
+        let effort = effectiveReasoningEffort ?? reasoningEffort
+        let label = effort == "high" ? "高" : (effort ?? "模型默认")
+        return "当前推理：开启 · \(label)"
     }
 }
 
@@ -1582,6 +1670,56 @@ struct WriteJobStatus: Decodable, Sendable {
     }
 }
 
+struct PreviousChapterContext: Decodable, Hashable, Sendable {
+    struct Source: Decodable, Hashable, Sendable, Identifiable {
+        var id: String
+        var text: String
+        var kind: String
+        var labels: [String]
+        var participantIDs: [String]
+        enum CodingKeys: String, CodingKey {
+            case id, text, kind, labels
+            case participantIDs = "participant_ids"
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            text = try c.decode(String.self, forKey: .text)
+            kind = try c.decode(String.self, forKey: .kind)
+            labels = try c.decodeIfPresent([String].self, forKey: .labels) ?? []
+            participantIDs = try c.decodeIfPresent([String].self, forKey: .participantIDs) ?? []
+        }
+    }
+    var chapterID: String?
+    var chapterIndex: Int?
+    var title: String
+    var mode: String
+    var contractVersion: String?
+    var sources: [Source]
+    var previousEnding: String
+    var limitations: [ProductionReadiness.Limitation]
+
+    enum CodingKeys: String, CodingKey {
+        case title, mode, sources, limitations, index
+        case chapterID = "chapter_id"
+        case chapterIndex = "chapter_index"
+        case contractVersion = "contract_version"
+        case previousEnding = "previous_ending"
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chapterID = try c.decodeIfPresent(String.self, forKey: .chapterID)
+        chapterIndex = try c.decodeIfPresent(Int.self, forKey: .chapterIndex)
+            ?? c.decodeIfPresent(Int.self, forKey: .index)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "unavailable"
+        contractVersion = try c.decodeIfPresent(String.self, forKey: .contractVersion)
+        sources = try c.decodeIfPresent([Source].self, forKey: .sources) ?? []
+        previousEnding = try c.decodeIfPresent(String.self, forKey: .previousEnding) ?? ""
+        limitations = try c.decodeIfPresent([ProductionReadiness.Limitation].self, forKey: .limitations) ?? []
+    }
+}
+
 struct MemoryContext: Decodable, Hashable, Sendable {
     struct Source: Decodable, Hashable, Sendable, Identifiable {
         var id: String
@@ -1616,7 +1754,8 @@ struct MemoryContext: Decodable, Hashable, Sendable {
     var sources: [Source]
     var conflicts: [Conflict]
     var characterCount: Int?
-    enum CodingKeys: String, CodingKey { case brief, sources, conflicts, memoryBrief = "memory_brief"; case previousTail = "previous_tail"; case previousEnding = "previous_ending"; case characterCount = "character_count"; case memoryCount = "memory_non_whitespace_count" }
+    var previousChapterContext: PreviousChapterContext?
+    enum CodingKeys: String, CodingKey { case brief, sources, conflicts, memoryBrief = "memory_brief"; case previousTail = "previous_tail"; case previousEnding = "previous_ending"; case characterCount = "character_count"; case memoryCount = "memory_non_whitespace_count"; case previousChapterContext = "previous_chapter_context" }
     init(from decoder: Decoder) throws {
         struct Brief: Decodable { let text: String }
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1626,6 +1765,7 @@ struct MemoryContext: Decodable, Hashable, Sendable {
         sources = try container.decodeIfPresent([Source].self, forKey: .sources) ?? []
         conflicts = try container.decodeIfPresent([Conflict].self, forKey: .conflicts) ?? []
         characterCount = try container.decodeIfPresent(Int.self, forKey: .characterCount) ?? container.decodeIfPresent(Int.self, forKey: .memoryCount)
+        previousChapterContext = try container.decodeIfPresent(PreviousChapterContext.self, forKey: .previousChapterContext)
     }
 }
 
@@ -1635,6 +1775,17 @@ struct CheckerIssue: Codable, Hashable, Sendable, Identifiable {
     var draftEvidence: String
     var bibleEvidence: String
     var reason: String
+    var kindLabel: String { Self.label(for: kind) }
+
+    static func label(for kind: String) -> String {
+        switch kind {
+        case "continuity_repeated_progress": return "重复推进"
+        case "continuity_known_reset": return "已知信息倒退"
+        case "continuity_timeline_conflict": return "时间承接冲突"
+        case "required_order_conflict": return "指定顺序冲突"
+        default: return kind
+        }
+    }
     /// Source metadata is available only for the current visible manuscript.
     /// Candidate-job payloads continue to decode with these fields empty.
     var sourceKind: String = ""

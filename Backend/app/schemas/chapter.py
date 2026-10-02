@@ -131,6 +131,8 @@ class ChapterArchiveRead(BaseModel):
     archive_schema: str = Field(alias="schema", serialization_alias="schema")
     revision_id: str | None = None
     revision: int | None = None
+    contract_version: str | None = None
+    continuity: dict[str, list[str]] | None = None
     summary: str = ""
     facts: list[ArchiveFactRead] = Field(default_factory=list)
     state_delta_count: int = 0

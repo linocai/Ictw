@@ -1,5 +1,7 @@
 """Build69 regressions for canonical references, live memory and portable backups."""
 from __future__ import annotations
+from functools import partial
+
 
 import hashlib
 import io
@@ -48,6 +50,9 @@ def _alias_output(order=("F1", "F2", "F2")):
         } for ref in order],
     }
 
+
+# This suite tests the retained v2.1 validator, not the new v2.2 root fields.
+validate_archive_output = partial(validate_archive_output, contract_version="archive-v2.1")
 
 def _synthetic_chapter():
     person = SimpleNamespace(id="person", name="林夕")
@@ -101,7 +106,9 @@ def test_alias_duplicate_full_accept_activates_and_enters_selector(client, auth_
 
         def complete_json(self, **_kwargs):
             self.calls += 1
-            return _alias_output()
+            output = _alias_output()
+            output["continuity"] = {key: [] for key in ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")}
+            return output
 
     extractor = Extractor()
     client.app.dependency_overrides[get_extractor_client] = lambda: extractor

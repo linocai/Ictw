@@ -519,6 +519,7 @@ private struct V2MacEvidenceFace: View {
             }
             nameClarification
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private var checkerContextLimitations: some View {
@@ -612,7 +613,7 @@ private struct V2MacEvidenceCards: View {
         } else {
             ForEach(issues) { issue in
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(issue.kind).font(V2DeskType.control(10.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                    Text(issue.kindLabel).font(V2DeskType.control(10.5)).foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
                     if !issue.draftEvidence.isEmpty {
                         Text(issue.draftEvidence).font(V2DeskType.prose(12)).foregroundStyle(V2DeskPalette.color(.ink, scheme: colorScheme))
                     }
@@ -626,6 +627,8 @@ private struct V2MacEvidenceCards: View {
                     }
                     Text(issue.reason).font(V2DeskType.control(11.5)).foregroundStyle(V2DeskPalette.color(.secondaryInk, scheme: colorScheme))
                 }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(11)
                 .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
                 .opacity(stale ? 0.5 : 1)

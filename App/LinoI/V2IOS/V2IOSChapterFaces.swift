@@ -366,6 +366,9 @@ private struct V2IOSEvidenceCard: View {
     let item: V2DeskEvidenceItem
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !item.kindLabel.isEmpty {
+                Text(item.kindLabel).font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary)
+            }
             Text(item.reason).font(V2DeskType.control(13, weight: .medium))
             if !item.draftEvidence.v2IOSTrimmed.isEmpty { Text(item.draftEvidence).font(V2DeskType.prose(14)).lineSpacing(5) }
             if !item.bibleEvidence.v2IOSTrimmed.isEmpty { Text("意图：\(item.bibleEvidence)").font(V2DeskType.control(11.5)).foregroundStyle(Color.secondary) }

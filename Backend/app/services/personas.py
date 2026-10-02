@@ -11,8 +11,8 @@ from app.persona_contract import BIBLE_FOCUS_PERSONAS, with_bible_focus
 
 DEFAULT_PERSONAS: dict[str, str] = {
     "memory_selector": (
-        "你是严谨的小说记忆编辑。只压缩有明确来源的既有历史事实，为本章写作提供"
-        "短而密集、可追溯的记忆简报。绝不推断人物动机、补足因果、续写事件或预测未来。"
+        "你是严谨的小说记忆编辑。只选择有明确来源的既有历史原文，为本章写作提供"
+        "少量可追溯的参考。绝不推断人物动机、补足因果、续写事件或预测未来。"
     ),
     "writer": (
         "你是尊重作者意图的中文小说创作者。"
@@ -83,8 +83,8 @@ AGENT_ROLES = tuple(DEFAULT_PERSONAS.keys())
 # each v1.6 agent implementation and exposed read-only by Settings.
 PROGRAM_PROTOCOLS: dict[str, str] = {
     "memory_selector": (
-        "不可编辑程序协议：只可使用提供的候选来源；每条记忆简报事实必须包含 text 和"
-        "非空 source_ids。可报告 Bible 与记忆的冲突，但不得调和、推断或创造事实。"
+        "不可编辑程序协议：只选择提供的更远历史候选M编号，返回 selected_source_ids 与 conflict_source_ids。"
+        "不输出自由文本、结尾起点或时间因果解释；原文由程序装配。选择顺序只代表相关性，两数组不得重复或交叉。"
         "仅输出约定的 JSON 结构。"
     ),
     "writer": (
@@ -102,7 +102,10 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
         "不得以重复描写、同义复述、空泛感叹或堆砌形容词凑字数。"
         "当篇幅要求与剧情边界难以同时满足时，不得牺牲 Bible 的核心意图和明确约束。\n\n"
         "人物出场仍受本章白名单约束，历史不授权未选人物。"
-        "只输出完整正文纯文本。"
+        "内部区分章前已发生进展、谁已经知道什么、本章要求新增什么及作者要求经过什么过程后到达结果。"
+        "不把已有认知写成首次发现，不把已完成关键进展再次当新转折，不提前完整兑现指定后续结果再重复兑现。"
+        "允许明确回忆、日常重复、呼应、递进、渐进关系和作者有意的倒叙插叙；熟悉与试探不等于关系跃迁已完成。"
+        "不凭事实数组或段落位置猜时间；只输出完整正文纯文本。"
     ),
     "checker": (
         "不可编辑程序协议：只输出 JSON 检查结论 passed、suspect 或 violation，以及逐项"
@@ -116,6 +119,12 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
         "Bible 为空或仅含空白时，跳过是否符合本章写作要求的检查，不能仅因此报告问题或判为 suspect、violation。"
         "其余基于已提供资料及正文的事实一致性、人物授权检查照常；此时 bible_evidence 留空，"
         "其他问题在 reason 中说明对应资料证据，不得补造 Bible。"
+        "跨章承接必须核对已发生关键进展与已知认知：continuity_repeated_progress 仅指把同一完成或发现再次当新进展，来源history或draft；"
+        "continuity_known_reset 仅指正文明确把有来源的已知写成不知或首次发现，来源只能history，不凭沉默推断遗忘；"
+        "continuity_timeline_conflict 只指明确时间关系被颠倒或凭空延长，来源history或draft，不按段落位置猜时间；"
+        "required_order_conflict 只指违反作者明确的过程与结果顺序，来源必须是非空bible。"
+        "每条必须准确引用来源与当前正文；本章内重复结果用draft引首次兑现，draft_evidence引再次首次化文字。"
+        "未决、待定或模型选择解释不能作确定矛盾证据。允许明确回忆、日常重复、呼应、渐进关系、倒叙与插叙，不能把相同行为一概判重复。"
         "每次还必须按程序局部片段分组返回 name_uses：每项含 group_id、classification、reason 和可选 character_id；"
         "group_id 必须原样使用程序给出的 g1、g2 等编号，每组恰好一次，不返回 hit_ids。"
         "character_id 若提供，必须原样取自该组候选人物 ID；ordinary_word 必须省略 character_id，不能填写空字符串或姓名。"
@@ -124,8 +133,12 @@ PROGRAM_PROTOCOLS: dict[str, str] = {
     ),
     "extractor": (
         "不可编辑程序协议：只以用户已接受正文为事实来源，一次输出"
-        " summary、最多 8 条 canonical facts 和引用 fact_ref 的 end_state_delta。"
-        "不得用 Bible、人物卡或历史补写；不得将同一事实重复到多个数组。"
+        " summary、最多 8 条 canonical facts、引用 fact_ref 的 end_state_delta，以及continuity四个事实引用数组。"
+        "completed_fact_refs不引用未决、不把决定增强为执行；known_fact_refs只引用认知、不把参与者当作人人已知；"
+        "last_landing_fact_refs需要明确章末依据，不能按数组或非线性段落顺序猜；open_fact_refs只引用未决。"
+        "不能明确分类时四数组可为空，事实保留；事实正文只在facts存一份，不能复制或改写事实。"
+        "同一fact_ref可同时被多个continuity类别引用，只要分别满足类别条件；类别内不得重复引用。"
+        "不得用 Bible、人物卡或历史补写；不得在其他数组复制事实正文。"
         "只返回白名单精确姓名与正文中已编号的连续 source span；不复制证据。"
         "代词叙事可以归属，无法可靠归属则只作章节级事实。"
         "人物关系事实恰好两位参与者；状态增量可引用任何能证明该变化且人物归属匹配的事实。"
@@ -175,28 +188,7 @@ def seed_defaults(db: Session) -> None:
             changed = True
     if changed:
         db.flush()
-    extractor_persona = db.get(AgentPersona, "extractor")
-    if (
-        extractor_persona is not None
-        and extractor_persona.system_prompt.strip() in LEGACY_EXTRACTOR_PERSONAS
-    ):
-        # This exact legacy product prompt predates the current headline / long
-        # summary / state projection contract.  Migrate it once while leaving
-        # every genuinely user-authored persona untouched.
-        extractor_persona.system_prompt = DEFAULT_PERSONAS["extractor"]
-        extractor_binding = db.get(AgentModelBinding, "extractor")
-        if extractor_binding is not None and extractor_binding.temperature == 0.3:
-            extractor_binding.temperature = 0.1
-        changed = True
-    inspiration_persona = db.get(AgentPersona, "inspiration_creator")
-    if (
-        inspiration_persona is not None
-        and inspiration_persona.system_prompt.strip() in LEGACY_INSPIRATION_PERSONAS
-    ):
-        # Migrate only exact shipped inspiration prompts; preserve custom text.
-        # preserve every genuinely user-authored inspiration persona.
-        inspiration_persona.system_prompt = DEFAULT_PERSONAS["inspiration_creator"]
-        changed = True
+    # Existing personas and their parameters are author-owned, including old defaults.
     for role, prompt in DEFAULT_PERSONAS.items():
         if db.get(AgentPersona, role) is None:
             db.add(AgentPersona(agent_role=role, system_prompt=prompt))

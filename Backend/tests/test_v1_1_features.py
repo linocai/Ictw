@@ -42,6 +42,8 @@ class FixedText:
         return self.text
 
     def complete_json(self, **kwargs):
+        if "selected_source_ids" in kwargs.get("schema", {}).get("properties", {}):
+            return {"selected_source_ids": [], "conflict_source_ids": []}
         return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
 
 
@@ -336,6 +338,7 @@ def _finalize_with_event(client, auth_headers, wait_for_terminal, event_text: st
                 span_id = re.search(r"\[(P\d{4}-S\d{2})\]", user).group(1)
                 return {
                     "summary": "梗概",
+                    "continuity": {key: [] for key in ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")},
                     "facts": [{
                         "fact_ref": "F1", "type": "剧情", "importance": 3,
                         "text": "林夕" + event_text, "participant_names": ["林夕"],
@@ -425,7 +428,7 @@ def test_health_reports_current_version(client, auth_headers):
     from app.main import APP_VERSION
 
     assert client.get("/api/v1/health", headers=auth_headers).json()["version"] == APP_VERSION
-    assert APP_VERSION == "2.3.4"
+    assert APP_VERSION == "2.4.0"
 
 
 # --- B8 migration from the production revision --------------------------------

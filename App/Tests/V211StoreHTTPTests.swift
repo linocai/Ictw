@@ -144,6 +144,8 @@ private struct V211StoreHTTPTests {
     @MainActor
     static func main() async {
         let tests: [(String, @MainActor () async throws -> Void)] = [
+            ("Build75 quality preset writes once in the chosen scope and preserves failed settings", build75QualityPriority),
+            ("Build75 continuity issues keep readable labels and visible source evidence", build75ContinuityEvidence),
             ("Build74 real Store stops stale rewrite after reopen", build74RewriteOwnership),
             ("Build74 real iOS coordinator revokes every rewrite continuation", build74RewriteNavigation),
             ("Build74 owned accepted and draft rewrites still start once", build74RewriteSuccess),
@@ -1655,6 +1657,50 @@ private struct V211StoreHTTPTests {
         try check(workspace.chapterNavigationID == current, "metadata refresh of same path identity must not invent navigation")
         workspace.resetBookContext()
         try check(workspace.chapterPath.isEmpty && workspace.chapterNavigationID != current, "reset must synchronously invalidate previous destination")
+    }
+
+    @MainActor static func build75ContinuityEvidence() async throws {
+        let h = try await Harness("continuity-evidence", ["check_mode": "violation", "check_issues": [[
+            "kind": "continuity_repeated_progress", "reason": "已完成的抵岸被写成再次首次抵岸。",
+            "draft_evidence": "虚构的雨落在屋檐。", "bible_evidence": "",
+            "source_kind": "history", "source_id": "history:previous:c0:fact:0",
+            "source_evidence": "小舟已经抵岸。"
+        ]]])
+        _ = await h.editor.rerunChecker()
+        let issue = h.editor.checkerResult?.issues?.first
+        try check(issue?.kindLabel == "重复推进" && issue?.sourceKind == "history" && issue?.sourceEvidence == "小舟已经抵岸。", "visible Checker result must preserve the new issue and original history evidence")
+        try check(issue.map { V2DeskEvidenceItem($0).kindLabel } == "重复推进", "shipping desk presentation must use the readable label")
+    }
+
+    @MainActor static func build75QualityPriority() async throws {
+        let h = try await Harness("quality-priority", ["quality_capabilities": true])
+        let settings = AgentSettingsStore(session: h.session, sync: h.sync)
+        await settings.load()
+        let baseline = settings.bindings
+        _ = settings.qualityPriorityPreset(role: "writer")
+        var state = try await fixture()
+        try check(!state.requests.contains { $0.method == "PATCH" }, "opening or previewing the preset must not write")
+        _ = try await fixture("config", ["settings_gate": "quality"])
+        let saving = Task { await settings.applyQualityPriority(role: "writer") }
+        try await eventually("quality request suspended") { try await fixture().requests.contains { $0.method == "PATCH" } }
+        let duplicate = await settings.applyQualityPriority(role: "writer")
+        let bounded = await settings.applyQualityPriority(role: "extractor")
+        try check(!duplicate && !bounded, "double tap and bounded role must never issue another write")
+        _ = try await fixture("release", ["gate": "quality"])
+        let saved = await saving.value
+        state = try await fixture()
+        let writes = state.requests.filter { $0.method == "PATCH" }
+        try check(saved && writes.count == 1 && writes[0].path == "/agent-model-bindings/writer" && writes[0].ifMatch == "\"7\"", "quality preset must use one revision-protected write to its role")
+        let payload = try JSONSerialization.jsonObject(with: Data(writes[0].bodyText.utf8)) as! [String: Any]
+        try check(payload["thinking_enabled"] as? Bool == true && payload["reasoning_effort"] as? String == "high" && payload["temperature"] is NSNull && payload["llm_profile_id"] as? String == baseline[0].llmProfileId, "HTTP payload must reflect model capabilities without profile changes")
+        try check(settings.bindings.first { $0.agentRole == "checker" } == baseline.first { $0.agentRole == "checker" }, "Writer action must not change Checker")
+        for status in [503, 422, 409] {
+            _ = try await fixture("config", ["settings_status": status, "settings_gate": ""])
+            let before = settings.bindings
+            let refused = await settings.applyQualityPriority(role: "checker")
+            try check(!refused && settings.bindings == before && settings.qualityPrioritySavingRoles.isEmpty, "failed preset must retain settings and allow deliberate retry")
+        }
+        try check(settings.personas[0].editablePersona == "原人格", "quality preset must preserve author personas")
     }
 
     @MainActor static func settingsMutationContracts() async throws {

@@ -114,7 +114,8 @@ def test_only_current_relevant_unknown_states_require_confirmation(client, monke
         selected_id = chapter.character_links[0].character_id
         unknown = {"character_id": "unselected", "other_character_id": selected_id if selected_endpoint else "also-unselected",
                    "scope": "relationship", "slot": "关系"}
-        revision = SimpleNamespace(state_uncertainties=[unknown], summary="有效事实", id="test-revision")
+        revision = SimpleNamespace(state_uncertainties=[unknown], summary="有效事实", id="test-revision",
+                                   facts=[], continuity=None, contract_version="archive-v2.1")
         monkeypatch.setattr(archive_v2, "active_archive_revision", lambda db, ch: revision)
         monkeypatch.setattr(context, "memory_candidates", lambda db, ch: [])
         monkeypatch.setattr(context, "_projection_before", lambda db, ch: ({}, [unknown] if effective else []))
@@ -176,7 +177,7 @@ def test_selector_input_change_stops_before_writer_and_keeps_old_draft(client, a
     from app.llm.factory import get_checker_client, get_memory_selector_client, get_writer_client
     from app.services import production_context as context
 
-    chapter_id, _prior_id, _future_id = _story()
+    chapter_id, _prior_id, _future_id = _story(distant=True)
     with db_module.SessionLocal() as db:
         chapter = db.get(Chapter, chapter_id)
         assert chapter is not None
@@ -193,7 +194,7 @@ def test_selector_input_change_stops_before_writer_and_keeps_old_draft(client, a
         def complete_json(self, **_kwargs):
             self.calls += 1
             state["changed"] = True
-            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+            return {"selected_source_ids": [], "conflict_source_ids": []}
 
     class CountingWriter:
         model_name = "synthetic-writer"
@@ -225,7 +226,7 @@ def test_selector_receives_readable_unselected_relationship_identity(client, aut
     from conftest import FakeWriter
     from app.models import Character
 
-    chapter_id, _prior_id, _future_id = _story()
+    chapter_id, _prior_id, _future_id = _story(distant=True)
     with db_module.SessionLocal() as db:
         chapter = db.get(Chapter, chapter_id)
         assert chapter is not None
@@ -248,7 +249,7 @@ def test_selector_receives_readable_unselected_relationship_identity(client, aut
 
         def complete_json(self, *, user, **_kwargs):
             self.user = user
-            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+            return {"selected_source_ids": [], "conflict_source_ids": []}
 
     selector = CapturingSelector()
     client.app.dependency_overrides[get_memory_selector_client] = lambda: selector
@@ -781,7 +782,7 @@ def test_selector_relationship_identity_disambiguates_duplicate_names(client, au
     from app.services import production_context as context
     from conftest import FakeWriter
 
-    chapter_id, _prior_id, _future_id = _story(duplicate_name=True)
+    chapter_id, _prior_id, _future_id = _story(duplicate_name=True, distant=True)
     with db_module.SessionLocal() as db:
         chapter = db.get(Chapter, chapter_id)
         assert chapter is not None
@@ -807,7 +808,7 @@ def test_selector_relationship_identity_disambiguates_duplicate_names(client, au
 
         def complete_json(self, *, user, **_kwargs):
             self.user = user
-            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+            return {"selected_source_ids": [], "conflict_source_ids": []}
 
     selector = CapturingSelector()
     client.app.dependency_overrides[get_memory_selector_client] = lambda: selector
@@ -827,7 +828,7 @@ def test_selector_relationship_identity_marks_deleted_card_without_uuid_prompt(c
     from app.services import production_context as context
     from conftest import FakeWriter
 
-    chapter_id, _prior_id, _future_id = _story()
+    chapter_id, _prior_id, _future_id = _story(distant=True)
     missing_id = "removed-character-identity"
     with db_module.SessionLocal() as db:
         chapter = db.get(Chapter, chapter_id)
@@ -846,7 +847,7 @@ def test_selector_relationship_identity_marks_deleted_card_without_uuid_prompt(c
 
         def complete_json(self, *, user, **_kwargs):
             self.user = user
-            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+            return {"selected_source_ids": [], "conflict_source_ids": []}
 
     selector = CapturingSelector()
     client.app.dependency_overrides[get_memory_selector_client] = lambda: selector

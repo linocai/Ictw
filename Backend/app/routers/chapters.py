@@ -72,6 +72,7 @@ from app.services.write_jobs import (
 )
 from app.services.write_ownership import cancel_local_writer_jobs, invalidate_writer_inputs
 from app.services.archive_v2 import (
+    ARCHIVE_CONTRACT_VERSION,
     archive_validation_message,
     archive_input_fingerprint,
     archive_health_summaries,
@@ -853,7 +854,12 @@ def patch_chapter(
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     require_matching_revision(chapter, if_match, resource_type="chapter", resource_id=chapter.id, db=db)
-    previous_archive_fingerprint = archive_input_fingerprint(chapter)
+    active_archive = db.get(ChapterArchiveRevision, chapter.active_archive_revision_id) if chapter.active_archive_revision_id else None
+    # Metadata-only saves must compare the same contract on both sides of an
+    # edit, including archives retained from before the current default.
+    previous_archive_fingerprint = archive_input_fingerprint(
+        chapter, contract_version=active_archive.contract_version if active_archive else ARCHIVE_CONTRACT_VERSION,
+    )
     was_finalized = chapter.status == "finalized"
     prior_check_inputs = {
         key: getattr(chapter, key)
@@ -1078,9 +1084,9 @@ def write_chapter(
     if live_job is not None:
         if not payload.replace_draft or live_job.kind not in {"write", "check"}:
             raise HTTPException(status_code=409, detail={"code": "write_running", "message": "写作正在进行"})
-    candidates = memory_candidates(db, chapter)
-    selected_ids = {link.character_id for link in chapter.character_links}
-    candidates = prefilter_memory_candidates(candidates, chapter=chapter, selected_character_ids=selected_ids)
+    from app.services.chapter_continuity import distant_candidates
+    from app.services.context import source_selector_user_message
+    candidates = distant_candidates(db, chapter)
     budget = memory_budget()
     bible_snapshot = chapter.user_prompt
     bible_sha256 = hashlib.sha256(bible_snapshot.encode()).hexdigest()
@@ -1098,8 +1104,8 @@ def write_chapter(
         from app.services.production_context import freeze_selector_input
 
         selector_input_snapshot = freeze_selector_input(db, chapter, candidates)
-        selector_message = memory_selector_user_message(
-            chapter, candidates, budget, bible=bible_snapshot,
+        selector_message = source_selector_user_message(
+            chapter, candidates, budget,
             dynamic_fields_by_character=selector_input_snapshot["prior_state"],
             unknown_state_slots=selector_input_snapshot["unknown_state_slots"],
         )
@@ -2041,7 +2047,7 @@ def _start_archive_job(
     previous_diagnostics: list[dict] | None = None
     if (
         latest is not None
-        and latest.contract_version == "archive-v2.1"
+        and latest.contract_version in {"archive-v2.1", "archive-v2.2"}
         and latest.input_fingerprint == archive_input_fingerprint(chapter, contract_version=latest.contract_version)
         and latest.diagnostics
     ):

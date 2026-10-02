@@ -1,4 +1,6 @@
 from __future__ import annotations
+from functools import partial
+
 
 import hashlib
 import re
@@ -31,6 +33,9 @@ from app.services.character_state_projection import project_state_changes
 from app.services.write_jobs import _log_archive_failure
 from scripts.report_archive_reextract_candidates import classify_candidate
 
+
+# This suite tests the retained v2.1 validator, not the new v2.2 root fields.
+validate_archive_output = partial(validate_archive_output, contract_version="archive-v2.1")
 
 class V2Extractor:
     def __init__(
@@ -71,6 +76,8 @@ class V2Extractor:
                 {"fact_ref": "F1", "character_name": name, "other_character_name": None, "scope": "snapshot", "slot": "当前行动", "operation": "set", "value": "等待"},
                 {"fact_ref": "F1", "character_name": name, "other_character_name": None, "scope": "snapshot", "slot": "情绪状态", "operation": "set", "value": "平静"},
             ]
+        if "continuity" in schema["properties"]:
+            output["continuity"] = {key: [] for key in ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")}
         return output
 
 
@@ -97,6 +104,7 @@ class V2RelationshipExtractor:
         span_id = match.group(1) if match else "P0001-S01"
         return {
             "summary": "两人建立合作关系。",
+            "continuity": {key: [] for key in ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")},
             "facts": [{
                 "fact_ref": "relation",
                 "type": "关系",

@@ -14,6 +14,23 @@ from app.services.context import (
     MAX_SOURCES_PER_BRIEF,
 )
 from app.services.personas import compose_system_prompt
+from app.services.chapter_continuity import source_selection_problem
+
+SOURCE_SELECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "selected_source_ids": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_MEMORY_BRIEFS},
+        "conflict_source_ids": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_MEMORY_CONFLICTS},
+    },
+    "required": ["selected_source_ids", "conflict_source_ids"],
+    "additionalProperties": False,
+}
+SOURCE_SELECTION_FIXED_CONTRACT = (
+    "固定输出协议：只返回 selected_source_ids 与 conflict_source_ids 两个数组，复制本次候选 M 编号；"
+    "不得输出自由文本、改写事实、添加时间或因果、返回结尾起点。两数组不重复、不交叉。"
+    "选择顺序仅代表相关性，不代表事件时序；可能与Bible冲突的来源只列编号，不编造冲突解释。"
+    "合计原文不能超过2400个去空白字符；无直接相关历史可都为空。"
+)
 
 
 MEMORY_SELECTION_SCHEMA: dict[str, Any] = {
@@ -67,6 +84,45 @@ class MemorySelectorAgent:
     def __init__(self, llm: LLMClient, editable_persona: str) -> None:
         self.llm = llm
         self.system_prompt = compose_system_prompt("memory_selector", editable_persona)
+
+    def select_sources(self, user_message: str, *, candidates: list[MemoryBlock],
+                       validator: Callable[[MemorySelection], str | None] | None = None) -> MemorySelection:
+        """New requests select exact source handles; no model-authored text survives."""
+        correction = ""
+        aliases = selector_source_aliases(candidates)
+        by_id = {block.id: block for block in candidates}
+        for attempt in range(2):
+            try:
+                output = self.llm.complete_json(system=f"{self.system_prompt}\n\n{SOURCE_SELECTION_FIXED_CONTRACT}",
+                    user=user_message + correction, schema=SOURCE_SELECTION_SCHEMA, temperature=0.1, timeout=180)
+                problem = None
+                if not isinstance(output, dict) or set(output) != {"selected_source_ids", "conflict_source_ids"}:
+                    problem = "只允许两个来源编号数组，不得输出自由文本或结尾"
+                rows: list[list[dict]] = []
+                if problem is None:
+                    for key in ("selected_source_ids", "conflict_source_ids"):
+                        values = output[key]
+                        if not isinstance(values, list) or any(not isinstance(value, str) or value not in aliases or not value.startswith("M") for value in values):
+                            problem = "只能原样复制本次候选 M 编号"
+                            break
+                        rows.append([{"text": by_id[aliases[value]].text, "source_ids": [aliases[value]]} for value in values])
+                if problem is None:
+                    selection = MemorySelection(rows[0], rows[1], diagnostics=("selection_corrected",) if attempt else ())
+                    problem = source_selection_problem(candidates, selection.briefs, selection.conflicts)
+                    if problem is None and validator is not None:
+                        problem = validator(selection)
+                    if problem is None:
+                        return selection
+                if attempt == 0:
+                    correction = "\n\n# 程序退回\n" + str(problem) + "；请按原文大小重新选择少量来源，不得压缩或解释。"
+                    continue
+                raise LLMError(f"Memory Selector 两次输出均未通过记忆协议校验：{problem}",
+                               code="memory_selection_invalid", retryable=False)
+            except LLMError as exc:
+                if attempt == 0 and exc.retryable:
+                    continue
+                raise
+        raise RuntimeError("memory selector failed")
 
     def select(
         self,

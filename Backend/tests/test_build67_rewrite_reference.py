@@ -11,16 +11,18 @@ from app.models import AgentPersona, Chapter, ChapterCharacter, Character, JobRu
 from app.services.personas import BIBLE_FOCUS_PERSONAS, DEFAULT_PERSONAS, PROGRAM_PROTOCOLS
 from conftest import FakeWriter
 from scripts.upgrade_bible_personas import upgrade
-from test_v2_2_checker_context import _story
+from test_v2_2_checker_context import _story as _old_story
 
+
+def _story():
+    return _old_story(distant=True)
 
 def setup_writer(client):
     calls, messages = [], []
     class Selector:
         def complete_json(self, **kwargs):
             calls.append(1)
-            return {"briefs": [{"text": "林夕已归还钥匙。", "source_ids": ["M1"]}],
-                    "conflicts": [], "previous_ending_start_id": "E1"}
+            return {"selected_source_ids": ["M1"], "conflict_source_ids": []}
     class Writer(FakeWriter):
         def complete_stream(self, **kwargs):
             messages.append(kwargs["user"])
@@ -101,7 +103,7 @@ def test_world_changes_during_preparation_retire_job_and_restore_old_draft(clien
         def complete_json(self, **kwargs):
             started.set()
             assert release.wait(5)
-            return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
+            return {"selected_source_ids": [], "conflict_source_ids": []}
     client.app.dependency_overrides[get_memory_selector_client] = BlockingSelector
     with db_module.SessionLocal() as db:
         chapter = db.get(Chapter, cid)

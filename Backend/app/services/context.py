@@ -90,6 +90,7 @@ class MemoryBlock:
     # database ID so an equivalent re-archive can be rebound safely.
     source_chapter_id: str = ""
     source_position: int = 0
+    fact_type: str = ""
 
 
 def memory_participant_ids(block: MemoryBlock) -> tuple[str, ...]:
@@ -186,6 +187,7 @@ def memory_candidates(db: Session, chapter: Chapter) -> list[MemoryBlock]:
                         participant_ids=participant_ids,
                         source_chapter_id=item.id,
                         source_position=position,
+                        fact_type=fact.fact_type,
                     )
                 )
             continue
@@ -651,6 +653,7 @@ def writing_reference_context(
     dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
     conflicts: list[MemoryBlock] | None = None,
     unknown_state_slots: list[dict[str, Any]] | None = None,
+    previous_chapter_context: dict[str, Any] | None = None,
 ) -> str:
     characters = _selected_characters(chapter)
     allow = "、".join(character.name for character in characters) or "（没有已选人物）"
@@ -659,6 +662,9 @@ def writing_reference_context(
     memory_text = "\n\n".join(block.text for block in (memories or [])) or "（本章不需要其他历史记忆）"
     conflict_text = "\n\n".join(block.text for block in (conflicts or [])) or "（无）"
     ending_text = previous_ending.strip() or "（没有可用的紧邻上一章结尾）"
+    if previous_chapter_context is not None:
+        from app.services.chapter_continuity import render_previous_context
+        ending_text = render_previous_context(previous_chapter_context)
     return "\n\n".join(
         [
             "# 世界观（硬约束）\n" + (book.world_setting.strip() or "（无）"),
@@ -678,8 +684,10 @@ def writing_reference_context(
             ),
             (
                 "# 历史参考资料（只读，低于本章 Bible）\n"
-                "## 紧邻上一章结尾原文（仅用于开场衔接）\n"
-                "以下原文只用于承接时间、地点、动作、身体状态、情绪余韵和现场环境；"
+                + ("## 紧邻上一章完整承接资料（原文直送）\n" if previous_chapter_context is not None else "## 紧邻上一章结尾原文（仅用于开场衔接）\n")
+                + ("以下完整资料用于核对已发生进展、既有认知、未决事项和最后落点；分类不增强事实原句的确定性。"
+                   if previous_chapter_context is not None else "以下原文只用于承接时间、地点、动作、身体状态、情绪余韵和现场环境；")
+                +
                 "不得决定本章主要剧情、授权白名单外人物，或要求延续与 Bible 无关的情节。\n\n"
                 + ending_text
                 + "\n\n## 其他工作记忆\n"
@@ -689,6 +697,23 @@ def writing_reference_context(
             ),
         ]
     )
+
+
+def source_selector_user_message(chapter: Chapter, blocks: list[MemoryBlock], budget: int, *,
+                                 dynamic_fields_by_character: dict[str, dict[str, Any]] | None = None,
+                                 unknown_state_slots: list[dict[str, Any]] | None = None) -> str:
+    aliases = {value: key for key, value in selector_source_aliases(blocks).items()}
+    return "\n\n".join([
+        "# 本章剧情 Bible（原文快照）\n" + chapter.user_prompt.strip(),
+        "# 本章允许人物及当前状态\n" + (_character_cards(_selected_characters(chapter), include_ids=True,
+            dynamic_fields_by_character=dynamic_fields_by_character) or "（无已选人物）"),
+        "# 本章开始前待定状态\n" + _format_unknown_state_slots(unknown_state_slots or []),
+        "待定只表示资料不足，不能推定相反事实。历史不授权未选人物；紧邻上一章由程序完整直送，不在此次候选中。",
+        f"# 远历史原文预算\n所选两数组整条来源合计最多 {budget} 个去空白字符，最多8条参考与4条待核对冲突。"
+        "候选按相关性排列，选择顺序不表达时间。只选择直接约束本章的原文；不压缩、不改写、不添加时间因果或解释。",
+        "# 候选原文\n" + ("\n\n".join(f"[{aliases[block.id]}]（{nonspace_len(block.text)}字）\n{block.text}" for block in blocks) or "（无）"),
+        '# 输出\n只返回 {"selected_source_ids":["M1"],"conflict_source_ids":["M2"]}；只能原样复制候选M编号，两数组不可重复或交叉，无相关来源允许为空。',
+    ])
 
 
 def writer_user_message(
@@ -716,6 +741,9 @@ def writer_user_message(
                 "本章剧情 Bible 决定核心事件、明确禁止事项及明确指定的顺序和结尾；未指定的过程允许合理发挥。"
                 "为完成本章意图，可自然补充互动、场景衔接、局部波折、情绪与态度变化，以及已有关系中的渐进发展。"
                 "历史参考用于衔接与核对既有事实，历史不授权白名单外人物。不得输出分析过程。\n"
+                "内部区分章前已发生进展、谁已知什么、本章新增什么、作者要求经过什么过程再到达结果；不外显分析。"
+                "不要把已有认知重写为首次发现、已完成进展重复当新转折，或先完整兑现作者指定后续结果再把同一结果写成转折。"
+                "允许明确回忆、日常重复、呼应、渐进关系及作者有意的倒叙插叙；熟悉、试探不等于关系跃迁已完成。\n"
                 "为核心事件和自然展开分配足够篇幅，完整写成一章。正文至少 4000 个去空白字符，"
                 "但没有产品字数上限。只输出正文，不得解释或列提纲。"
             ),

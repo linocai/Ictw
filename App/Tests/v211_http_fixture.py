@@ -79,6 +79,23 @@ def reset(options):
                      global_binding=dict(llm_profile_id=prefix + "-profile"), effective_binding=dict(llm_profile_id=prefix + "-profile"),
                      content_revision=None)] for item in (book, other_book)},
                  checker={}, job_calls={}, deleted_event_ids=[])
+    if options.get("quality_capabilities"):
+        caps = dict(thinking_toggle_supported=True, thinking_can_disable=True,
+                    thinking_required=False, temperature_effective_when_thinking=False,
+                    reasoning_effort_levels=["high", "max"])
+        STATE["profiles"][0]["capabilities"] = caps
+        for role in ("writer", "checker", "extractor"):
+            value = dict(agent_role=role, llm_profile_id=prefix + "-profile", content_revision=7,
+                         thinking_enabled=False, reasoning_effort=None, temperature=0.7,
+                         capabilities=caps)
+            if role == "writer":
+                STATE["bindings"][0] = value
+            else:
+                STATE["bindings"].append(value)
+        for rows in STATE["book_bindings"].values():
+            rows[0].update(capabilities=caps,
+                           global_binding=copy.deepcopy(STATE["bindings"][0]),
+                           effective_binding=copy.deepcopy(STATE["bindings"][0]))
     if options.get("with_event"):
         character["events"] = [dict(id=prefix + "-event", book_id=book["id"], character_id=character["id"],
             chapter_id=prefix + "-c1", event_type="行动", event_text="旧事件", content_revision=7,
@@ -251,6 +268,9 @@ class Handler(BaseHTTPRequestHandler):
                     value["editable_persona"] = "默认人格"
                 else:
                     value.update({k: v for k, v in payload.items() if k != "api_key"})
+                if key == "bindings" and options.get("quality_capabilities"):
+                    value["effective_thinking_enabled"] = bool(value.get("thinking_enabled"))
+                    value["effective_reasoning_effort"] = value.get("reasoning_effort") if value["effective_thinking_enabled"] else None
                 value["content_revision"] += 1
                 returned = copy.deepcopy(value)
                 if options.get("settings_response") == "wrong_id":
@@ -324,6 +344,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(204, None)
                 value.update(source="book", book_binding=payload, effective_binding=payload,
                              content_revision=(value["content_revision"] or 0) + 1)
+                if options.get("quality_capabilities"):
+                    value["effective_binding"] = dict(payload,
+                        effective_thinking_enabled=bool(payload.get("thinking_enabled")),
+                        effective_reasoning_effort=payload.get("reasoning_effort"))
                 returned = copy.deepcopy(value)
                 if options.get("settings_response") == "wrong_scope":
                     returned = dict(STATE["bindings"][0])
@@ -500,7 +524,7 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "正文3字，少于最低要求4000字" if mode == "minimum_length" else "人物选择需要修正",
                         "current_chars": 3, "names": [] if mode == "minimum_length" else ["虚构人物"]}]}})
                 result = dict(verdict=mode if mode in ("suspect", "violation") else "passed",
-                              issues=[], draft_fingerprint="test-fingerprint")
+                              issues=options.get("check_issues", []), draft_fingerprint="test-fingerprint")
                 if options.get("check_context_limitations"):
                     result["context_limitations"] = options["check_context_limitations"]
                 if options.get("check_identity_issues"):

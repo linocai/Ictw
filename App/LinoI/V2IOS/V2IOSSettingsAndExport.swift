@@ -246,8 +246,17 @@ private struct V2IOSGlobalAgentRoleView: View {
                     Text("未绑定").tag("")
                     ForEach(agents.profiles) { Text($0.name).tag($0.id) }
                 }
+                .disabled(agents.qualityPrioritySavingRoles.contains(role))
                 if ["extractor", "inspiration_creator"].contains(role) {
                     LabeledContent("深度思考", value: "不可用")
+                }
+                if QualityPriorityPreset.supports(role: role) {
+                    V2QualityPriorityControl(
+                        preset: agents.qualityPriorityPreset(role: role),
+                        isSaving: agents.qualityPrioritySavingRoles.contains(role),
+                        canEdit: agents.sync.networkActionsAvailable,
+                        currentState: agents.bindings.first { $0.agentRole == role }?.reasoningStateLabel
+                    ) { Task { await agents.applyQualityPriority(role: role) } }
                 }
             }
             Section("全局人格") {
@@ -461,6 +470,9 @@ private struct V2IOSBookModelEditor: View {
                     }
                     Toggle("深度思考", isOn: thinking).disabled(!draft.thinkingAdjustable)
                     if let explanation = draft.thinkingExplanation { Text(explanation).font(.footnote).foregroundStyle(.secondary) }
+                    if QualityPriorityPreset.supports(role: role) {
+                        V2QualityPriorityControl(preset: draft.qualityPriority) { draft.applyQualityPriority() }
+                    }
                     if !draft.effortLevels.isEmpty {
                         Picker("思考强度", selection: $draft.effort) {
                             Text("模型默认").tag("")

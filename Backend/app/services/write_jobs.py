@@ -59,6 +59,7 @@ from app.services.production_context import (
     is_frozen_selector_input_current,
     prepare_selected_write_input,
 )
+from app.services.chapter_continuity import SELECTOR_CONTRACT_VERSION, source_selection_problem, pack_source_selection
 from app.services.search_index import rebuild_book_search_index
 from app.services.character_state_projection import rebuild_book_projection
 from app.services.write_ownership import (
@@ -550,10 +551,10 @@ def _run_memory_selector(job: WriteJob, sf: sessionmaker[Session]) -> MemorySele
         job,
         sf,
         "memory_selector",
-        job.memory_selector.select,
+        job.memory_selector.select_sources,
         job.selector_user_message,
         candidates=job.memory_candidates,
-        validator=lambda selection: memory_selection_problem(
+        validator=lambda selection: source_selection_problem(
             job.memory_candidates,
             selection.briefs,
             selection.conflicts,
@@ -897,6 +898,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             (block.id for block in job.memory_candidates if block.memory_type == "previous_ending"), None
         )
         manifest: dict[str, Any] = {
+            "selector_contract_version": SELECTOR_CONTRACT_VERSION,
             "memory_brief": [],
             "conflicts": [],
             "previous_ending_start_id": ending_start_id,
@@ -912,11 +914,10 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         if job.memory_selector:
             record_job_phase(sf, job.job_id, "selecting_memory", bible_sha256=job.bible_sha256)
             selection = _run_memory_selector(job, sf)
-            packed_context = pack_selector_context(
+            packed_context = pack_source_selection(
                 job.memory_candidates,
                 selection.briefs,
                 selection.conflicts,
-                selection.previous_ending_start_id,
                 budget=job.memory_budget,
             )
             memories = packed_context.memories
@@ -925,6 +926,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             source_by_id = {block.id: block for block in job.memory_candidates}
             used_source_ids = [source_id for item in memories + conflicts for source_id in item.id.split("|")]
             manifest = {
+                "selector_contract_version": SELECTOR_CONTRACT_VERSION,
                 "memory_brief": [
                 {"text": item.text, "source_ids": item.id.split("|"), "chapter_index": item.chapter_index,
                  "memory_type": item.memory_type} for item in memories],
@@ -994,6 +996,7 @@ def _run_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             job.mark_terminal("failed")
             return
         prepared_checker_snapshot["rewrite_reference_key"] = job.rewrite_reference_key
+        manifest = prepared_checker_snapshot["memory_manifest"]
         reference_context = prepared_checker_snapshot["reference_context"]
         message = writer_user_message(
             chapter.book, chapter, bible=job.bible_snapshot, reference_context=reference_context,
@@ -1397,7 +1400,8 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         client = getattr(job.extractor, "llm", None)
         started = time.monotonic()
         try:
-            output = job.extractor.extract_v2(job.extractor_user_message, job.selected_characters)
+            output = job.extractor.extract_v2(job.extractor_user_message, job.selected_characters,
+                                              contract_version=revision.contract_version)
         except LLMError as exc:
             _record_llm(sf, "extractor", client, started, exc.code, job, upstream_reason=exc.upstream_reason)
             exc.agent_role, exc.model_name = "extractor", getattr(client, "model_name", None)
@@ -1408,7 +1412,7 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
         else:
             _record_llm(sf, "extractor", client, started, None, job)
         operation_stage = "validating"
-        validated = validate_archive_output(chapter, output)
+        validated = validate_archive_output(chapter, output, contract_version=revision.contract_version)
         if _should_stop(job):
             db.rollback()
             # The route that ended/replaced this exact task owns its durable

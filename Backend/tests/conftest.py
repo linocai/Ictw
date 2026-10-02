@@ -47,6 +47,8 @@ class FakeWriter:
 
 class FakeSelector:
     def complete_json(self, **kwargs):
+        if "selected_source_ids" in kwargs.get("schema", {}).get("properties", {}):
+            return {"selected_source_ids": [], "conflict_source_ids": []}
         return {"briefs": [], "conflicts": [], "previous_ending_start_id": None}
 
 
@@ -139,6 +141,8 @@ class FakeExtractor:
                     "end_id": span_id,
                 }],
                 "end_state_delta": [],
+                **({"continuity": {key: [] for key in ("completed_fact_refs", "known_fact_refs", "last_landing_fact_refs", "open_fact_refs")}}
+                   if "continuity" in schema["properties"] else {}),
             }
         names = schema["properties"]["character_events"]["items"]["properties"]["character_name"]["enum"]
         name = names[0] if names else ""
@@ -172,7 +176,7 @@ class FakeExtractor:
 
 @pytest.fixture()
 def client() -> Iterator[TestClient]:
-    fd, path = tempfile.mkstemp(suffix=".db")
+    fd, path = tempfile.mkstemp(prefix="ictw-test-", suffix=".db", dir=os.environ.get("ICTW_TEST_ROOT"))
     os.close(fd)
     url = f"sqlite:///{path}"
     get_settings.cache_clear()
@@ -246,6 +250,7 @@ def client() -> Iterator[TestClient]:
     app.dependency_overrides[get_inspiration_creator_client] = lambda: FakeInspirationCreator()
     with TestClient(app) as test_client:
         yield test_client
+    engine.dispose()
     os.remove(path)
 
 
