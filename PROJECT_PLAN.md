@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-**v2.4.0（Build76，已授权一条龙发布）**：改善跨章承接，让已发生进展、人物已知、上一章落点与未决事项可靠进入下一章；写作与检查共同尊重作者指定的过程、顺序和终点。保留五段写作链和简洁操作；[本轮施工与验收记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。
+**v2.4.0（Build76，已发布）**：改善跨章承接，让已发生进展、人物已知、上一章落点与未决事项可靠进入下一章；写作与检查共同尊重作者指定的过程、顺序和终点。保留五段写作链和简洁操作；[本轮施工与验收记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。
 
 ## 关键决定
 
@@ -26,24 +26,25 @@
 
 ## 当前状态
 
-- 当前生产、公开Release及已安装Mac为 **v2.3.4（Build74）/ `bed570f`**，不可变标签`v2.3.4-build74`，数据库0015；[发布与恢复证据](archive/operations/2026-10-01-build74-deployment.json)。
-- Build74 的 iOS 交互及重写归属修复已发布，既有工程、签名、Mac页面和生产门禁通过；Build74 iOS仍由用户通过Xcode安装，真机页面未验收。
-- Build76 已修复Build75独立review的两项问题并复查闭环：Backend640项通过、12项既有跳过，双端生效版本2.4.0/76；[快修验证](archive/operations/2026-10-02-build76-validation.json)。客户端功能代码未变，既有100项Store/HTTP、双端构建和原生点验见[Build75证据](archive/operations/2026-10-02-build75-validation.json)。尚未提交、发布、生产迁移或Mac换装，生产仍Build74。
+- 当前生产、公开Release及已安装Mac为 **v2.4.0（Build76）/ `ff50abb`**，不可变标签`v2.4.0-build76`，数据库0016；[发布与恢复证据](archive/operations/2026-10-02-build76-deployment.json)。
+- 双端OS27签名Release及严格验签通过；Mac成稿页和已有草稿编辑页已实际打开验证。iOS同版工程已准备好，供用户通过Xcode安装；未生成IPA，真机安装和页面尚未验收。
+- Build75独立review的两项问题已由Build76修复并复查闭环：Backend640项通过、12项既有跳过；[快修验证](archive/operations/2026-10-02-build76-validation.json)。客户端功能代码未变，既有100项Store/HTTP、状态门禁和合成原生点验见[Build75证据](archive/operations/2026-10-02-build75-validation.json)。
+- 生产迁移前后备份均已实际恢复验证，既有数据与模型设置保留，内外健康、完整性、外键及单实例通过；未重跑历史任务或调用真实模型。
 - 限定只读调查发现：上一章有效资料确已传入；Selector有时序改写，Writer重复推进且Checker未识别。不能据此认定Extractor漏存、模型或字数门槛是主因。
 - 工程验收使用中性合成数据与 fake LLM；不生成、重写或重提真书，不做内容质量 A/B。文学效果由用户自己验收，尚无质量改善结论。
-- 用户既有Errors、工程排序与Mac scheme保持保护；旧归档备注误失效和引号结尾截取问题均已修复，原reviewer复查未发现新问题；[版本记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。快修及复查临时资源已核验清理，文学效果由用户验收。
+- 用户既有Errors、工程排序与Mac scheme保持保护；本地及远端发布暂存已核验清理，交付物与恢复集保留。设备支持审计有一台`iPhone18,4`当前不可用，待现场核验，缓存保留。
 
 ## 本轮交付目标与后续升级方向
 
 - v2.4.0交付：上一章承接资料完整直达，更远历史保留原文语义；重写、手动复查、旧归档和项目备份恢复保持一致。
 - Writer避免把已知重新写成首次发现或提前用完同一转折；Checker在现有结果入口展示可追溯的承接与顺序问题，不增加文风审查或前端复杂配置。
 - 双端现有模型设置提供明确可选的质量优先推理，说明可能更慢；用户自定义人格、模型和单书覆盖保持自主控制。
-- 本地工程门禁和两项修复的独立复查均已通过；用户已授权一条龙发布，正在核验签名交付、迁移恢复及运行状态。文学效果由用户验收。
+- 工程门禁、两项修复的独立复查和一条龙发布已完成，无遗留施工任务；iOS真机安装、页面和文学效果由用户验收。
 - 旧失败归档由作者在对应章节主动重试；不自动批量重提。发布后新业务写入不得用发布前整库备份直接覆盖。
 
 ## 里程碑索引
 
-- v2.4.0（Build75–76）：跨章承接、原文选择与显式质量优先设置已本地实现；两项独立review问题快修并复查闭环，未发布；[施工与验收记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。
+- v2.4.0（Build75–76）：跨章承接、原文选择与显式质量优先设置已发布；两项review问题修复闭环，生产迁移、Mac换装及资源收尾完成，iOS待Xcode安装；[施工与验收记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。
 - v2.3.4（Build73–74）：iOS交互与重写归属修复已发布，Mac换装完成，iOS待Xcode安装；[施工与验收记录](archive/plans/v2.3.4-build73-ios-interaction-plan.md)。
 - v2.3.3（Build72）：写作SOP错误诊断与恢复说明已发布，Mac换装和资源收尾完成，iOS待Xcode安装；[施工记录](archive/plans/v2.3.3-build72-error-recovery-plan.md)。
 - v2.3.2（Build71）：累计Build65–71修复已发布，Mac换装、后端升级及资源收尾完成，iOS待Xcode安装；[版本记录](archive/plans/v2.3.2-build70-sop-plan.md)。

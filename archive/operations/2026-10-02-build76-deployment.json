@@ -1,0 +1,248 @@
+{
+  "version": "2.4.0",
+  "build": 76,
+  "commit": "ff50abb58848ae81d3a6e8d4db4fcb2fd4dde2d2",
+  "baseline": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+  "source_files_verified": 73,
+  "backup": "/opt/linoi/backups/20261002-build76-ff50abb",
+  "release_package": "/opt/linoi/releases/v2.4.0-build76",
+  "model_calls": 0,
+  "status": "deployed",
+  "restore_test": true,
+  "pre_backup_sha256": "ba55f035634c23ecaecae91bcaba257d3d277284c27072c075c01018b627e930",
+  "head": "20261002_0016",
+  "integrity": "ok",
+  "foreign_keys": 0,
+  "preexisting_database_values_unchanged": true,
+  "new_continuity_values_all_null": true,
+  "env_unchanged": true,
+  "post_backup_restore_test": true,
+  "post_backup_sha256": "f73df648040b0a03dbf5299d1bd01f4b5d56455bf1e326498af637b0285427ce",
+  "internal_health": {
+    "status": "ok",
+    "version": "2.4.0"
+  },
+  "public_health": {
+    "status": "ok",
+    "version": "2.4.0"
+  },
+  "active_jobs": 0,
+  "single_instance": true,
+  "pid": 908653,
+  "all_business_values_unchanged_after_start": true,
+  "delivery_status": "released and resource cleanup complete; iOS device installation and literary acceptance remain user handoff",
+  "apple_signed_release": {
+    "ios": {
+      "version": "2.4.0",
+      "build": 76,
+      "minimum_os": "27.0",
+      "sdk": "iphoneos27.0",
+      "strict_signature": true,
+      "identity": "Apple Development",
+      "get_task_allow": true,
+      "profile_expires": "2027-09-20T11:21:57",
+      "uuid": [
+        "A5823B91-39C8-3942-AA36-A7701461F867"
+      ]
+    },
+    "mac": {
+      "version": "2.4.0",
+      "build": 76,
+      "minimum_os": "27.0",
+      "sdk": "macosx27.0",
+      "strict_signature": true,
+      "identity": "Developer ID Application",
+      "get_task_allow": false,
+      "runtime": true,
+      "entitlements_corrected": false,
+      "notarized": false,
+      "uuid": [
+        "DC71F919-5850-3902-A6A9-58A839195E2E"
+      ]
+    }
+  },
+  "postcheck": {
+    "all_business_tables_unchanged_except_book_open_timestamps": true,
+    "book_changed_columns": [
+      "updated_at",
+      "last_opened_at"
+    ],
+    "chapters_jobs_memory_and_settings_unchanged": true,
+    "model_calls": 0,
+    "active_jobs": 0,
+    "integrity": "ok",
+    "foreign_keys": 0,
+    "head": "20261002_0016",
+    "source_files_matched": 73,
+    "env_unchanged": true,
+    "internal_health": {
+      "status": "ok",
+      "version": "2.4.0"
+    },
+    "public_health": {
+      "status": "ok",
+      "version": "2.4.0"
+    },
+    "route_statuses": {
+      "/api/v1/health": 401,
+      "/docs": 404,
+      "/openapi.json": 404,
+      "/redoc": 404
+    },
+    "single_instance": true,
+    "pid": 908653
+  },
+  "route_statuses": {
+    "/api/v1/health": 401,
+    "/docs": 404,
+    "/openapi.json": 404,
+    "/redoc": 404
+  },
+  "release": {
+    "url": "https://github.com/linocai/Ictw/releases/tag/v2.4.0-build76",
+    "tag": "v2.4.0-build76",
+    "asset": {
+      "name": "ICTW-v2.4.0-build76-macOS.zip",
+      "size": 3255939,
+      "sha256": "ecdae6cf99f97a5ba0d4bdf7d71f69e32b818f45fba5a1f3753293529533c997",
+      "github_digest_verified": true,
+      "download_sha256_verified": true
+    }
+  },
+  "device_support": {
+    "checked_at": "2026-10-02T05:58:07.655611+00:00",
+    "devices": [
+      {
+        "model": "iPhone17,3",
+        "os": "",
+        "build": "",
+        "validated": false,
+        "reason": "No local support cache; this connection record needs no cleanup"
+      },
+      {
+        "model": "iPhone18,4",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": false,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone18,4 27.0 (24A437)",
+        "reason": "Device unavailable; cached OS information cannot authorize deletion"
+      },
+      {
+        "model": "iPhone19,2",
+        "os": "27.0",
+        "build": "24A437",
+        "validated": true,
+        "current_support": "/Users/linotsai/Library/Developer/Xcode/iOS DeviceSupport/iPhone19,2 27.0 (24A437)",
+        "symbol_sha256": {
+          "usr/lib/dyld": "ce718b23beb9210cfeea20547ad797b8c893ebc1f2513878c3603ac6262c7327",
+          "System/Library/Frameworks/Foundation.framework/Foundation": "448d9b4f685ea5b83c5acff545e36dbaaf7a8894dc684fcd12f6b14b025434c3",
+          "System/Library/Frameworks/UIKit.framework/UIKit": "3b8e1bf966e44c6b01812f1f331affb81a085e82e60eaca67411426af5acedb6"
+        }
+      }
+    ],
+    "candidates": [],
+    "deleted": [],
+    "user_confirmed_unused_models": [],
+    "unused_reason": "",
+    "pending_devices": [
+      "iPhone18,4"
+    ],
+    "status": "partial"
+  },
+  "mac_install": {
+    "path": "/Applications/ICTW.app",
+    "version": "2.4.0",
+    "build": 76,
+    "backup": "/Users/linotsai/Lino/app_backups/ICTW-v2.3.4-build74-before-build76-20261002.app",
+    "old_backup_hashes_verified": true,
+    "installed_hashes_and_strict_signature_verified": true,
+    "original_page": "library",
+    "normal_launch": true,
+    "accepted_page": true,
+    "existing_draft_editor": true,
+    "original_page_restored": true,
+    "business_actions": "Navigation only; no save, generate, check, accept or archive"
+  },
+  "ios": {
+    "products": "/Users/linotsai/Lino/app_builds/ICTW-v2.4.0-build76-iOS-Release",
+    "strict_signature": true,
+    "ipa_created": false,
+    "installation": "User installs through Xcode; project ready as 2.4.0 (76)",
+    "native_device_ui_verified": false
+  },
+  "remote_cleanup": {
+    "status": "complete",
+    "root": "/tmp/ictw-build76-release",
+    "files": 157,
+    "logical_bytes_before": 191658085,
+    "allocated_kib_before": 187636,
+    "inventory_sha256": "c355c21f1736f492c8946026cc4390f29e91f7dc4f1113b7b72e0323a5f03931",
+    "manifest_bytes": 31109,
+    "no_open_handles": true,
+    "retained": [
+      "/opt/linoi/releases/v2.4.0-build76",
+      "/opt/linoi/backups/20261002-build76-ff50abb"
+    ],
+    "backup_bytes": 25835987,
+    "logical_bytes_after": 0,
+    "final_named_residue": [],
+    "opt_linoi_disk_kib": 635820
+  },
+  "retained_delivery": [
+    "/Applications/ICTW.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.4.0-build76-macOS.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.4.0-build76-macOS.app.dSYM",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.4.0-build76-iOS-Release/LinoI.app",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.4.0-build76-iOS-Release/LinoI.app.dSYM",
+    "/Users/linotsai/Lino/app_builds/ICTW-v2.4.0-build76-macOS.zip",
+    "/Users/linotsai/Lino/app_backups/ICTW-v2.3.4-build74-before-build76-20261002.app",
+    "/opt/linoi/backups/20261002-build76-ff50abb",
+    "/opt/linoi/releases/v2.4.0-build76"
+  ],
+  "cumulative_audit": {
+    "from": "bed570ff6d2ddae0dd5d124c335284089c08ad34",
+    "through": "ff50abb58848ae81d3a6e8d4db4fcb2fd4dde2d2",
+    "reviewed_source_files_matched": 43,
+    "production_base_files_matched": 71,
+    "source_tag_matches": true,
+    "pbx_user_sorting_excluded_from_commit": true,
+    "project_semantics_identical": true,
+    "schema_change": "0015→0016 nullable continuity; old rows remain NULL",
+    "dependencies_changed": false
+  },
+  "final_validation": {
+    "backend": "640 passed /12 existing skips; exact reviewed source",
+    "client": "Build75 state/100 Store HTTP/native UI; client code unchanged; fresh Build76 signed Release both targets",
+    "review": "Build75 cumulative review plus Build76 repair review; R75-1 and R75-2 closed, no new finding"
+  },
+  "build_logs_sha256": {
+    "ios-release.log": "4fc32813138b38ddcfcb171718ff7be4ce5cc6921839dabedbfda230ce9f5e46",
+    "mac-release.log": "8346b39ebf0286ef0b4a966f1ff0b2c6c58ee46300d646d4fc2215d5f6627089"
+  },
+  "protected_user_source_files_unchanged": true,
+  "local_cleanup": {
+    "status": "complete",
+    "root": "/tmp/ictw-build76-release",
+    "files_or_symlinks": 908,
+    "logical_bytes_before": 270714806,
+    "allocated_kib_before": 273744,
+    "inventory_sha256": "509e420d07c2e4fe823b7abb8af96f03bff2493edb86cc3d61e521ab10b8357f",
+    "manifest_bytes": 208901,
+    "no_open_handles": true,
+    "retired_install_path": "/Applications/.ICTW-build74-before76.app",
+    "retired_install_bytes_removed": 8674978,
+    "retired_install_backup_verified": true,
+    "logical_bytes_after": 0,
+    "user_and_system_tmp_named_residue": {
+      "/tmp": [],
+      "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T": []
+    },
+    "total_removed_logical_bytes": 279598685
+  },
+  "final_integrity": {
+    "source_tag_matches": true,
+    "source_commit": "ff50abb58848ae81d3a6e8d4db4fcb2fd4dde2d2",
+    "user_original_changes_preserved": true,
+    "local_and_remote_resource_cleanup_complete": true
+  }
+}

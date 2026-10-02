@@ -50,8 +50,8 @@ Apple 开发环境遵循 `/Users/linotsai/.codex/AGENTS.md` 的「Apple 开发�
 
 ## 当前生产门禁
 
-- 当前生产Backend、公开Release及已安装Mac为 **`v2.3.4(74)` / `bed570f`（2026-10-01）**，不可变标签`v2.3.4-build74`；Alembic head为`20260929_0015`。iOS章节交互与重写跨会话归属已修复；保留420秒ICTW read/send代理期限（connect10秒）。证据见`archive/operations/2026-10-01-build74-deployment.json`；旧失败记录不自动重试。
-- Backend573 passed/12项旧协议skip、Store/HTTP98、交互55及状态门禁通过，独立复查闭环；双端OS27签名Release与严格验签、Mac成稿及已有草稿编辑页通过。备份恢复、数据一致、内外健康、完整性/外键及单实例通过。iOS Build74供用户Xcode安装，无IPA；Build73模拟器原生交互已验收，真机安装/页面尚未验收。设备支持无待项，发布暂存已核验清理，交付与回退集保留。
+- 当前生产Backend、公开Release及已安装Mac为 **`v2.4.0(76)` / `ff50abb`（2026-10-02）**，不可变标签`v2.4.0-build76`；Alembic head为`20261002_0016`。跨章承接、原文Selector及显式质量优先设置已发布；保留420秒ICTW read/send代理期限（connect10秒）。证据见`archive/operations/2026-10-02-build76-deployment.json`；旧失败记录不自动重试。
+- Backend640 passed/12项旧协议skip、Store/HTTP100及状态门禁通过，累计独立review与两项快修复查闭环；双端OS27签名Release与严格验签、Mac成稿及已有草稿编辑页通过。迁移前后备份恢复、既有数据与设置一致、内外健康、完整性/外键及单实例通过。iOS Build76供用户Xcode安装，无IPA；Build75合成原生交互已验收，真机安装/页面及文学效果尚未验收。设备支持`iPhone18,4`当前不可用、缓存保留待现场核验；本地及远端发布暂存已核验清理，交付与恢复集保留。
 - `v1.9.4(45)` 起 `/docs`、`/openapi.json`、`/redoc` 一律 404，⛔ 不再是健康判据（旧清单里的「docs 200」现已恒不成立）；`/health` 会实际查库并比对期望 Alembic head，库不可用或结构落后返回 503；`.env` 中任何仍以 `change-me` 开头的密钥会让后端拒绝启动，上产前应先做只读布尔检查。
 - Backend 版本号与期望 head 由 `app/main.py` 的 `APP_VERSION` / `EXPECTED_ALEMBIC_HEAD` 单点维护，`/health` 会实际查库比对，两者由回归测试锁住；换版本时只改这两个常量。
 - 生产入口为 `https://ictw.linotsai.top`，鉴权健康实际路径为 `/api/v1/health`；Backend位于宁波 `/opt/linoi/backend`，只监听 `172.18.0.1:8787`。宁波使用 `deploy@114.66.2.205` 的当前SSH身份，仓库旧香港私钥不适用；需sudo的工作目录由sudo后的进程进入。
