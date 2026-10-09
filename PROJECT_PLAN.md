@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-**v2.4.0（Build76，已发布）**：改善跨章承接，让已发生进展、人物已知、上一章落点与未决事项可靠进入下一章；写作与检查共同尊重作者指定的过程、顺序和终点。保留五段写作链和简洁操作；[本轮施工与验收记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。
+**v2.4.0（Build77，已发布）**：改善跨章承接，让已发生进展、人物已知、上一章落点与未决事项可靠进入下一章；写作与检查共同尊重作者指定的过程、顺序和终点。保留五段写作链和简洁操作；[本轮施工与验收记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。
 
 ## 关键决定
 
@@ -26,14 +26,14 @@
 
 ## 当前状态
 
-- 当前生产、公开Release及已安装Mac为 **v2.4.0（Build76）/ `ff50abb`**，不可变标签`v2.4.0-build76`，数据库0016；[发布与恢复证据](archive/operations/2026-10-02-build76-deployment.json)。
-- 本地Build77（未发布）：双端Bible可选提示与Writer指令收口已完成，明确叙述顺序及收束边界，Checker保持同一理解；Extractor不变。Backend647项通过／12项既有跳过，双端构建及客户端状态门禁通过；[输入提示验证](archive/operations/2026-10-09-build77-bible-hint-validation.json)、[快修与人格升级交接](archive/operations/2026-10-09-build77-writer-validation.json)。线上仍Build76，存量人格仅完成只读预检，随发布显式升级。
-- 双端OS27签名Release及严格验签通过；Mac成稿页和已有草稿编辑页已实际打开验证。iOS同版工程已准备好，供用户通过Xcode安装；未生成IPA，真机安装和页面尚未验收。
-- Build75独立review的两项问题已由Build76修复并复查闭环：Backend640项通过、12项既有跳过；[快修验证](archive/operations/2026-10-02-build76-validation.json)。客户端功能代码未变，既有100项Store/HTTP、状态门禁和合成原生点验见[Build75证据](archive/operations/2026-10-02-build75-validation.json)。
-- 生产迁移前后备份均已实际恢复验证，既有数据与模型设置保留，内外健康、完整性、外键及单实例通过；未重跑历史任务或调用真实模型。
+- 当前生产、公开Release及已安装Mac为 **v2.4.0（Build77）/ `8b0a37e`**，不可变标签`v2.4.0-build77`，数据库0016；[发布与恢复证据](archive/operations/2026-10-09-build77-deployment.json)。
+- 双端Bible可选格式提醒、Writer指令收口及Checker叙述顺序/收束边界对齐已发布；自由输入不受限制，Extractor与模型设置不变。两份已确认Writer人格同步升级；[输入提示验证](archive/operations/2026-10-09-build77-bible-hint-validation.json)、[写作逻辑验证](archive/operations/2026-10-09-build77-writer-validation.json)。
+- Backend647项通过／12项既有跳过，客户端状态门禁和双端OS27构建通过；双端签名Release及严格验签通过，Mac成稿、已有草稿编辑页和Bible帮助已实际检查。iOS同版工程供用户Xcode覆盖安装，无IPA；真机安装和页面尚未验收。
+- 更新前后备份均已实际恢复验证；除两份Writer人格外，正文、历史记忆和模型设置保持不变，内外健康、完整性、外键及单实例通过。未重跑历史任务或调用真实模型。
+- Build75独立review的两项问题已由Build76修复并复查闭环；[快修验证](archive/operations/2026-10-02-build76-validation.json)。Build77完成主会话累计核对及相关门禁，未另行独立review。
 - 限定只读调查发现：上一章有效资料确已传入；Selector有时序改写，Writer重复推进且Checker未识别。不能据此认定Extractor漏存、模型或字数门槛是主因。
-- 工程验收使用中性合成数据与 fake LLM；不生成、重写或重提真书，不做内容质量 A/B。文学效果由用户自己验收，尚无质量改善结论。
-- 用户既有Errors、工程排序与Mac scheme保持保护；本地及远端发布暂存已核验清理，交付物与恢复集保留。设备支持审计有一台`iPhone18,4`当前不可用，待现场核验，缓存保留。
+- 工程验收使用中性合成数据与fake LLM；不生成、重写或重提真书，不做内容质量A/B。文学效果由用户自己验收，尚无质量改善结论。
+- 用户既有Errors、工程排序与Mac scheme保持保护；本地及远端发布暂存已核验清理，交付物与恢复集保留。两台手机开发服务当前不可用，待现场核验，支持缓存保留。
 
 ## 本轮交付目标与后续升级方向
 
@@ -44,6 +44,8 @@
 - 旧失败归档由作者在对应章节主动重试；不自动批量重提。发布后新业务写入不得用发布前整库备份直接覆盖。
 
 ## 里程碑索引
+
+- v2.4.0（Build77）：Bible自由输入格式提醒、Writer精简及Checker叙述顺序/收束边界对齐已发布，Extractor不变，Mac换装完成，iOS待Xcode覆盖安装；[发布记录](archive/operations/2026-10-09-build77-deployment.json)。
 
 - v2.4.0（Build75–76）：跨章承接、原文选择与显式质量优先设置已发布；两项review问题修复闭环，生产迁移、Mac换装及资源收尾完成，iOS待Xcode安装；[施工与验收记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。
 - v2.3.4（Build73–74）：iOS交互与重写归属修复已发布，Mac换装完成，iOS待Xcode安装；[施工与验收记录](archive/plans/v2.3.4-build73-ios-interaction-plan.md)。
