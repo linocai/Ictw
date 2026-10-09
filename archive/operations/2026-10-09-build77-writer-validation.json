@@ -1,0 +1,93 @@
+{
+  "date": "2026-10-09",
+  "baseline": "a8e05f70d5871828f37d1832d6462df0c82f2624",
+  "local_version": "2.4.0 (77)",
+  "release_status": "local validated; not committed or deployed; production remains Build76",
+  "scope": "Accepted Writer persona/protocol/output consolidation plus Checker narrative-order and ending-boundary alignment. Optional Bible hints were validated in the preceding Build77 change.",
+  "changes": {
+    "writer": "Editable style persona, one plot protocol, short output contract; no required Bible format. Plot bullets follow author narrative order, not forced chronological order; ending boundary retained.",
+    "stored_personas": "Explicit maintenance only. Exact reviewed SHA256 matching, original genre designation retained, custom edits preserved, content revisions advanced, dry-run default and atomic apply. No startup overwrite.",
+    "checker": "Narrative order, permitted flashbacks and ending boundary clarified; existing evidence rules and empty-Bible behavior retained.",
+    "unchanged": "Extractor prompts/configuration/model factory, memory selection, inspiration, schema head, model settings, invocation limits and minimum draft length."
+  },
+  "validation": {
+    "targeted": {
+      "passed": 108,
+      "skipped": 0,
+      "failed": 0
+    },
+    "full_backend": {
+      "passed": 647,
+      "skipped": 12,
+      "failed": 0
+    },
+    "alembic_head": "20261002_0016",
+    "diff_check": "passed",
+    "existing_user_changes": "protected hashes verified",
+    "previous_client_validation": {
+      "record": "archive/operations/2026-10-09-build77-bible-hint-validation.json",
+      "reuse_basis": "App sources, pbxproj and scheme hashes unchanged since both target builds and client state gate; no redundant rebuild.",
+      "pending_devices": [
+        "iPhone18,4",
+        "iPhone19,2"
+      ]
+    },
+    "environment": "isolated synthetic databases, fake LLM; Settings env_file disabled; no real generation/re-extraction or literary quality evaluation"
+  },
+  "prompt_characters": {
+    "scope": "behavior instruction characters only, excluding Bible/world/characters/history; not token or quality measurements",
+    "global_before": 1359,
+    "book_before": 1519,
+    "after_reviewed_persona_upgrade": 644
+  },
+  "production_read_only_preflight": {
+    "applied": false,
+    "counts": {
+      "agent_personas": {
+        "eligible": 1,
+        "updated": 0,
+        "already_current": 0,
+        "preserved_custom": 0
+      },
+      "book_agent_personas": {
+        "eligible": 1,
+        "updated": 0,
+        "already_current": 0,
+        "preserved_custom": 0
+      }
+    }
+  },
+  "release_handoff": {
+    "required": "Deploy Build77 backend and run explicit persona compaction together under the established stopped-service and verified-backup release path. No schema migration added.",
+    "maintenance_dry_run": ".venv/bin/python -B scripts/compact_writer_personas.py /opt/linoi/backend/linoi.db",
+    "maintenance_apply": ".venv/bin/python -B scripts/compact_writer_personas.py /opt/linoi/backend/linoi.db --apply",
+    "expected_current_targets": "One global and one book Writer; dry-run verified both eligible, zero writes. Unknown/edited texts are preserved.",
+    "historical_tool": "Do not rerun the old Build67 upgrade_bible_personas.py as part of this release; it appends the superseded Writer guidance.",
+    "runtime_verification": "Settings must show the compact editable persona and new program protocol together; model settings and Extractor remain unchanged.",
+    "working_directory": "/opt/linoi/backend"
+  },
+  "source_sha256": {
+    "Backend/app/persona_contract.py": "ac5e3e0c62aaa4ac66a3fcee43582d7e88b84b6866f294f6d38fc7c702f119b2",
+    "Backend/app/services/personas.py": "8773c99b23b11a45e0c04a9652187a381700fa788855966954142ab8d999df83",
+    "Backend/app/services/context.py": "fe0523dd3ea7093ad2bb771beb518c25241df85c85017157ab9ee27496df9e1d",
+    "Backend/scripts/compact_writer_personas.py": "27e04fb473bead914faa456cadab93dcb63ed4abbf607d1305208ea5138f02c2",
+    "Backend/tests/test_build77_writer_prompts.py": "d45521acefd1050b5ecbfa29f2fd68d958a4674dbaf91165a1507b2b9e45d3eb",
+    "Backend/tests/test_build67_rewrite_reference.py": "b3db14dd6cbafd98c6c1381775f65419f3bdf7ea915a8a3e761fb566edee5c37",
+    "Backend/tests/test_build75_continuity.py": "cae67c4129307b9ad99eeae650f6b45accfb2cdeb10e880cf0f9653dabae9df4",
+    "Backend/tests/test_prompt.py": "db49fb380d8bdaae5fcf914b71394fdd946104dfe72dcae159709372e73e1867"
+  },
+  "resources": {
+    "status": "verified cleanup complete",
+    "remote_artifacts": "none; all read-only SSH scripts supplied through stdin",
+    "local_and_system_temp_paths": [
+      "/tmp/ictw-build77-writer-quickfix-20261009",
+      "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T/ictw-build77-writer-quickfix-20261009"
+    ],
+    "before_bytes": 20571442,
+    "after_bytes": 0,
+    "removed_file_and_link_count": 126,
+    "verified_deletion_manifest_sha256": "d1fb3355d92113103427c374bfcff91274201b80677e61c293016396f0245087",
+    "retained": "Regression source, explicit maintenance tool and this concise evidence; temporary databases, raw test logs and duplicate baseline prompts removed",
+    "process_check": "No open task artifacts before deletion"
+  }
+}

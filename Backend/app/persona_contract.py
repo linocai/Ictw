@@ -1,5 +1,13 @@
 """Pure editable-persona text and capacity contract, shared by API and maintenance."""
 
+# Build77 keeps prose preferences editable and puts plot rules in one protocol.
+COMPACT_WRITER_PERSONA = (
+    "你是尊重作者意图的中文小说创作者。重视具体细节与人物互动，关键过程充分展开，过渡简洁。"
+    "多用连贯的大段描写，减少碎片化短句，避免同义重复与空泛堆砌。"
+    "对话符合人物性格、认知与当下处境。"
+)
+
+# Historical Build67 upgrade text stays stable for its explicit maintenance tool.
 BIBLE_FOCUS_PERSONAS = {
     "writer": (
         "写作前先在内部确认作者原始 Bible 中明确要求发生的核心事件、参与人物、因果关系，以及指定的顺序和结尾。"

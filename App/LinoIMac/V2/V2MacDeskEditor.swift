@@ -437,10 +437,24 @@ private struct V2MacIntentFace: View {
                 .scrollContentBackground(.hidden)
                 .font(V2DeskType.prose(12.5))
                 .lineSpacing(8)
-                .frame(minHeight: 132)
+                .frame(minHeight: 320)
                 .padding(8)
                 .background(V2DeskPalette.color(.manuscriptPaper, scheme: colorScheme))
                 .overlay { RoundedRectangle(cornerRadius: 7).stroke(V2DeskPalette.color(.line, scheme: colorScheme)) }
+                .overlay(alignment: .topLeading) {
+                    if editor.currentChapter?.userPrompt.isEmpty ?? true {
+                        Text(V2BibleWritingHint.text)
+                            .font(V2DeskType.prose(12.5))
+                            .lineSpacing(8)
+                            .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 13)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .accessibilityLabel("本章意图")
+                .accessibilityHint(V2BibleWritingHint.text)
                 .disabled(editor.currentChapter?.status == "finalized")
             Button("✦ 找方向") { onOpenSheet(.inspiration) }
                 .buttonStyle(V2MacDeskButton(kind: .secondary))

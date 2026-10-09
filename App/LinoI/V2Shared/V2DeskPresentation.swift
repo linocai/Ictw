@@ -1,5 +1,21 @@
 import Foundation
 
+/// Optional guidance only; never inserted into or validated as the author's Bible.
+enum V2BibleWritingHint {
+    static let text = """
+    可参考以下格式，也可以自由填写：
+
+    一句话本章
+    用一两句话说清本章发生什么。
+
+    情节分点发展
+    分点列出情节，按希望正文呈现的叙述顺序排列，不必按时间先后。
+
+    收束边界
+    本章写到哪里停，哪些发展暂不发生。
+    """
+}
+
 /// The three chapter faces retain the same author-facing vocabulary on both
 /// platforms. macOS can show two at once; iOS pages between them.
 enum V2DeskChapterFace: String, CaseIterable, Equatable, Sendable {

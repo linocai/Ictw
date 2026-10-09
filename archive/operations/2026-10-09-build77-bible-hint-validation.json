@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-09",
+  "baseline": "a8e05f70d5871828f37d1832d6462df0c82f2624",
+  "local_version": "2.4.0 (77)",
+  "release_status": "not deployed, not committed; production remains Build76",
+  "scope": "Optional empty Bible guidance on iOS and macOS. No insertion, parsing, validation, model invocation or backend change. Writer prompt proposal is discussion only; Extractor unchanged.",
+  "validation": {
+    "xcode": "27.0 / 27A266a",
+    "deployment_targets": "iOS 27.0 / macOS 27.0",
+    "ios_simulator_debug_build": "passed",
+    "macos_debug_build": "passed",
+    "client_state_gate": "passed",
+    "diff_check": "passed",
+    "visual_or_device_acceptance": "not performed"
+  },
+  "protected_files": {
+    "existing_errors_and_mac_scheme": "sha256 unchanged",
+    "existing_pbx_sorting": "preserved; only four build values changed"
+  },
+  "source_sha256": {
+    "App/LinoI/V2Shared/V2DeskPresentation.swift": "853da88efaa3d41bcf2d64fb7c985449f1d9dc1c8279a9911790af0f97bc04fd",
+    "App/LinoI/V2IOS/V2IOSChapterFaces.swift": "631277f31702c2defde41fcea2242fe3c5be77639abe0baa229a330422682891",
+    "App/LinoIMac/V2/V2MacDeskEditor.swift": "b16259ccd65fe2fb552668d90da3402049504f77c501223a3ba04e65dcfccd0f"
+  },
+  "apple_device_support": {
+    "mode": "read only; no prepare or deletion",
+    "pending_devices": [
+      "iPhone18,4",
+      "iPhone19,2"
+    ]
+  },
+  "resources": {
+    "status": "verified cleanup complete",
+    "remote_artifacts": "none; remote reads used stdin only",
+    "local_and_system_temp_paths": [
+      "/tmp/ictw-bible-hint-build77-20261009",
+      "/var/folders/_v/s6hfcbrj5v3fyxk8jzwh7ft00000gn/T/ictw-bible-hint-build77-20261009"
+    ],
+    "before_bytes": 526509844,
+    "after_bytes": 0,
+    "removed_file_and_link_count": 4574,
+    "verified_deletion_manifest_sha256": "f01afa256cfec171d95d8216bf05541d09633edf50187237b6e997cc3ed328b5",
+    "retained": "This concise validation record and source changes; no build products retained",
+    "process_check": "No open task artifacts before deletion"
+  }
+}

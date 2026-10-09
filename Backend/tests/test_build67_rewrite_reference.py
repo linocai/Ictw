@@ -127,8 +127,11 @@ def test_world_changes_during_preparation_retire_job_and_restore_old_draft(clien
 
 
 def test_bible_focus_is_editable_persona_and_checker_protocol_uses_group_ids():
+    # Build77 consolidates Writer plot guidance in its one program protocol;
+    # the historical editable upgrade and Checker behavior remain available.
+    assert BIBLE_FOCUS_PERSONAS["writer"] not in DEFAULT_PERSONAS["writer"]
+    assert BIBLE_FOCUS_PERSONAS["checker"] in DEFAULT_PERSONAS["checker"]
     for role, text in BIBLE_FOCUS_PERSONAS.items():
-        assert text in DEFAULT_PERSONAS[role]
         assert text not in PROGRAM_PROTOCOLS[role]
     assert "每项含 group_id" in PROGRAM_PROTOCOLS["checker"]
     assert "每项含 hit_ids" not in PROGRAM_PROTOCOLS["checker"]

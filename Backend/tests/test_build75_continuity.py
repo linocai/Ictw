@@ -499,7 +499,7 @@ def test_writer_checker_share_frozen_reference_and_changed_previous_cannot_promo
         run = db.get(JobRun, terminal["job_id"])
         reference = run.input_snapshot["reference_context"]
         assert reference in messages["writer"]["user"] and reference in messages["checker"]["user"]
-        assert "只输出完整正文纯文本" in messages["writer"]["system"]
+        assert "只输出完整小说正文，不输出分析或提纲" in messages["writer"]["user"]
         assert "continuity_known_reset" in messages["checker"]["system"]
         if mutate_previous:
             assert terminal["phase"] != "done"

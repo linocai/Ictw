@@ -12,7 +12,7 @@ from app.services.context import (
     pack_writer_context,
     writer_user_message,
 )
-from app.services.personas import DEFAULT_PERSONAS
+from app.services.personas import DEFAULT_PERSONAS, compose_system_prompt
 
 
 def test_default_memory_selector_persona_requires_sourced_facts_without_inference():
@@ -77,15 +77,17 @@ def test_writer_prompt_order_and_character_card_excludes_storyline(client, auth_
         "# 人物卡",
         "# 历史参考资料",
         "# 本章剧情 Bible",
-        "# 最终执行契约",
+        "# 输出要求",
     ]
     positions = [text.index(header) for header in headers]
     assert positions == sorted(positions)
     assert "固定" in text and "清醒" in text
     assert "旧故事线" not in text
     assert text.count("# 世界观") == 1
-    assert "Bible 决定核心事件、明确禁止事项及明确指定的顺序和结尾" in text
-    assert "为完成本章意图，可自然补充互动、场景衔接、局部波折、情绪与态度变化，以及已有关系中的渐进发展。" in text
+    system = compose_system_prompt("writer", DEFAULT_PERSONAS["writer"])
+    assert "以作者实际填写的 Bible 为本章剧情依据" in system
+    assert "包括互动、场景衔接、局部波折和渐进变化" in system
+    assert "# 最终执行契约" not in text
     assert "至少 4000 个去空白字符" in text
     assert "冷静" not in text
 

@@ -30,13 +30,25 @@ struct V2IOSIntentFace: View {
                     V2IOSSectionLabel(title: "本章意图")
                     TextEditor(text: intent)
                         .font(V2DeskType.prose(15))
-                        .frame(minHeight: 154)
+                        .frame(minHeight: 300)
                         .padding(9)
                         .scrollContentBackground(.hidden)
                         .v2IOSPaper()
+                        .overlay(alignment: .topLeading) {
+                            if intent.wrappedValue.isEmpty {
+                                Text(V2BibleWritingHint.text)
+                                    .font(V2DeskType.prose(15))
+                                    .foregroundStyle(V2DeskPalette.color(.metadataInk, scheme: colorScheme))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 17)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                            }
+                        }
                         .focused(focusedField, equals: .intent)
                         .disabled(!canEditChapter)
                         .accessibilityLabel("本章意图")
+                        .accessibilityHint(V2BibleWritingHint.text)
                 }
                 VStack(alignment: .leading, spacing: 9) {
                     V2IOSSectionLabel(title: "本章出场人物")
