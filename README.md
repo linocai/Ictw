@@ -1,6 +1,6 @@
 # ICTW / LinoI
 
-ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前双端源码为 `2.0.4(46)`，Backend 源码与生产均为 `1.9.5(46)`，Alembic head 为 `20260814_0012`。iOS 由用户自行处理，当前公开发布的双端客户端仍为 `1.8.1(32)`。写作流程为：
+ICTW / LinoI 是一个个人小说写作工作台，由 SwiftUI iOS、macOS App 和 FastAPI 后端组成。当前双端、Backend 与生产均为 `v2.4.0(77)`，Alembic head 为 `20261002_0016`；发布状态以 `PROJECT_PLAN.md` 为准。写作流程为：
 
 ```text
 Memory Selector → Writer → Checker → 用户接受 → Extractor
