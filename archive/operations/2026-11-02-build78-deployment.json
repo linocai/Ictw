@@ -1,0 +1,65 @@
+{
+  "version": "2.4.0",
+  "build": 78,
+  "commit": "4bf2231ce622ad40a53ef3f50e69fe6fb30024a9",
+  "tag": "v2.4.0-build78",
+  "baseline": "8b0a37e667d31cf7806329cc5bbece3ce9a347bf",
+  "source_scope": "Archive v2.2 continuity: misclassified fact refs (known/open/completed vs fact type) are dropped during extraction instead of rejecting the whole archive, with per-category counts logged as archive_continuity_repaired; package import and activation stay strict. Chinese author messages added for all continuity validation reasons, guarded by a literal-reason regression test. Client build number only.",
+  "trigger": "2026-10-31 21:43-21:46 production: one chapter failed archiving 5 times, all archive_validation_failed with identical reason hash matching 'continuity classification does not match fact type' (deepseek-flash); no upstream errors; UI showed only the generic fallback message.",
+  "cumulative_audit": {
+    "from": "8b0a37e",
+    "through": "4bf2231",
+    "backend_runtime_files_changed": ["app/services/archive_v2.py", "app/services/write_jobs.py"],
+    "production_base_files_matched": 69,
+    "schema_change": "none; Alembic 20261002_0016",
+    "data_change": "none",
+    "dependencies_changed": false,
+    "pbx_user_sorting_excluded_from_commit": true,
+    "independent_review": "Not requested; main session diff review and relevant validation completed"
+  },
+  "final_validation": {
+    "backend": "651 passed / 12 existing skips",
+    "client": "Client state gate passed; signed Release builds of both targets passed",
+    "mac_signature": "Developer ID Application, hardened runtime, strict verify, 2.4.0 (78), min macOS 27.0, SDK macosx27.2",
+    "ios_signature": "Apple Development, strict verify, 2.4.0 (78), min iOS 27.0, profile expires 2027-09-20"
+  },
+  "deployment": {
+    "method": "Stopped service, replaced two source files in place, compileall, started",
+    "pre_backup": {
+      "path": "/opt/linoi/backups/20261102-build78-4bf2231/pre.db.gz",
+      "sha256": "bb3aa7eb8bf7efd4913ea9703831a04c10d39ab61db2b88c77cc71e876ab5d98",
+      "bytes": 24242376,
+      "restore_test": "integrity ok, 0 foreign key violations, head 20261002_0016"
+    },
+    "active_jobs_before_stop": "No authenticated requests in prior 30 minutes (journal); DB not queried",
+    "internal_health": {"status": "ok", "version": "2.4.0"},
+    "public_health": {"status": "ok", "version": "2.4.0"},
+    "route_statuses": {"/api/v1/health": 401, "/docs": 404, "/openapi.json": 404, "/redoc": 404},
+    "single_instance": true,
+    "pid": 510681,
+    "restarts": 0,
+    "post_db": "integrity ok, 0 foreign key violations, head 20261002_0016",
+    "remote_source_matches_tag": 69,
+    "model_calls": 0
+  },
+  "mac_install": {
+    "path": "/Applications/ICTW.app",
+    "build": 78,
+    "method": "ditto overwrite, no old-version backup",
+    "strict_signature": true,
+    "normal_launch": true,
+    "accepted_page_and_draft_editor": "Not verified: no computer-use tool and no accessibility permission in this session; user to open once"
+  },
+  "ios": {
+    "ipa_created": false,
+    "installation": "User installs through Xcode; project ready as 2.4.0 (78)"
+  },
+  "device_support": {
+    "status": "partial",
+    "pending_devices": ["iPhone18,4", "iPhone19,2"],
+    "reason": "Developer services unavailable on iOS 27.2; unlock/connect and prepare in Xcode",
+    "deleted": []
+  },
+  "retained": ["/opt/linoi/backups/20261102-build78-4bf2231/pre.db.gz", "/Applications/ICTW.app"],
+  "remote_cleanup": "Staging /tmp/ictw-build78 and tarball removed; residue 0"
+}

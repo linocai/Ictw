@@ -26,7 +26,7 @@
 
 ## 当前状态
 
-- 当前生产、公开Release及已安装Mac为 **v2.4.0（Build77）/ `8b0a37e`**，不可变标签`v2.4.0-build77`，数据库0016；[发布与恢复证据](archive/operations/2026-10-09-build77-deployment.json)。
+- 当前生产及已安装Mac为 **v2.4.0（Build78）/ `4bf2231`**，不可变标签`v2.4.0-build78`，数据库0016；归档时承接分类与事实类型不符只剔除错放引用、不再整次拒收，承接类失败原因均有中文说明；[发布证据](archive/operations/2026-11-02-build78-deployment.json)。Mac成稿页与编辑页待用户打开确认，iOS Build78待Xcode覆盖安装。
 - 双端Bible可选格式提醒、Writer指令收口及Checker叙述顺序/收束边界对齐已发布；自由输入不受限制，Extractor与模型设置不变。两份已确认Writer人格同步升级；[输入提示验证](archive/operations/2026-10-09-build77-bible-hint-validation.json)、[写作逻辑验证](archive/operations/2026-10-09-build77-writer-validation.json)。
 - Backend647项通过／12项既有跳过，客户端状态门禁和双端OS27构建通过；双端签名Release及严格验签通过，Mac成稿、已有草稿编辑页和Bible帮助已实际检查。iOS同版工程供用户Xcode覆盖安装，无IPA；真机安装和页面尚未验收。
 - 更新前后备份均已实际恢复验证；除两份Writer人格外，正文、历史记忆和模型设置保持不变，内外健康、完整性、外键及单实例通过。未重跑历史任务或调用真实模型。
@@ -45,6 +45,7 @@
 
 ## 里程碑索引
 
+- v2.4.0（Build78）：归档承接分类错放改为程序剔除并补全中文原因，后端两文件上线、Mac换装，无迁移；[发布记录](archive/operations/2026-11-02-build78-deployment.json)。
 - v2.4.0（Build77）：Bible自由输入格式提醒、Writer精简及Checker叙述顺序/收束边界对齐已发布，Extractor不变，Mac换装完成，iOS待Xcode覆盖安装；[发布记录](archive/operations/2026-10-09-build77-deployment.json)。
 
 - v2.4.0（Build75–76）：跨章承接、原文选择与显式质量优先设置已发布；两项review问题修复闭环，生产迁移、Mac换装及资源收尾完成，iOS待Xcode安装；[施工与验收记录](archive/plans/v2.4.0-build75-chapter-continuity-plan.md)。
