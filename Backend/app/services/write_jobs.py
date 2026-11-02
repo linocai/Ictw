@@ -1413,6 +1413,21 @@ def _run_extract_job(job: WriteJob, sf: sessionmaker[Session]) -> None:
             _record_llm(sf, "extractor", client, started, None, job)
         operation_stage = "validating"
         validated = validate_archive_output(chapter, output, contract_version=revision.contract_version)
+        if validated.continuity_dropped:
+            logger.info(
+                "archive_continuity_repaired %s",
+                json.dumps(
+                    {
+                        "event": "archive_continuity_repaired",
+                        "chapter_id": job.chapter_id,
+                        "job_id": job.job_id,
+                        "revision_id": revision.id,
+                        "dropped": dict(validated.continuity_dropped),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            )
         if _should_stop(job):
             db.rollback()
             # The route that ended/replaced this exact task owns its durable

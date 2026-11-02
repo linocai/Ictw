@@ -109,6 +109,12 @@ def archive_validation_message(reason: str | None) -> str | None:
         "state delta slot is unsupported": "人物状态的类别无法识别",
         "unsupported archive contract version": "记忆整理结果的格式版本不受支持",
         "Extractor output must be an object": "模型返回的记忆整理结果格式不正确",
+        "continuity must contain exactly four reference arrays": "记忆整理结果缺少完整的承接分类",
+        "continuity references must be arrays": "承接分类的格式不正确",
+        "continuity references an unknown fact": "承接分类引用了不存在的记忆事实",
+        "continuity classification does not match fact type": "承接分类与记忆事实的类型不一致",
+        "continuity exceeds canonical fact limit": "承接分类引用的记忆事实过多",
+        "old archive contract cannot carry continuity": "旧版归档格式不能包含承接分类",
     }
     if reason in messages:
         return messages[reason]
@@ -180,6 +186,7 @@ class ValidatedArchive:
     state_uncertainties: tuple[ValidatedUncertainty, ...] = ()
     diagnostics: tuple[dict[str, Any], ...] = ()
     continuity: dict[str, list[str]] | None = None
+    continuity_dropped: tuple[tuple[str, int], ...] = ()
 
 
 def segment_source(text: str) -> list[SourceSpan]:
@@ -859,15 +866,45 @@ def _validate_archive_output_v21(chapter: Chapter, output: dict[str, Any], *, wi
     if len(deltas) > MAX_STATE_DELTAS:
         raise ArchiveV2ValidationError(f"end_state_delta exceeds limit {MAX_STATE_DELTAS}")
     diagnostics = tuple(item.payload for item in uncertainties)
-    continuity = validate_continuity(output.get("continuity"), facts_by_source_ref) if with_continuity else None
-    return ValidatedArchive(summary, tuple(facts), tuple(deltas), tuple(uncertainties), diagnostics, continuity)
+    continuity: dict[str, list[str]] | None = None
+    continuity_dropped: tuple[tuple[str, int], ...] = ()
+    if with_continuity:
+        continuity, dropped_counts = _validate_continuity_impl(
+            output.get("continuity"), facts_by_source_ref, repair_classification=True
+        )
+        continuity_dropped = tuple(
+            (key, dropped_counts[key]) for key in CONTINUITY_KEYS if dropped_counts[key] > 0
+        )
+    return ValidatedArchive(
+        summary,
+        tuple(facts),
+        tuple(deltas),
+        tuple(uncertainties),
+        diagnostics,
+        continuity,
+        continuity_dropped,
+    )
 
 
-def validate_continuity(value: Any, facts_by_ref: dict[str, ValidatedFact]) -> dict[str, list[str]]:
+def _classification_mismatch(key: str, fact: ValidatedFact) -> bool:
+    return (
+        (key == "known_fact_refs" and fact.fact_type != "认知")
+        or (key == "open_fact_refs" and fact.fact_type != "未决")
+        or (key == "completed_fact_refs" and fact.fact_type == "未决")
+    )
+
+
+def _validate_continuity_impl(
+    value: Any,
+    facts_by_ref: dict[str, ValidatedFact],
+    *,
+    repair_classification: bool,
+) -> tuple[dict[str, list[str]], dict[str, int]]:
     """Validate classification references, rebinding aliases without inventing prose."""
     if not isinstance(value, dict) or set(value) != set(CONTINUITY_KEYS):
         raise ArchiveV2ValidationError("continuity must contain exactly four reference arrays")
     result: dict[str, list[str]] = {}
+    dropped: dict[str, int] = {key: 0 for key in CONTINUITY_KEYS}
     for key in CONTINUITY_KEYS:
         refs = value[key]
         if not isinstance(refs, list):
@@ -877,15 +914,28 @@ def validate_continuity(value: Any, facts_by_ref: dict[str, ValidatedFact]) -> d
             if not isinstance(ref, str) or ref not in facts_by_ref:
                 raise ArchiveV2ValidationError("continuity references an unknown fact")
             fact = facts_by_ref[ref]
-            if ((key == "known_fact_refs" and fact.fact_type != "认知")
-                or (key == "open_fact_refs" and fact.fact_type != "未决")
-                or (key == "completed_fact_refs" and fact.fact_type == "未决")):
+            if _classification_mismatch(key, fact):
+                if repair_classification:
+                    dropped[key] += 1
+                    continue
                 raise ArchiveV2ValidationError("continuity classification does not match fact type")
             if fact.fact_ref not in canonical:
                 canonical.append(fact.fact_ref)
         if len(canonical) > MAX_FACTS:
             raise ArchiveV2ValidationError("continuity exceeds canonical fact limit")
         result[key] = canonical
+    return result, dropped
+
+
+def validate_continuity(
+    value: Any,
+    facts_by_ref: dict[str, ValidatedFact],
+    *,
+    repair_classification: bool = False,
+) -> dict[str, list[str]]:
+    result, _ = _validate_continuity_impl(
+        value, facts_by_ref, repair_classification=repair_classification
+    )
     return result
 
 

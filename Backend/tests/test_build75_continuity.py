@@ -3,9 +3,11 @@ from copy import deepcopy
 import hashlib
 import io
 import json
+import re
 import shutil
 import sqlite3
 import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +25,7 @@ from app.services.archive_v2 import (
     CONTINUITY_KEYS, ArchiveV2ValidationError, validate_archive_output,
     create_archive_revision, mark_revision_extracting, activate_archive_revision,
     archive_input_fingerprint, archive_read_model,
-    build_archive_user_message,
+    build_archive_user_message, archive_validation_message, validate_continuity,
 )
 from app.services.chapter_continuity import (
     previous_chapter_context, distant_candidates, complete_ending,
@@ -105,7 +107,7 @@ def test_continuity_can_reference_one_canonical_fact_in_multiple_categories(clie
             assert "不得将同一事实重复到多个数组" not in prompt
 
 
-@pytest.mark.parametrize("change", ["missing", "extra", "null", "type", "unknown", "known_type", "open_type", "completed_open"])
+@pytest.mark.parametrize("change", ["missing", "extra", "null", "type", "unknown"])
 def test_v22_rejects_bad_reference_contract(change):
     output = _output()
     if change == "missing": output["continuity"].pop("open_fact_refs")
@@ -113,13 +115,59 @@ def test_v22_rejects_bad_reference_contract(change):
     elif change == "null": output["continuity"] = None
     elif change == "type": output["continuity"]["open_fact_refs"] = "alias"
     elif change == "unknown": output["continuity"]["last_landing_fact_refs"] = ["missing"]
-    elif change == "known_type": output["continuity"]["known_fact_refs"] = ["alias"]
-    elif change == "open_type": output["continuity"]["open_fact_refs"] = ["alias"]
-    else:
-        output["facts"][0]["type"] = "未决"
-        output["continuity"]["completed_fact_refs"] = ["alias"]
     with pytest.raises(ArchiveV2ValidationError):
         validate_archive_output(SimpleNamespace(draft_text="交接完成。", character_links=[]), output)
+
+
+@pytest.mark.parametrize(
+    "refs,fact_type,expected_dropped",
+    [
+        ({"known_fact_refs": ["alias"], "completed_fact_refs": ["alias"]}, "剧情", (("known_fact_refs", 1),)),
+        ({"open_fact_refs": ["alias"], "completed_fact_refs": ["alias"]}, "剧情", (("open_fact_refs", 1),)),
+        ({"open_fact_refs": ["alias"], "completed_fact_refs": ["alias"]}, "未决", (("completed_fact_refs", 1),)),
+    ],
+)
+def test_v22_repairs_misclassified_continuity_refs(refs, fact_type, expected_dropped):
+    chapter = SimpleNamespace(draft_text="交接完成。", character_links=[])
+    validated = validate_archive_output(chapter, _output(fact_type=fact_type, refs=refs))
+    assert validated.continuity_dropped == expected_dropped
+    assert len(validated.facts) == 1
+    key, count = expected_dropped[0]
+    assert count == 1
+    assert validated.continuity[key] == []
+    if fact_type == "未决":
+        assert validated.continuity["open_fact_refs"] == ["F1"]
+    else:
+        assert validated.continuity["completed_fact_refs"] == ["F1"]
+
+
+@pytest.mark.parametrize(
+    "fact_type,key",
+    [
+        ("剧情", "known_fact_refs"),
+        ("剧情", "open_fact_refs"),
+        ("未决", "completed_fact_refs"),
+    ],
+)
+def test_validate_continuity_strict_rejects_misclassified_refs(fact_type, key):
+    valid_refs = {"open_fact_refs": ["alias"]} if fact_type == "未决" else {"completed_fact_refs": ["alias"]}
+    fact = validate_archive_output(
+        SimpleNamespace(draft_text="交接完成。", character_links=[]),
+        _output(fact_type=fact_type, refs=valid_refs),
+    ).facts[0]
+    facts_by_ref = {"alias": fact}
+    continuity = {continuity_key: ([] if continuity_key != key else ["alias"]) for continuity_key in CONTINUITY_KEYS}
+    with pytest.raises(ArchiveV2ValidationError, match="continuity classification does not match fact type"):
+        validate_continuity(continuity, facts_by_ref)
+
+
+def test_archive_validation_messages_cover_literal_reasons():
+    fallback = "模型返回的记忆整理结果不完整或不一致，请重新整理"
+    source = Path(__file__).resolve().parents[1] / "app" / "services" / "archive_v2.py"
+    reasons = re.findall(r'ArchiveV2ValidationError\(\s*"([^"]+)"', source.read_text())
+    assert reasons
+    for reason in reasons:
+        assert archive_validation_message(reason) != fallback, reason
 
 
 @pytest.mark.parametrize("old", [False, True])
